@@ -17,6 +17,11 @@ log = get_log("db")
 create_directories()
 
 
+def migrations_latest() -> int:
+    from migrations import LATEST
+    return LATEST
+
+
 def get_connection():
     """إرجاع اتصال بقاعدة البيانات"""
     conn = sqlite3.connect(DB_PATH)
@@ -29,7 +34,8 @@ def get_connection():
     has_docs = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='documents'"
     ).fetchone()
-    if has_docs and conn.execute("PRAGMA user_version").fetchone()[0] == 0:
+    ver = conn.execute("PRAGMA user_version").fetchone()[0]
+    if has_docs and ver < migrations_latest():
         from migrations import migrate
         migrate(DB_PATH)
     return conn
@@ -65,6 +71,21 @@ def create_tables():
         snapshot_sha256 TEXT
     )
     ''')
+
+    # قطع الفهرسة النصية + FTS5 عربي (التسليم 5 — إعادة تأطير محلي)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS chunks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        doc_id INTEGER, article_id INTEGER, seq INTEGER,
+        number TEXT, label TEXT, hierarchy_path TEXT,
+        text TEXT, char_count INTEGER,
+        source_url TEXT, doc_title TEXT
+    )
+    ''')
+    cursor.execute("""
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+        text, content='chunks', content_rowid='id',
+        tokenize='unicode61')""")
 
     # جدول المواد (Articles) - قلب النظام
     cursor.execute('''
@@ -187,8 +208,9 @@ def create_tables():
     )
     ''')
 
-    # قاعدة جديدة تُبنى بالمخطط الحالي مباشرة ⇒ إصدارها = آخر هجرة (التسليم 4)
-    conn.execute("PRAGMA user_version = 1")
+    # قاعدة جديدة تُبنى بالمخطط الحالي مباشرة ⇒ إصدارها = آخر هجرة
+    from migrations import LATEST
+    conn.execute(f"PRAGMA user_version = {LATEST}")
     conn.commit()
     conn.close()
     log.info(f"[{datetime.now().strftime('%H:%M:%S')}] تم إنشاء جميع جداول قاعدة البيانات بنجاح")

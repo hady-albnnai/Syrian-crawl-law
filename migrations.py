@@ -49,9 +49,29 @@ def _migration_001_sha256(cursor) -> dict:
     return stats
 
 
+def _migration_002_chunks_fts(cursor) -> dict:
+    """جدول chunks للفهرسة النصية + FTS5 بتقسيم unicode61 (يحترم العربية)."""
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id INTEGER, article_id INTEGER, seq INTEGER,
+            number TEXT, label TEXT, hierarchy_path TEXT,
+            text TEXT, char_count INTEGER,
+            source_url TEXT, doc_title TEXT
+        )''')
+    cursor.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            text, content='chunks', content_rowid='id',
+            tokenize='unicode61')""")
+    n = cursor.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    return {"chunks_existing": n}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
+    (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
 ]
+LATEST = MIGRATIONS[-1][0]
 
 
 def get_version(conn) -> int:

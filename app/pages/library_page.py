@@ -8,8 +8,9 @@ import sqlite3
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel,
-                               QLineEdit, QPushButton, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+                               QLineEdit, QListWidget, QPushButton,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout,
+                               QWidget)
 
 from PySide6.QtGui import QColor
 
@@ -44,6 +45,20 @@ class LibraryPage(QWidget):
         root.setSpacing(18)
         root.addWidget(page_header("المكتبة والمراجعة",
                                    "راجع ما جُمع قبل التصدير — الرديء لا يعبر البوابة"))
+
+        fts_card, fv = card("بحث نصي شامل (FTS5 عربي)")
+        fts_row = QHBoxLayout()
+        self.fts = QLineEdit()
+        self.fts.setPlaceholderText("مثال: عقوبة الخطف — Enter للبحث")
+        self.fts.setMinimumHeight(40)
+        self.fts.returnPressed.connect(self._fts_search)
+        fts_row.addWidget(self.fts, 2)
+        fv.addLayout(fts_row)
+        self.fts_results = QListWidget()
+        self.fts_results.setMinimumHeight(120)
+        self.fts_results.setMaximumHeight(180)
+        fv.addWidget(self.fts_results)
+        root.addWidget(fts_card)
 
         tools, tv = card()
         row = QHBoxLayout(); row.setSpacing(12)
@@ -87,6 +102,21 @@ class LibraryPage(QWidget):
         root.addWidget(self.hint)
 
         self.refresh()
+
+    def _fts_search(self):
+        from database import get_connection
+        import search as srch
+        self.fts_results.clear()
+        conn = get_connection()
+        hits = srch.search(conn, self.fts.text(), limit=8)
+        conn.close()
+        if not hits:
+            self.fts_results.addItem("لا مصدر كافٍ — لا يُستنتج جواب.")
+            return
+        for h in hits:
+            self.fts_results.addItem(
+                f"{h['label']} — {h['doc_title'][:50]} | "
+                f"{h['text'][:70]}… ← {h['source_url'][:55]}")
 
     def refresh(self):
         self._docs = md.DOCUMENTS

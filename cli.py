@@ -40,6 +40,59 @@ def cmd_migrate(_args):
     return 0
 
 
+def cmd_index(_args):
+    import chunker
+    from database import get_connection
+    conn = get_connection()
+    rep = chunker.build_chunks(conn)
+    conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+    conn.commit()
+    conn.close()
+    print(f"الفهرسة: {rep['chunks']} قطعة من {rep['docs']} وثيقة")
+    return 0
+
+
+def cmd_search(args):
+    from database import get_connection
+    import search as srch
+    conn = get_connection()
+    hits = srch.search(conn, args.query, limit=args.limit)
+    if not hits:
+        print("لا مصدر كافٍ — لا يُستنتج جواب.")
+        return 0
+    for h in hits:
+        print(f"• [{h['doc_title'][:40]}] {h['label']} — "
+              f"{h['text'][:80]}…  ← {h['source_url'][:60]}")
+    conn.close()
+    return 0
+
+
+def cmd_eval_search(args):
+    import json
+    from pathlib import Path
+    from datetime import datetime
+    from database import get_connection
+    import search as srch
+    questions = json.loads(Path(args.questions).read_text(encoding="utf-8"))
+    conn = get_connection()
+    rep = srch.run_eval(conn, questions, k=args.k)
+    conn.close()
+    out = Path("output"); out.mkdir(exist_ok=True)
+    lines = [f"# تقرير تقييم الاسترجاع — {datetime.now():%Y-%m-%d %H:%M}",
+             f"Recall@{rep['k']} = {rep['recall_at_k']:.2f} | "
+             f"MRR = {rep['mrr']:.2f} | أسئلة مُجاباة: {rep['answered']}"
+             f" من {rep['total']}", ""]
+    for q, note, ok in rep["details"]:
+        lines.append(f"- [{'✓' if ok else '✗'}] {q} — {note}")
+    Path(out / "search_eval.md").write_text("\n".join(lines) + "\n",
+                                           encoding="utf-8")
+    print("\n".join(lines[:2]))
+    for q, note, ok in rep["details"]:
+        print(f"  [{'✓' if ok else '✗'}] {q} — {note}")
+    print(f"  التقرير: output/search_eval.md")
+    return 0
+
+
 def cmd_export(args):
     from exporter import build_package
     rep = build_package(out_dir=args.out, prefix=args.prefix,
@@ -201,6 +254,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("migrate", help="تطبيق هجرات المخطط (مع نسخة احتياطية)")
     sp.set_defaults(fn=cmd_migrate)
+
+    sp = sub.add_parser("index", help="بناء chunks + فهرس FTS5")
+    sp.set_defaults(fn=cmd_index)
+
+    sp = sub.add_parser("search", help="بحث نصي عربي مع الإسناد")
+    sp.add_argument("query")
+    sp.add_argument("--limit", type=int, default=10)
+    sp.set_defaults(fn=cmd_search)
+
+    sp = sub.add_parser("eval-search", help="تقييم الاسترجاع (Recall@k/MRR)")
+    sp.add_argument("--questions", default="eval/questions.json")
+    sp.add_argument("--k", type=int, default=5)
+    sp.set_defaults(fn=cmd_eval_search)
 
     sp = sub.add_parser("export", help="توليد حزمة محتوى لميزان (CSV+md+JSON)")
     sp.add_argument("--out", default="export/content_package")
