@@ -44,6 +44,20 @@ def test_refusal_without_source(db):
     assert "لا مصدر كافٍ" in rep["reason"]
 
 
+def test_weak_source_refused(db):
+    # كلمة واحدة مشتركة مع متن آخر ⇒ رفض مصدر ضعيف لا تخمين
+    conn = db
+    conn.execute("INSERT INTO articles (id, doc_id, article_number, text,"
+                 " char_count) VALUES (12, 1, '9', 'تستوفي الدولة ضريبة"
+                 " سنوية على المكلفين.', 40)")
+    conn.commit()
+    import chunker
+    chunker.build_chunks(conn)
+    rep = answer.answer_question(conn, "ضريبة القيمة المضافة على المستوردات")
+    assert rep["status"] == "refused"
+    assert "ضعيف" in rep["reason"]
+
+
 def test_qa_eval_numbers(db):
     qs = [
         {"q": "الإعدام وفاة", "expect": {"article": "2",

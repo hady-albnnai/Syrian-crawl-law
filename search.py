@@ -14,7 +14,10 @@ _ALIF = "أإآٱ"
 _STOP_RAW = {"في", "من", "على", "الى", "عن", "مع", "هذا", "هذه",
              "التي", "الذي", "كل", "ما", "ان", "إن", "أن", "او", "أو",
              "ثم", "قد", "لا", "لم", "لن", "اذا", "إذا", "بعد", "قبل",
-             "بين", "عند", "حتى", "غير", "فقط", "كان", "تكون", "يكون"}
+             "بين", "عند", "حتى", "غير", "فقط", "كان", "تكون", "يكون",
+             # وظيفية قانونية شائعة: تطابقها وحدها لا يصنع مصدراً
+             "احكام", "أحكام", "حكم", "مادة", "مواد", "قانون", "القانون",
+             "مرسوم", "تشريعي", "فقرة", "بند"}
 
 
 def normalize_ar(text: str) -> str:
@@ -81,6 +84,24 @@ def search(conn, query: str, limit: int = 10) -> list:
     return hits[:limit]
 
 
+def content_tokens(text: str) -> list:
+    toks = [re.sub(r"[^\w؀-ۿ]", "", t) for t in (text or "").split()]
+    return [t for t in toks
+            if len(t) >= 2 and normalize_ar(t) not in STOPWORDS]
+
+
+def matched_in(question: str, answer_text: str) -> int:
+    words = {w for w in re.split(r"\s+", normalize_ar(answer_text))}
+    return sum(1 for t in content_tokens(question)
+               if normalize_ar(t) in words)
+
+
+def is_weak(question: str, hit: dict, min_matched: int = 2) -> bool:
+    """ضربة بكلمة واحدة (كـ«ضريبة» في قانون رسوم) ليست مصدراً."""
+    return (len(content_tokens(question)) >= min_matched
+            and matched_in(question, hit["text"]) < min_matched)
+
+
 def run_eval(conn, questions: list, k: int = 5) -> dict:
     """Recall@k وMRR مقابل إسنادات متوقعة مكتوبة يدوياً من النصوص الفعلية."""
     recall_hits, rr_sum, answered = 0, 0.0, 0
@@ -89,7 +110,7 @@ def run_eval(conn, questions: list, k: int = 5) -> dict:
         res = search(conn, q["q"], limit=k)
         expect = q.get("expect")  # None ⇒ يُتوقع ألا مصدر كافياً
         if expect is None:
-            ok = len(res) == 0
+            ok = (not res) or is_weak(q["q"], res[0])
             details.append((q["q"], "رفض آمن" if ok else "أجاب بلا مصدر!", ok))
             continue
         answered += 1

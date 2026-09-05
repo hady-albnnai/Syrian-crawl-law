@@ -14,7 +14,8 @@
 import search
 
 
-def answer_question(conn, question: str, limit: int = 3) -> dict:
+def answer_question(conn, question: str, limit: int = 3,
+                    min_matched: int = 2) -> dict:
     hits = search.search(conn, question, limit=limit)
     if not hits:
         return {"status": "refused",
@@ -22,6 +23,13 @@ def answer_question(conn, question: str, limit: int = 3) -> dict:
                 "citations": [],
                 "reason": "لا مصدر كافٍ — لا يُستنتج جواب."}
     top = hits[0]
+    # رفض المصدر الضعيف: ضربة FTS بكلمة واحدة (مثل «ضريبة» في قانون
+    # الرسوم) لا تجعل منه مصدراً لجواب — يلزم تطابق رمزين محتوائيين.
+    if search.is_weak(question, top, min_matched):
+        return {"status": "refused",
+                "answer": None,
+                "citations": [],
+                "reason": "مصدر ضعيف: تطابق رمز واحد فقط — لا جواب."}
     # نص المادة الكامل (القطعة قد تكون جزءاً من مادة طويلة)
     row = conn.execute("SELECT text FROM articles WHERE id = ?",
                        (top["article_id"],)).fetchone()
