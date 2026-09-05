@@ -24,6 +24,14 @@ def get_connection():
     # تفعيل القيود الخارجية (دفعة P0): sqlite يعطّلها افتراضياً، وبدونها كانت
     # المواد اليتيمة (doc_id خاطئ) تمر بصمت عند تجاهل INSERT OR IGNORE.
     conn.execute("PRAGMA foreign_keys = ON")
+    # هجرة تلقائية: مخطط قديم قائم (جدول documents موجود بإصدار 0) يُرقّى
+    # قبل الاستخدام. قاعدة جديدة فارغة تُترك لـ create_tables (التسليم 4).
+    has_docs = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='documents'"
+    ).fetchone()
+    if has_docs and conn.execute("PRAGMA user_version").fetchone()[0] == 0:
+        from migrations import migrate
+        migrate(DB_PATH)
     return conn
 
 
@@ -52,7 +60,9 @@ def create_tables():
         scraped_at TEXT,
         updated_at TEXT,
         raw_content TEXT,
-        clean_content TEXT
+        clean_content TEXT,
+        content_sha256 TEXT,
+        snapshot_sha256 TEXT
     )
     ''')
 
@@ -177,6 +187,8 @@ def create_tables():
     )
     ''')
 
+    # قاعدة جديدة تُبنى بالمخطط الحالي مباشرة ⇒ إصدارها = آخر هجرة (التسليم 4)
+    conn.execute("PRAGMA user_version = 1")
     conn.commit()
     conn.close()
     log.info(f"[{datetime.now().strftime('%H:%M:%S')}] تم إنشاء جميع جداول قاعدة البيانات بنجاح")

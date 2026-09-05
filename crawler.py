@@ -37,12 +37,17 @@ def make_doc_id(url: str) -> str:
 
 
 def get_hash(text: str) -> str:
-    # md5 تاريخي لمحتوى clean_content — الترحيل إلى sha256 قرار تسليم 4 (ADR-001)
+    # md5 تاريخي لمحتوى clean_content — حُسم في التسليم 4 (ADR-001):
+    # sha256 هي البصمة المعتمدة (content_sha256)، وهذا يبقى للمطابقة القديمة فقط.
     return hashlib.md5(text.strip().encode('utf-8')).hexdigest()
 
 
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.strip().encode('utf-8')).hexdigest()
+
+
 def save_document(cursor, doc_id, title, url, branch, confidence, score,
-                  content_hash, clean_text):
+                  content_hash, clean_text, snapshot_sha256=None):
     """حفظ idempotent: فحص doc_id قبل الإدراج (P0). يعيد (row_id, created)."""
     cursor.execute("SELECT id FROM documents WHERE doc_id = ?", (doc_id,))
     row = cursor.fetchone()
@@ -51,10 +56,12 @@ def save_document(cursor, doc_id, title, url, branch, confidence, score,
     cursor.execute('''
         INSERT INTO documents
         (doc_id, title, source_url, branch, branch_confidence, legal_score,
-         content_hash, scraped_at, clean_content, doc_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         content_hash, scraped_at, clean_content, doc_type,
+         content_sha256, snapshot_sha256)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (doc_id, title, url, branch, confidence, score, content_hash,
-          datetime.now().isoformat(), clean_text, "law"))
+          datetime.now().isoformat(), clean_text, "law",
+          sha256_text(clean_text), snapshot_sha256))
     return cursor.lastrowid, True
 
 
@@ -102,8 +109,7 @@ def _handle_topic(conn, task, html, dry_run, stats):
         return
     title, clean = ext["title"], ext["clean_text"]
     articles = ext["articles"]
-    if SAVE_RAW_HTML:
-        save_snapshot(html)
+    snapshot_sha256 = save_snapshot(html) if SAVE_RAW_HTML else None
     if not is_legal_content(clean, title):
         taskqueue.mark(conn, task["id"], "needs_review", "غير قانوني ظاهرياً")
         log.info("   ⚠️ لم يجتز الفحص القانوني — needs_review")
@@ -121,7 +127,7 @@ def _handle_topic(conn, task, html, dry_run, stats):
     doc_row_id, created = save_document(
         cursor, make_doc_id(task["url"]), title, task["url"], branch,
         float(confidence), legal_score(clean, title), content_hash,
-        clean[:15000])
+        clean[:15000], snapshot_sha256=snapshot_sha256)
     if not created:
         conn.commit()
         taskqueue.mark(conn, task["id"], "success")

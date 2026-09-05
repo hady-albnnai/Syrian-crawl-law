@@ -26,6 +26,31 @@ def cmd_init(_args):
     return 0
 
 
+def cmd_migrate(_args):
+    from migrations import migrate
+    rep = migrate()
+    print(f"إصدار المخطط: {rep['start_version']} ← {rep['end_version']}")
+    for b in rep["backups"]:
+        print(f"  نسخة احتياطية: {b}")
+    for m in rep["applied"]:
+        print(f"  هجرة {m['version']}: {m['name']} — "
+              f"backfilled={m.get('backfilled')} empty={m.get('empty')}")
+    if not rep["applied"]:
+        print("  لا هجرات معلّقة — المخطط محدث.")
+    return 0
+
+
+def cmd_export(args):
+    from exporter import build_package
+    rep = build_package(out_dir=args.out, prefix=args.prefix,
+                        min_articles=args.min_articles)
+    print(f"حزمة المحتوى: {rep['docs']} وثيقة → {rep['out_dir']}")
+    print(f"  الفهرس: {rep['csv']}")
+    if rep["skipped"]:
+        print(f"  تخطي (مواد < {args.min_articles}): {rep['skipped']}")
+    return 0
+
+
 def cmd_stats(_args):
     from database import get_connection
     conn = get_connection()
@@ -173,6 +198,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--report", type=int, metavar="RUN_ID",
                     help="طباعة تقرير دورة معينة")
     sp.set_defaults(fn=cmd_runs)
+
+    sp = sub.add_parser("migrate", help="تطبيق هجرات المخطط (مع نسخة احتياطية)")
+    sp.set_defaults(fn=cmd_migrate)
+
+    sp = sub.add_parser("export", help="توليد حزمة محتوى لميزان (CSV+md+JSON)")
+    sp.add_argument("--out", default="export/content_package")
+    sp.add_argument("--prefix", default="content/legal_library/laws_decrees/")
+    sp.add_argument("--min-articles", type=int, default=0)
+    sp.set_defaults(fn=cmd_export)
 
     sp = sub.add_parser("seeds", help="عرض دليل البذور المرفق")
     sp.set_defaults(fn=cmd_seeds)

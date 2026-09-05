@@ -5,6 +5,7 @@
 data/*.db
 
 # Temporary outputs
+export/
 recon_output/
 logs/
 output/
