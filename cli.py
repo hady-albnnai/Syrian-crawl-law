@@ -190,8 +190,44 @@ def cmd_discover(args):
             register_candidate(conn, cand.url, cand.via, ev)
             log.info(f"   الحكم: {ev.verdict} | الدرجة {ev.score:.1f} | "
                      f"المحرك {ev.engine} | {'؛ '.join(ev.reasons)}")
+            if args.auto and ev.verdict == "recommended":
+                from autopilot import consider_auto_approve
+                consider_auto_approve(conn, cand.url, ev)
     conn.commit()
     conn.close()
+    return 0
+
+
+def cmd_prune(_args):
+    """صيانة المتن: حذف وثائق بلا مواد وتكرارات البصمة."""
+    from database import create_tables, get_connection, prune_corpus
+    create_tables()
+    conn = get_connection()
+    stats = prune_corpus(conn)
+    log.info(f"🧹 حُذفت {stats['zero_article']} وثيقة بلا مواد + "
+             f"{stats['duplicates']} تكرار بصمة + {stats['foreign']} تشريع "
+             f"غير سوري")
+    conn.close()
+    return 0
+
+
+def cmd_autopilot(args):
+    """الطيار الآلي: توليد ← تقييم ← اعتماد تلقائي ← زحف المعتمد."""
+    from autopilot import run_autopilot
+    stats = run_autopilot(pages=args.pages, use_search=not args.no_search,
+                          auto_approve=not args.no_auto,
+                          crawl=not args.no_crawl,
+                          max_evaluate=args.max_evaluate)
+    log.info("═══ تقرير الطيار الآلي ═══")
+    log.info(f"مرشحون: {stats['seen']} | قُيّموا: {stats['evaluated']} | "
+             f"جدد: {stats['new']}")
+    log.info(f"اعتُمد تلقائياً: {stats['approved']} | مقترح/مرفوض: "
+             f"{stats['rejected']} | محجوب robots: {stats['blocked']}")
+    for src in stats["approved_list"]:
+        log.info(f"  🤖 {src['title'][:50]} — {src['engine']} | "
+                 f"{src['score']:.1f} | {src['articles']} مادة | {src['via']}")
+    if stats["errors"]:
+        log.info(f"أعطال تقييم متجاوزة: {len(stats['errors'])}")
     return 0
 
 
@@ -284,7 +320,24 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=10)
     sp.add_argument("--evaluate", action="store_true",
                     help="تقييم كل مرشح وتسجيله proposed")
+    sp.add_argument("--auto", action="store_true",
+                    help="اعتماد تلقائي لمن يجتاز بوابة الطيار الآلي الأعلى")
     sp.set_defaults(fn=cmd_discover)
+
+    sp = sub.add_parser("autopilot",
+                        help="طيار آلي: يلاقي مصادر لحالو — يولّد/يقيّم/"
+                             "يعتمد تلقائياً ثم يزحف المعتمد")
+    sp.add_argument("--pages", type=int, default=20,
+                    help="حد صفحات الزحف بعد الاكتشاف")
+    sp.add_argument("--max-evaluate", type=int, default=12,
+                    help="حد المرشحين المقيَّمين في الدورة")
+    sp.add_argument("--no-search", action="store_true",
+                    help="تعطيل قنوات البحث (DDG/Bing)")
+    sp.add_argument("--no-auto", action="store_true",
+                    help="تسجيل proposed فقط بلا اعتماد تلقائي")
+    sp.add_argument("--no-crawl", action="store_true",
+                    help="اكتشاف فقط — بلا زحف")
+    sp.set_defaults(fn=cmd_autopilot)
 
     sp = sub.add_parser("runs", help="سجل دورات الزحف وتقاريرها")
     sp.add_argument("--limit", type=int, default=10)
@@ -297,6 +350,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("index", help="بناء chunks + فهرس FTS5")
     sp.set_defaults(fn=cmd_index)
+
+    sp = sub.add_parser("prune",
+                        help="صيانة المتن: حذف وثائق بلا مواد وتكرارات البصمة")
+    sp.set_defaults(fn=cmd_prune)
 
     sp = sub.add_parser("search", help="بحث نصي عربي مع الإسناد")
     sp.add_argument("query")

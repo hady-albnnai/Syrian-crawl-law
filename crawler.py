@@ -16,6 +16,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 import crawl_queue as taskqueue
+import engines
 from config import BASE_URL, SAVE_RAW_HTML
 from database import get_connection
 from extractor import detect_branch, is_legal_content, legal_score
@@ -66,30 +67,14 @@ def save_document(cursor, doc_id, title, url, branch, confidence, score,
 
 
 def extract_topic_links(html: str, base_url: str) -> list:
-    soup = BeautifulSoup(html, "lxml")
-    links = []
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        if re.search(r"/t\d+", href):
-            full = clean_url(urljoin(base_url, href))
-            if full not in links:
-                links.append(full)
-    return links[:30]
+    """مسار phpBB (للتوافق) — المسار الحي في الدورة يكتشف المحرك لكل صفحة."""
+    return [clean_url(u) for u in
+            engines.extract_topic_links(html, base_url, "phpbb")]
 
 
 def extract_pagination_links(html: str, base_url: str, limit: int = 3) -> list:
-    """روابط صفحات الأقسام التالية (start=) — تدعم pagination المنتدى."""
-    soup = BeautifulSoup(html, "lxml")
-    out = []
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if "start=" in href and re.search(r"/f\d+|[?&]f=\d+", href):
-            full = urljoin(base_url, href)
-            if full not in out:
-                out.append(full)
-            if len(out) >= limit:
-                break
-    return out
+    """ترقيم phpBB (للتوافق) — انظر engines.extract_pagination_links."""
+    return engines.extract_pagination_links(html, base_url, "phpbb", limit)
 
 
 def save_snapshot(html: str) -> str:
@@ -113,6 +98,16 @@ def _handle_topic(conn, task, html, dry_run, stats):
     if not is_legal_content(clean, title):
         taskqueue.mark(conn, task["id"], "needs_review", "غير قانوني ظاهرياً")
         log.info("   ⚠️ لم يجتز الفحص القانوني — needs_review")
+        return
+    # بوابة الجودة الدنيا (2026-09-05 — عطل كشفه الزحف الحي على مصدر مكتشف):
+    # صفحات مدونات بلا مواد مستخرجة أو بدرجة هزيلة لا تدخل المتن — needs_review
+    # بلا إسقاط صامت.
+    real_articles = [a for a in articles if not a.get("is_preamble")]
+    if len(real_articles) < 1 or legal_score(clean, title) < 55.0:
+        taskqueue.mark(conn, task["id"], "needs_review",
+                       f"بلا مواد كافية ({len(real_articles)}) أو درجة هزيلة")
+        log.info(f"   ⚠️ {len(real_articles)} مادة — دون بوابة الجودة "
+                 f"— needs_review")
         return
     content_hash = get_hash(clean)
     if dry_run:
@@ -178,6 +173,18 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
             taskqueue.enqueue(conn, path, section, "section")
         log.info(" بُذر الطابور بأقسام البداية")
 
+    # المصادر المعتمدة (يدوياً أو بالطيار الآلي) تُبذر كل دورة — idempotent:
+    # الرابط المكرر لا يُدرج، والمكتمل سابقاً يبقى مكتملاً.
+    try:
+        from discovery import approved_sources
+        for src in approved_sources(conn):
+            name = src["name"] or src["base_url"]
+            if taskqueue.enqueue(conn, src["base_url"], name, "section"):
+                log.info(f"🌐 مصدر معتمد أُضيف للطابور: {name} "
+                         f"({src['base_url']})")
+    except Exception as exc:  # جدول sources غير موجود (قاعدة قديمة) — نتجاوزه
+        log.info(f"تخطي بذر المصادر المعتمدة: {exc}")
+
     stats = {"pages": 0, "docs": 0, "articles": 0, "skipped": 0, "failures": 0}
     while stats["pages"] < max_pages:
         if stop_event is not None and stop_event.is_set():
@@ -212,14 +219,32 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
             save_snapshot(result["html"])
 
         if task["kind"] == "section":
-            topics = extract_topic_links(result["html"], BASE_URL)
-            pages = extract_pagination_links(result["html"], BASE_URL)
+            # التعامل مع المصدر المكتشف: المحرك يُكشف لكل صفحة، ومستخرج
+            # الروابط يُختار حسب المحرك — لا أنماط منتدى محجوزة.
+            engine = engines.detect_engine(result["html"])
+            base = task["url"]
+            topics = engines.extract_topic_links(result["html"], base, engine)
+            pages = engines.extract_pagination_links(result["html"], base,
+                                                     engine)
             for link in topics:
                 taskqueue.enqueue(conn, link, task["section"], "topic")
             for link in pages:
                 taskqueue.enqueue(conn, link, task["section"], "section")
-            taskqueue.mark(conn, task["id"], "success")
-            log.info(f"   📌 {len(topics)} موضوعاً + {len(pages)} صفحات تالية في الطابور")
+            log.info(f"   📌 [{engine}] {len(topics)} وثيقة مرشحة + "
+                     f"{len(pages)} صفحات تالية في الطابور")
+            # المصدر أحادي الصفحة (ويكي مصدر مثلاً) قد يكون وثيقة كاملة
+            # بنفسه — تُحفظ مباشرة ولا تضيع باعتباره «قائمة» فقط.
+            ext = extract_main_content(result["html"], task["url"])
+            n_arts = (len([a for a in ext.get("articles", [])
+                           if not a.get("is_preamble")])
+                      if ext["success"] else 0)
+            if n_arts >= 3 and is_legal_content(ext["clean_text"],
+                                                ext["title"]):
+                log.info(f"   📜 الصفحة نفسها وثيقة كاملة ({n_arts} مادة) — "
+                         f"تُحفظ مباشرة")
+                _handle_topic(conn, task, result["html"], dry_run, stats)
+            else:
+                taskqueue.mark(conn, task["id"], "success")
         else:
             _handle_topic(conn, task, result["html"], dry_run, stats)
 

@@ -25,7 +25,9 @@ import requests
 
 from config import USER_AGENT
 from crawler import canonicalize_url
-from extractor import extract_main_content, is_legal_content, legal_score
+from engines import detect_engine  # إعادة تصدير للتوافق — التعريف في engines
+from extractor import is_legal_content, legal_score
+from extractor_v4 import extract_main_content
 from fetcher import fetch
 
 # حد الدرجة القانونية لقبول مرشح مصدر (سلم 0..100 من legal_score)
@@ -56,24 +58,17 @@ class Evaluation:
     title: str = ""
     verdict: str = "rejected"          # recommended / rejected / blocked
     reasons: list = field(default_factory=list)
-
-
-# ═════════════════════════ كشف بنية المصدر ═════════════════════════
-
-def detect_engine(html: str) -> str:
-    """يكشف محرك الموقع ليختار الزاحف محوّله المناسب لاحقاً."""
-    low = html.lower()
-    if "postbody" in low or "viewtopic" in low or "fa_ticker_content" in low:
-        return "phpbb"
-    if "wp-content" in low or "entry-content" in low or "wordpress" in low:
-        return "wordpress"
-    return "generic"
+    articles: int = 0                  # مواد مستخرجة فعلياً — بوابة الطيار الآلي
 
 
 # ═════════════════════════ بوابة التقييم ═════════════════════════
 
 def evaluate_candidate(url: str) -> Evaluation:
-    """يقيّم مرشح مصدر بجلب مهذب (يحترم robots) ثم استخراج وتحليل."""
+    """يقيّم مرشح مصدر بجلب مهذب (يحترم robots) ثم استخراج وتحليل.
+
+    الاستخراج بالمستخرج v4 (سقوط عام مُقيَّم) — يقيّم المصادر غير المنتديات
+    بعدالة، ويعيد عدد المواد الفعلية لبوابة الاعتماد التلقائي.
+    """
     result = fetch(url)
     if not result.get("ok"):
         err = result.get("error", "fetch_failed")
@@ -86,14 +81,16 @@ def evaluate_candidate(url: str) -> Evaluation:
     ext = extract_main_content(html, url)
     if not ext["success"]:
         return Evaluation(url, True, engine, False, 0.0, "",
-                          "rejected", ["تعذر استخراج محتوى رئيسي"])
+                          "rejected", [f"تعذر استخراج محتوى رئيسي: {ext.get('error')}"])
 
     text, title = ext["clean_text"], ext["title"]
     score = legal_score(text, title)
     legal = is_legal_content(text, title)
+    n_articles = len([a for a in ext.get("articles", [])
+                      if not a.get("is_preamble")])
     reasons = []
     if legal:
-        reasons.append("بنية مواد تشريعية مكتشفة")
+        reasons.append(f"بنية مواد تشريعية مكتشفة ({n_articles} مادة)")
     else:
         reasons.append("لا بنية مواد واضحة")
     reasons.append(f"المحرك: {engine}")
@@ -101,7 +98,8 @@ def evaluate_candidate(url: str) -> Evaluation:
     verdict = "recommended" if (legal and score >= SOURCE_MIN_SCORE) else "rejected"
     if verdict == "rejected":
         reasons.append(f"الدرجة {score:.1f} دون حد القبول {SOURCE_MIN_SCORE}")
-    return Evaluation(url, True, engine, legal, score, title, verdict, reasons)
+    return Evaluation(url, True, engine, legal, score, title, verdict, reasons,
+                      n_articles)
 
 
 # ═════════════════════════ مزودو البحث ═════════════════════════
@@ -197,12 +195,18 @@ def register_candidate(conn, candidate_url: str, via: str,
     return cur.lastrowid, True
 
 
-def decide_source(conn, source_key: str, approve: bool):
-    """موافقة/رفض صريحان — لا زحف قبل approve (الخيار الآمن افتراضياً)."""
+def decide_source(conn, source_key: str, approve: bool,
+                  decided_by: str = "user"):
+    """موافقة/رفض صريحان — لا زحف قبل approve (الخيار الآمن افتراضياً).
+
+    decided_by: 'user' (الافتراضي — شاشة/أمر) أو 'auto' (الطيار الآلي عند
+    اجتياز بوابة أعلى — انظر autopilot.auto_verdict). القرار مسجل دائماً.
+    """
     conn.execute(
-        "UPDATE sources SET status = ?, decided_at = ? WHERE source_key = ?",
+        "UPDATE sources SET status = ?, decided_at = ?, decided_by = ? "
+        "WHERE source_key = ?",
         ("approved" if approve else "rejected",
-         datetime.now().isoformat(), source_key))
+         datetime.now().isoformat(), decided_by, source_key))
     conn.commit()
 
 

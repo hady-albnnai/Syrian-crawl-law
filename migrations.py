@@ -67,9 +67,41 @@ def _migration_002_chunks_fts(cursor) -> dict:
     return {"chunks_existing": n}
 
 
+def _migration_003_sources_decided_by(cursor) -> dict:
+    """من قرّر اعتماد/رفض المصدر: 'user' أم الطيار الآلي 'auto'.
+
+    إضافة فقط (قاعدة الهجرات) — القيم التاريخية تبقى NULL وتُقرأ «غير مسجل».
+    قواعد أقدم من جدول sources تُبنى بالجداول كاملة (CREATE IF NOT EXISTS)
+    ثم يُضاف العمود لمن يملك الجدول بدونه — idempotent في الحالتين.
+    """
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS sources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_key TEXT UNIQUE,
+        base_url TEXT UNIQUE,
+        name TEXT,
+        engine TEXT,
+        credibility REAL DEFAULT 0.6,
+        status TEXT DEFAULT 'proposed',
+        discovered_via TEXT,
+        discovered_at TEXT,
+        decided_at TEXT,
+        decided_by TEXT
+    )
+    ''')
+    cols = [r[1] for r in cursor.execute("PRAGMA table_info(sources)")]
+    added = 0
+    if "decided_by" not in cols:
+        cursor.execute("ALTER TABLE sources ADD COLUMN decided_by TEXT")
+        added = 1
+    n = cursor.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
+    return {"sources_rows": n, "column_added": added}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
     (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
+    (3, "sources.decided_by (user vs autopilot)", _migration_003_sources_decided_by),
 ]
 LATEST = MIGRATIONS[-1][0]
 

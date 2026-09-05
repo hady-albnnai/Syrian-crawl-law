@@ -192,7 +192,8 @@ def create_tables():
     ''')
 
     # جدول مصادر الزحف (استكشاف المصادر — 2026-09-05):
-    # المرشح proposed ولا يزحف إلا بعد approved صريح من المستخدم.
+    # المرشح proposed ولا يزحف إلا بعد approved صريح من المستخدم،
+    # أو اعتماد الطيار الآلي (autopilot) ببوابة أعلى — decided_by يسجل من قرر.
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS sources (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -204,7 +205,8 @@ def create_tables():
         status TEXT DEFAULT 'proposed',
         discovered_via TEXT,
         discovered_at TEXT,
-        decided_at TEXT
+        decided_at TEXT,
+        decided_by TEXT
     )
     ''')
 
@@ -249,3 +251,45 @@ if __name__ == "__main__":
     get_db_info()
     log.info("\n✅ تم إعداد قاعدة البيانات بنجاح!")
     log.info(f"   المسار: {DB_PATH}")
+def prune_corpus(conn) -> dict:
+    """صيانة المتن بعد الزحف من مصادر مختلطة المحتوى (2026-09-05):
+
+    1) حذف وثائق بلا مواد مستخرجة (صفحات مدونات/فهارس تسللت تاريخياً).
+    2) حذف تكرارات بصمة sha256 للمحتوى — يبقى الأقدم (الأدنى id).
+    3) حذف تشريعات غير سورية تسللت من أعمدة المصادر المكتشفة الجانبية —
+       المتن «تشريعات سورية» (قاعدة الهوية في CONSTITUTION).
+    المهام تبقى needs_review/success في الطابور — سجل التدقيق لا يُمس.
+    """
+    foreign_markers = ("القانون المصري", "القوانين المصرية", "المصري رقم",
+                       "المصري لسنة", "السعودية", "السعودي رقم", "الكويتي",
+                       "الإماراتي", "العراقي رقم", "الأردني رقم",
+                       "اللبناني رقم")
+    stats = {"zero_article": 0, "duplicates": 0, "foreign": 0}
+    cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT d.id FROM documents d LEFT JOIN articles a ON a.doc_id = d.id "
+        "GROUP BY d.id HAVING COUNT(a.id) = 0").fetchall()
+    for r in rows:
+        cur.execute("DELETE FROM documents WHERE id = ?", (r["id"],))
+        stats["zero_article"] += 1
+    rows = cur.execute("SELECT id, title FROM documents").fetchall()
+    for r in rows:
+        if any(m in (r["title"] or "") for m in foreign_markers):
+            cur.execute("DELETE FROM articles WHERE doc_id = ?", (r["id"],))
+            cur.execute("DELETE FROM documents WHERE id = ?", (r["id"],))
+            stats["foreign"] += 1
+    rows = cur.execute(
+        "SELECT id, content_sha256 FROM documents "
+        "WHERE content_sha256 IS NOT NULL AND content_sha256 != '' "
+        "ORDER BY id").fetchall()
+    seen = set()
+    for r in rows:
+        if r["content_sha256"] in seen:
+            # المقالات أولاً — مفتاح أجنبي على documents (عطل كشفه التشغيل الحي)
+            cur.execute("DELETE FROM articles WHERE doc_id = ?", (r["id"],))
+            cur.execute("DELETE FROM documents WHERE id = ?", (r["id"],))
+            stats["duplicates"] += 1
+        else:
+            seen.add(r["content_sha256"])
+    conn.commit()
+    return stats
