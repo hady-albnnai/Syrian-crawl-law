@@ -99,3 +99,12 @@ class TestEval:
         rep = search.run_eval(db, qs, k=5)
         assert rep["recall_at_k"] == 1.0
         assert rep["details"][1][2] is True  # رفض آمن محسوب
+
+
+def test_content_tokens_strips_arabic_punctuation():
+    """«الخطف؟» كانت تلتصق بعلامتها فلا تطابق «خطف» — عطل سؤال المستخدم الحي."""
+    from search import content_tokens
+    assert content_tokens("ما عقوبة جريمة الخطف؟") == \
+        ["عقوبة", "جريمة", "الخطف"]
+    assert content_tokens("أحكام، العقود؛ والإلتزامات؟") == \
+        ["العقود", "والإلتزامات"]

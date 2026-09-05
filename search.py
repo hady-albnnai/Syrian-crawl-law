@@ -88,7 +88,10 @@ def search(conn, query: str, limit: int = 10) -> list:
 
 
 def content_tokens(text: str) -> list:
-    toks = [re.sub(r"[^\w؀-ۿ]", "", t) for t in (text or "").split()]
+    # \w يشمل الحروف العربية؛ وعلامات الترقيم العربية (؟،؛) ضمن المدى
+    # ؀-ۿ فكانت تلتصق بالكلمة وتكسر المطابقة («الخطف؟» ≠ «خطف») — عطل كشفه
+    # سؤال المستخدم الحي 2026-09-05.
+    toks = [re.sub(r"[^\w]|[؟،؛]", "", t) for t in (text or "").split()]
     return [t for t in toks
             if len(t) >= 2 and normalize_ar(t) not in STOPWORDS]
 
