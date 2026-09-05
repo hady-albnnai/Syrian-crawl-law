@@ -126,6 +126,23 @@ def create_tables():
     )
     ''')
 
+    # جدول مصادر الزحف (استكشاف المصادر — 2026-09-05):
+    # المرشح proposed ولا يزحف إلا بعد approved صريح من المستخدم.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS sources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_key TEXT UNIQUE,
+        base_url TEXT UNIQUE,
+        name TEXT,
+        engine TEXT,
+        credibility REAL DEFAULT 0.6,
+        status TEXT DEFAULT 'proposed',
+        discovered_via TEXT,
+        discovered_at TEXT,
+        decided_at TEXT
+    )
+    ''')
+
     conn.commit()
     conn.close()
     print(f"[{datetime.now().strftime('%H:%M:%S')}] تم إنشاء جميع جداول قاعدة البيانات بنجاح")

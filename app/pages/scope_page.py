@@ -20,7 +20,9 @@ class ScopePage(QWidget):
 
         # بطاقة المصدر
         src_card, sv = card("المصدر")
-        combo = QComboBox(); combo.addItem(md.SOURCE_NAME)
+        combo = QComboBox()
+        for name in md.APPROVED_SOURCES:
+            combo.addItem(name)
         sv.addWidget(combo)
         cred_row = QHBoxLayout()
         cred_row.addWidget(badge(f"المصداقية {md.SOURCE_CREDIBILITY} — مصدر منتدى: بوابة جودة صارمة", "badgeWarning"))

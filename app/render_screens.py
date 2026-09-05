@@ -9,7 +9,7 @@ from pathlib import Path
 from app.main import PAGES, MainWindow, build_app
 
 OUT = Path(__file__).parent.parent / "docs" / "screenshots"
-NAMES = ["01-scope", "02-run", "03-library", "04-export", "05-settings"]
+NAMES = ["01-discovery", "02-scope", "03-run", "04-library", "05-export", "06-settings"]
 
 
 def main() -> int:

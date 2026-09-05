@@ -75,3 +75,27 @@ VALIDATION_CHECKS = [
     ("وثائق needs_review مستثناة افتراضياً (2)", True),
     ("REPORT.md يذكر التاريخ والمصدر وطريقة العد", True),
 ]
+
+
+@dataclass
+class DiscoveryRow:
+    title: str
+    url: str
+    engine: str
+    score: float
+    verdict: str     # recommended / rejected / blocked
+    via: str
+
+
+DISCOVERY_RESULTS = [
+    DiscoveryRow("القانون المدني السوري — نص كامل", "https://example-law.sy/civil-code", "phpbb", 0.94, "recommended", "search:ddg"),
+    DiscoveryRow("بوابة نقابة المحامين — التشريعات", "https://bar-portal.sy/laws", "wordpress", 0.88, "recommended", "seed"),
+    DiscoveryRow("قانون العقوبات — نسخة محدثة 2024", "https://legal-archive.sy/penal", "generic", 0.81, "recommended", "search:ddg"),
+    DiscoveryRow("منتدى طبخ — وصفات شعبية", "https://food.example.com", "generic", 0.12, "rejected", "search:ddg"),
+    DiscoveryRow("موقع محجوب بسياسة robots", "https://closed.example.gov", "unknown", 0.0, "blocked", "search:ddg"),
+]
+
+APPROVED_SOURCES = [
+    "law-library.syriaforums.net — مكتبة القانون السوري (منتدى phpBB)",
+    "bar-portal.sy — بوابة نقابة المحامين (wordpress)",
+]
