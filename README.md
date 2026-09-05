@@ -16,6 +16,8 @@
 
 ## الوثائق
 
+- [دستور العمل المنقح](CONSTITUTION.md) — منقح عن دستور ميزان الأم بعد فحص المستودعين
+- [تقرير المطابقة (التسليم 0)](DELIVERY/DELIVERY-0-MATCHING-REPORT.md)
 - [الخطة الشاملة وخارطة الطريق](docs/ROADMAP.md)
 - [قائمة التسليم والمراحل](DELIVERY/PLAN-CHECKLIST.md)
 
