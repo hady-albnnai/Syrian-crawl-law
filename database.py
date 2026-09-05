@@ -68,7 +68,12 @@ def create_tables():
         raw_content TEXT,
         clean_content TEXT,
         content_sha256 TEXT,
-        snapshot_sha256 TEXT
+        snapshot_sha256 TEXT,
+        identity_key TEXT,
+        identity_confidence TEXT,
+        is_complete_text INTEGER,
+        source_domain_tier INTEGER,
+        quality_score REAL
     )
     ''')
 
@@ -187,7 +192,8 @@ def create_tables():
         articles INTEGER DEFAULT 0,
         skipped INTEGER DEFAULT 0,
         failures INTEGER DEFAULT 0,
-        report TEXT
+        report TEXT,
+        branch_breakdown_json TEXT
     )
     ''')
 
@@ -206,7 +212,49 @@ def create_tables():
         discovered_via TEXT,
         discovered_at TEXT,
         decided_at TEXT,
-        decided_by TEXT
+        decided_by TEXT,
+        domain_tier INTEGER DEFAULT 4
+    )
+    ''')
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_docs_identity "
+                   "ON documents(identity_key)")
+
+    # نسخ الوثائق المستبدلة عند تنقيح التكرار — نسخ لا حذف (§4.2 من خطة
+    # الاكتشاف الذاتي للمصادر).
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS document_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        original_doc_id INTEGER,
+        doc_id TEXT, title TEXT, source_url TEXT,
+        clean_content TEXT, quality_score REAL,
+        superseded_at TEXT, superseded_reason TEXT,
+        FOREIGN KEY (original_doc_id) REFERENCES documents(id)
+    )
+    ''')
+
+    # سجل تدقيق لكل قرار تنقيح بين نسختين لنفس القانون (§4.2)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS dedup_decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        identity_key TEXT,
+        winner_doc_id INTEGER, loser_doc_id INTEGER,
+        decisive_criterion TEXT,
+        winner_value REAL, loser_value REAL,
+        decided_at TEXT
+    )
+    ''')
+
+    # تعلّم بسيط شفاف من أداء كل مصدر عبر دورات الاكتشاف (§5.2)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS source_performance (
+        source_key TEXT PRIMARY KEY,
+        runs_count INTEGER DEFAULT 0,
+        new_identities_total INTEGER DEFAULT 0,
+        last_run_new_identities INTEGER DEFAULT 0,
+        consecutive_empty_runs INTEGER DEFAULT 0,
+        last_evaluated_at TEXT,
+        learned_status TEXT DEFAULT 'active'
     )
     ''')
 

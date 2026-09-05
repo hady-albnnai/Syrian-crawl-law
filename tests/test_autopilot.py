@@ -373,8 +373,9 @@ def test_migration_adds_decided_by_to_old_schema(tmp_path):
     ''')
     conn.commit()
     conn.close()
+    import migrations as _migrations_mod
     report = migrate(str(db))
-    assert report["end_version"] == 3
+    assert report["end_version"] == _migrations_mod.LATEST
     conn = sqlite3.connect(db)
     cols = [r[1] for r in conn.execute("PRAGMA table_info(sources)")]
     assert "decided_by" in cols

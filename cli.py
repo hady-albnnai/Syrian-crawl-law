@@ -10,6 +10,7 @@
     python -m cli discover "القانون المدني السوري" --via ddg
     python -m cli seeds                     # قائمة دليل البذور
     python -m cli sources list|approve ID|reject ID
+    python -m cli gaps                      # فجوات فروع القانون + استعلامات مقترحة
 """
 import argparse
 import sys
@@ -282,6 +283,34 @@ def cmd_sources(args):
     return 0
 
 
+def cmd_gaps(_args):
+    """تحليل فجوات فروع القانون (DESIGN-SELF-DISCOVERY.md §7): توزيع
+    الوثائق الفعلي بكل فرع مقارنة بحد أدنى محسوب آلياً من القاعدة نفسها،
+    مع استعلامات بحث موجَّهة لكل فرع ناقص التغطية."""
+    from database import create_tables, get_connection
+    from gap_analysis import analyze_gaps, gap_queries_for_branch
+    create_tables()
+    conn = get_connection()
+    report = analyze_gaps(conn)
+    conn.close()
+
+    log.info("=" * 70)
+    log.info("تحليل فجوات فروع القانون")
+    log.info("=" * 70)
+    for branch, info in sorted(report.items(), key=lambda kv: kv[1]["count"]):
+        flag = "⚠️ فجوة" if info["gap"] else "✅"
+        log.info(f"{flag}  {branch:24s} فعلي={info['count']:<4d} "
+                 f"الحد الأدنى المتوقَّع={info['expected_min']}")
+    gapped = [b for b, info in report.items() if info["gap"]]
+    if gapped:
+        log.info("-" * 70)
+        log.info("استعلامات بحث مقترحة للفروع الناقصة:")
+        for branch in gapped:
+            for q in gap_queries_for_branch(branch):
+                log.info(f"  [{branch}] {q}")
+    return 0
+
+
 def _key_of(conn, ref: str) -> str:
     """يقبل معرف الصف أو بادئة مصدر — ويرجع source_key كاملاً."""
     cur = conn.cursor()
@@ -387,6 +416,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("action", choices=("list", "approve", "reject"))
     sp.add_argument("id", nargs="?")
     sp.set_defaults(fn=cmd_sources)
+
+    sp = sub.add_parser("gaps", help="تحليل فجوات فروع القانون + استعلامات مقترحة")
+    sp.set_defaults(fn=cmd_gaps)
     return p
 
 

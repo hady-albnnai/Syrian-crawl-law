@@ -61,7 +61,8 @@ def legacy_db(tmp_path, monkeypatch):
 class TestMigrations:
     def test_backfill_and_version(self, legacy_db):
         rep = migrations.migrate(legacy_db)
-        assert rep["start_version"] == 0 and rep["end_version"] == 3
+        assert rep["start_version"] == 0
+        assert rep["end_version"] == migrations.LATEST
         assert rep["applied"][0]["backfilled"] == 2
         assert rep["applied"][1]["version"] == 2  # chunks+FTS5
         assert rep["applied"][2]["version"] == 3  # sources.decided_by
@@ -76,7 +77,8 @@ class TestMigrations:
     def test_idempotent(self, legacy_db):
         migrations.migrate(legacy_db)
         rep2 = migrations.migrate(legacy_db)
-        assert rep2["applied"] == [] and rep2["end_version"] == 3
+        assert rep2["applied"] == []
+        assert rep2["end_version"] == migrations.LATEST
 
     def test_backup_created(self, legacy_db, tmp_path):
         rep = migrations.migrate(legacy_db)

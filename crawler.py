@@ -16,7 +16,10 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 import crawl_queue as taskqueue
+import dedup
 import engines
+import law_identity
+import source_quality
 from config import BASE_URL, SAVE_RAW_HTML
 from database import get_connection
 from extractor import detect_branch, is_legal_content, legal_score
@@ -48,8 +51,19 @@ def sha256_text(text: str) -> str:
 
 
 def save_document(cursor, doc_id, title, url, branch, confidence, score,
-                  content_hash, clean_text, snapshot_sha256=None):
-    """حفظ idempotent: فحص doc_id قبل الإدراج (P0). يعيد (row_id, created)."""
+                  content_hash, clean_text, snapshot_sha256=None,
+                  identity_key=None, identity_confidence=None,
+                  law_number=None, law_year=None, doc_type_name=None,
+                  is_complete_text=None, source_domain_tier=None,
+                  quality_score=None, status=None):
+    """حفظ idempotent: فحص doc_id قبل الإدراج (P0). يعيد (row_id, created).
+
+    المعاملات الجديدة (اكتشاف ذاتي للمصادر، DESIGN-SELF-DISCOVERY.md §2/§4)
+    اختيارية بقيمة افتراضية None — الاستدعاءات القديمة (بلا هذه الحقول)
+    تبقى صالحة بلا تعديل، وتُترك number/year/identity_key فارغة كما كانت.
+    status=None يترك القيمة الافتراضية بمخطط الجدول ('active') — يُمرَّر
+    صراحة 'alternate_source' فقط عند خسارة المقارنة أمام نسخة أفضل (§4.2).
+    """
     cursor.execute("SELECT id FROM documents WHERE doc_id = ?", (doc_id,))
     row = cursor.fetchone()
     if row is not None:
@@ -58,11 +72,15 @@ def save_document(cursor, doc_id, title, url, branch, confidence, score,
         INSERT INTO documents
         (doc_id, title, source_url, branch, branch_confidence, legal_score,
          content_hash, scraped_at, clean_content, doc_type,
-         content_sha256, snapshot_sha256)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         content_sha256, snapshot_sha256, identity_key, identity_confidence,
+         number, year, is_complete_text, source_domain_tier, quality_score,
+         status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (doc_id, title, url, branch, confidence, score, content_hash,
-          datetime.now().isoformat(), clean_text, "law",
-          sha256_text(clean_text), snapshot_sha256))
+          datetime.now().isoformat(), clean_text, doc_type_name or "law",
+          sha256_text(clean_text), snapshot_sha256, identity_key,
+          identity_confidence, law_number, law_year, is_complete_text,
+          source_domain_tier, quality_score, status or "active"))
     return cursor.lastrowid, True
 
 
@@ -119,16 +137,71 @@ def _handle_topic(conn, task, html, dry_run, stats):
         return
     branch, confidence = detect_branch(clean, task["section"])
     cursor = conn.cursor()
+
+    # هوية القانون + فئة رسمية المصدر + اكتمال النص — الاكتشاف الذاتي
+    # للمصادر (DESIGN-SELF-DISCOVERY.md §2 و§4.2). حساب لا افتراض: كل
+    # وثيقة تُفحص فعلياً حتى لو لم يُعثر على رقم/سنة (identity_key=None).
+    identity = law_identity.extract_law_identity(title, clean)
+    domain_tier = source_quality.domain_tier_for_url(task["url"])
+    complete = source_quality.is_complete_text(clean, articles)
+    q_score = ext.get("quality_score")
+    has_hierarchy = any(a.get("hierarchy_path") for a in real_articles)
+
+    existing_row = dedup.find_existing_by_identity(
+        cursor, identity["identity_key"])
+
+    doc_status = None  # None → الافتراضي 'active' في save_document
+    if existing_row is not None:
+        new_candidate = dedup.build_new_candidate(
+            domain_tier, complete, q_score, len(real_articles),
+            has_hierarchy, len(clean))
+        existing_candidate = dedup.build_existing_candidate(cursor, existing_row)
+        decision = dedup.compare_candidates(new_candidate, existing_candidate)
+
+        if decision["winner"] == "new":
+            # الجديدة أفضل: القديمة تُؤرشف (نسخ لا حذف) وتُعلَّم superseded،
+            # الجديدة تصبح active.
+            dedup.archive_document_version(
+                cursor, original_doc_id=existing_row["id"],
+                doc_row=dict(existing_row),
+                reason=f"استُبدلت — {decision['decisive_criterion']}")
+            cursor.execute(
+                "UPDATE documents SET status='superseded' WHERE id=?",
+                (existing_row["id"],))
+        else:
+            # القديمة أفضل أو تعادل: الجديدة تُحفظ كمصدر بديل موثَّق —
+            # لا تُسقَط بصمت (القرار الآمن دستورياً في §4.2).
+            doc_status = "alternate_source"
+
+        log.info(f"   🔍 تطابق هوية {identity['identity_key']} — "
+                 f"الفائز: {decision['winner']} "
+                 f"({decision['decisive_criterion']})")
+
     doc_row_id, created = save_document(
         cursor, make_doc_id(task["url"]), title, task["url"], branch,
         float(confidence), legal_score(clean, title), content_hash,
-        clean[:15000], snapshot_sha256=snapshot_sha256)
+        clean[:15000], snapshot_sha256=snapshot_sha256,
+        identity_key=identity["identity_key"],
+        identity_confidence=identity["identity_confidence"],
+        law_number=identity["law_number"], law_year=identity["law_year"],
+        is_complete_text=complete, source_domain_tier=domain_tier,
+        quality_score=q_score, status=doc_status)
     if not created:
         conn.commit()
         taskqueue.mark(conn, task["id"], "success")
         stats["skipped"] += 1
         log.info("   🔁 الوثيقة محفوظة سابقاً — تخطي بلا تكرار")
         return
+
+    if existing_row is not None:
+        winner_id = doc_row_id if decision["winner"] == "new" else existing_row["id"]
+        loser_id = existing_row["id"] if decision["winner"] == "new" else doc_row_id
+        if decision["decisive_criterion"] is not None:
+            dedup.record_dedup_decision(
+                cursor, identity["identity_key"], winner_id, loser_id,
+                decision["decisive_criterion"], decision["new_value"],
+                decision["existing_value"])
+
     for art in articles:
         cursor.execute('''
             INSERT INTO articles (doc_id, article_number, article_label,
@@ -160,6 +233,10 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
                  max_pages))
     run_id = cur.lastrowid
     conn.commit()
+    # لالتقاط الوثائق المكتسبة بهذه الدورة تحديداً للفرز الختامي بالفرع
+    # (§7.2) — أي id أكبر من هذا يُعتبر «جديداً بهذه الدورة».
+    last_doc_id_before_run = (
+        conn.execute("SELECT MAX(id) FROM documents").fetchone()[0] or 0)
 
     # بذر الطابور إن كان فارغاً تماماً (أول تشغيل)
     if taskqueue.pending_count(conn) == 0 and not conn.execute(
@@ -174,10 +251,14 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
         log.info(" بُذر الطابور بأقسام البداية")
 
     # المصادر المعتمدة (يدوياً أو بالطيار الآلي) تُبذر كل دورة — idempotent:
-    # الرابط المكرر لا يُدرج، والمكتمل سابقاً يبقى مكتملاً.
+    # الرابط المكرر لا يُدرج، والمكتمل سابقاً يبقى مكتملاً. الترتيب هنا
+    # يتبع أداء كل مصدر تاريخياً (learning.prioritized_active_sources,
+    # §5 من خطة الاكتشاف الذاتي): الأكثر إنتاجاً لقوانين فريدة يُبذر أولاً
+    # فيُزار أولاً (الطابور FIFO)؛ المصادر «المستنفدة» (3 دورات فارغة
+    # متتالية) تُستبعد تلقائياً من إعادة الزحف — توفير موارد شبكة.
     try:
-        from discovery import approved_sources
-        for src in approved_sources(conn):
+        import learning
+        for src in learning.prioritized_active_sources(conn):
             name = src["name"] or src["base_url"]
             if taskqueue.enqueue(conn, src["base_url"], name, "section"):
                 log.info(f"🌐 مصدر معتمد أُضيف للطابور: {name} "
@@ -256,12 +337,33 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
               f"وثائق: {stats['docs']} | مواد: {stats['articles']} | "
               f"تخطي تكرار: {stats['skipped']} | إخفاقات: {stats['failures']}\n"
               f"الطابور: {by_status}\n")
+    # فرز/تصنيف الوثائق المكتسبة بهذه الدورة تحديداً حسب فرع القانون (§7.2)
+    try:
+        import gap_analysis
+        breakdown = gap_analysis.branch_breakdown_for_run(
+            conn, last_doc_id_before_run)
+    except Exception as exc:  # جدول documents بمخطط قديم — نتجاوز الفرز
+        breakdown = {}
+        log.info(f"تخطي الفرز بالفرع لهذه الدورة: {exc}")
+    if breakdown:
+        log.info(f"   📚 فرز هذه الدورة بالفرع: {breakdown}")
+
     conn.execute("UPDATE crawl_runs SET finished_at=?, pages=?, docs=?, "
-                 "articles=?, skipped=?, failures=?, report=? WHERE id=?",
+                 "articles=?, skipped=?, failures=?, report=?, "
+                 "branch_breakdown_json=? WHERE id=?",
                  (datetime.now().isoformat(), stats["pages"], stats["docs"],
                   stats["articles"], stats["skipped"], stats["failures"],
-                  report, run_id))
+                  report, json.dumps(breakdown, ensure_ascii=False), run_id))
     conn.commit()
+
+    # تعلّم من هذه الدورة (§5): يُحدَّث عدد القوانين الفريدة الجديدة بكل
+    # مصدر معتمد — يوجّه ترتيب البذر بالدورة القادمة (أعلى بهذا الملف).
+    try:
+        import learning
+        learning.update_source_performance(conn)
+    except Exception as exc:  # جدول source_performance غير موجود (قاعدة قديمة)
+        log.info(f"تخطي تحديث أداء المصادر: {exc}")
+
     out = Path(__file__).parent / "output"
     out.mkdir(exist_ok=True)
     (out / f"run_{run_id}.md").write_text(report, encoding="utf-8")

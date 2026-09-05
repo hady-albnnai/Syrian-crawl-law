@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 import crawl_queue as taskqueue
+import law_identity
 from config import BASE_URL
 from crawler import SNAPSHOT_DIR
 from discovery import (Candidate, DuckDuckGoHtmlProvider, SearchUnavailable,
@@ -53,6 +54,43 @@ DEFAULT_QUERIES = [
     "قانون العقوبات السوري مواد",
     "مرسوم تشريعي سوري كامل",
 ]
+
+# أقصى عدد استعلامات مولَّدة من إشارات نصية بكل دورة — يمنع انفجار عدد
+# طلبات البحث لو حوى المتن مئات الإشارات (وثيقة قانونية واحدة قد تشير
+# لعشرات التعديلات التاريخية).
+MAX_REFERENCE_QUERIES = 10
+
+
+# ═══════════════════ القطعة الثانية: إشارات نصية → استعلامات بحث ═══════════════════
+
+def reference_driven_queries(conn, limit: int = MAX_REFERENCE_QUERIES) -> list:
+    """يستخرج إشارات القوانين المذكورة **نصياً** (لا كروابط) داخل متن كل
+    وثيقة نشطة محفوظة فعلاً، ويولّد استعلام بحث لكل إشارة **غير موجودة
+    أصلاً** بالقاعدة (بمطابقة identity_key) — القطعة الثانية من خطة
+    الاكتشاف الذاتي (DESIGN-SELF-DISCOVERY.md §3).
+
+    فحص §3.4: لا بحث عن إشارة موجودة أصلاً بالمتن — توفير موارد شبكة.
+    """
+    known_keys = {
+        row[0] for row in conn.execute(
+            "SELECT DISTINCT identity_key FROM documents "
+            "WHERE identity_key IS NOT NULL").fetchall()
+    }
+    rows = conn.execute(
+        "SELECT clean_content FROM documents WHERE status = 'active' "
+        "AND clean_content IS NOT NULL").fetchall()
+
+    queries, seen_keys = [], set()
+    for row in rows:
+        for ref in law_identity.extract_law_references(row[0]):
+            key = ref["identity_key"]
+            if key in known_keys or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            queries.append(law_identity.reference_to_search_query(ref))
+            if len(queries) >= limit:
+                return queries
+    return queries
 
 
 # ═══════════════════ المضيفون المعروفون (لا تُقترح مرة أخرى) ═══════════════════
@@ -149,7 +187,14 @@ def sitemap_candidates(base_url: str, limit: int = 15) -> list:
 
 def generate_candidates(conn, use_search: bool = True,
                         queries: list = None) -> list:
-    """مرشحون من كل القنوات — مُلغى تكرارهم، وبلا نطاقات معروفة/مستثناة."""
+    """مرشحون من كل القنوات — مُلغى تكرارهم، وبلا نطاقات معروفة/مستثناة.
+
+    الاستعلامات المستخدمة عند queries=None (السلوك الافتراضي): الثلاثة
+    الثابتة (DEFAULT_QUERIES) + استعلامات مولَّدة من إشارات نصية داخل
+    المتن المحفوظ فعلاً (reference_driven_queries, §3) + استعلامات موجَّهة
+    للفروع الناقصة التغطية فعلياً (gap_analysis.gap_driven_queries, §7)
+    — لا تحلّ محل بعضها، تُضاف معاً (اتساع الاستعلامات مطلوب صراحة).
+    """
     known = known_registrables(conn)
     cands, seen = [], set()
 
@@ -174,7 +219,11 @@ def generate_candidates(conn, use_search: bool = True,
             providers.append(BingApiProvider())
         except SearchUnavailable:
             pass  # بلا مفتاح — DDG وحده
-        for query in (queries or DEFAULT_QUERIES):
+        from gap_analysis import gap_driven_queries
+        effective_queries = list(queries) if queries is not None else (
+            list(DEFAULT_QUERIES) + reference_driven_queries(conn)
+            + gap_driven_queries(conn))
+        for query in effective_queries:
             for provider in providers:
                 try:
                     for cand in provider.search(query, limit=6):
