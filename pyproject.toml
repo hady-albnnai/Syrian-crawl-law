@@ -23,8 +23,9 @@ ui = ["PySide6>=6.6"]
 mizan-harvest = "cli:main"
 
 [tool.setuptools]
-py-modules = ["cli", "config", "crawler", "database", "discovery",
-              "extractor", "fetcher", "logging_setup"]
+py-modules = ["cli", "config", "crawler", "crawl_queue", "database",
+              "discovery", "exporter", "extractor", "extractor_v4",
+              "fetcher", "logging_setup", "migrations", "recon", "urls"]
 packages = ["app", "app.pages"]
 
 [tool.pytest.ini_options]

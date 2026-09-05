@@ -4,6 +4,7 @@
 الألوان مطابقة لدستور ميزان (CONSTITUTION.md في lawyer-office2):
 كحلي + ذهبي فقط، وبطاقات بيضاء بنصف قطر ≥ 16، وألوان الحالة وظيفية فقط.
 """
+import sys
 from pathlib import Path
 
 from PySide6.QtGui import QColor, QFont, QFontDatabase
@@ -24,7 +25,20 @@ ERROR = "#DC3545"
 WARNING = "#FFC107"
 INFO = "#17A2B8"
 
-FONT_DIR = Path(__file__).parent / "assets" / "fonts"
+def _assets_fonts_dir() -> Path:
+    """مسار الخطوط يعمل مصدراً ومجمداً (PyInstaller onedir)."""
+    here = Path(__file__).parent / "assets" / "fonts"
+    if here.exists():
+        return here
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        frozen = Path(meipass) / "app" / "assets" / "fonts"
+        if frozen.exists():
+            return frozen
+    return here
+
+
+FONT_DIR = _assets_fonts_dir()
 FONT_FAMILY = "Noto Naskh Arabic"
 FALLBACK_FAMILIES = ["Segoe UI", "Tahoma", "Arial"]
 
