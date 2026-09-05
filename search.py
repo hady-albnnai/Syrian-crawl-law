@@ -57,8 +57,8 @@ def search(conn, query: str, limit: int = 10) -> list:
     hits = []
     try:
         rows = conn.execute(
-            """SELECT c.id, c.doc_title, c.number, c.label, c.text,
-                      c.hierarchy_path, c.source_url, rank
+            """SELECT c.id, c.article_id, c.doc_title, c.number, c.label,
+                      c.text, c.hierarchy_path, c.source_url, rank
                FROM chunks_fts f JOIN chunks c ON c.id = f.rowid
                WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?""",
             (_fts_query(tokens), limit)).fetchall()
@@ -68,8 +68,8 @@ def search(conn, query: str, limit: int = 10) -> list:
     if not hits:  # المسار الاحتياطي: LIKE على النص المطبَّع
         like = f"%{normalize_ar(' '.join(tokens))}%"
         rows = conn.execute(
-            """SELECT id, doc_title, number, label, text, hierarchy_path,
-                      source_url FROM chunks""").fetchall()
+            """SELECT id, article_id, doc_title, number, label, text,
+                      hierarchy_path, source_url FROM chunks""").fetchall()
         scored = []
         for r in rows:
             words = set(re.split(r"\s+", normalize_ar(r["text"])))

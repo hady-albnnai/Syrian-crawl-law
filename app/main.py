@@ -13,14 +13,15 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QLabel,
                                QVBoxLayout, QWidget)
 
 from app import theme
-from app.pages import (DiscoveryPage, ExportPage, LibraryPage, RunPage,
-                                      ScopePage, SettingsPage)
+from app.pages import (AnswerPage, DiscoveryPage, ExportPage,
+                       LibraryPage, RunPage, ScopePage, SettingsPage)
 
 PAGES = [
     ("استكشاف المصادر", DiscoveryPage),
     ("تحديد النطاق", ScopePage),
     ("التشغيل", RunPage),
     ("المكتبة والمراجعة", LibraryPage),
+    ("جواب موثَّق", AnswerPage),
     ("التصدير لميزان", ExportPage),
     ("الإعدادات", SettingsPage),
 ]

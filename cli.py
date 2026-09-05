@@ -67,6 +67,46 @@ def cmd_search(args):
     return 0
 
 
+def cmd_ask(args):
+    from database import get_connection
+    import answer as ans
+    conn = get_connection()
+    rep = ans.answer_question(conn, args.question)
+    conn.close()
+    if rep["status"] == "refused":
+        print(f"⛔ {rep['reason']}")
+        return 0
+    print(f"✔ الجواب (نص المادة حرفياً):\n{rep['answer']}\n")
+    print("الاستشهادات:")
+    for c in rep["citations"]:
+        print(f"  • {c['doc_title'][:45]} — {c['label']} ← {c['source_url'][:60]}")
+    return 0
+
+
+def cmd_eval_qa(args):
+    import json
+    from pathlib import Path
+    from datetime import datetime
+    from database import get_connection
+    import answer as ans
+    questions = json.loads(Path(args.questions).read_text(encoding="utf-8"))
+    conn = get_connection()
+    rep = ans.run_qa_eval(conn, questions, k=args.k)
+    conn.close()
+    out = Path("output"); out.mkdir(exist_ok=True)
+    lines = [f"# تقرير تقييم السؤال-جواب — {datetime.now():%Y-%m-%d %H:%M}",
+             f"دقة الإسناد = {rep['qa_accuracy']:.2f} | "
+             f"دقة الرفض الآمن = {rep['refusal_precision']:.2f} | "
+             f"مُجاب: {rep['answered']} / مرفوض: {rep['refused']}", ""]
+    for q, note, ok in rep["details"]:
+        lines.append(f"- [{'✓' if ok else '✗'}] {q} — {note}")
+    Path(out / "qa_eval.md").write_text("\n".join(lines) + "\n",
+                                       encoding="utf-8")
+    print("\n".join(lines))
+    print("  التقرير: output/qa_eval.md")
+    return 0
+
+
 def cmd_eval_search(args):
     import json
     from pathlib import Path
@@ -267,6 +307,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--questions", default="eval/questions.json")
     sp.add_argument("--k", type=int, default=5)
     sp.set_defaults(fn=cmd_eval_search)
+
+    sp = sub.add_parser("ask", help="جواب موثَّق: نص المادة + استشهادات أو رفض آمن")
+    sp.add_argument("question")
+    sp.set_defaults(fn=cmd_ask)
+
+    sp = sub.add_parser("eval-qa", help="تقييم عربي للسؤال-جواب والرفض")
+    sp.add_argument("--questions", default="eval/questions.json")
+    sp.add_argument("--k", type=int, default=3)
+    sp.set_defaults(fn=cmd_eval_qa)
 
     sp = sub.add_parser("export", help="توليد حزمة محتوى لميزان (CSV+md+JSON)")
     sp.add_argument("--out", default="export/content_package")
