@@ -11,7 +11,11 @@ build/
 recon_output/
 logs/
 output/
-*.html
+
+# لقطات HTML الخام التشغيلية فقط — لا Fixtures الاختبار (tests/fixtures/*.html)
+# كانت `*.html` عامة تحجب fixtures الاختبار عن Git فيفشل CI في collection
+# (عطل مثبت 2026-09-05: 16 تشغيلة CI متتالية فاشلة لهذا السبب بالضبط).
+data/snapshots/*.html
 
 # Python
 __pycache__/
