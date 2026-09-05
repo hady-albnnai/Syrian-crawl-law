@@ -1,0 +1,5 @@
+User-agent: es
+Disallow: /
+
+User-agent: *
+Disallow: /abuse

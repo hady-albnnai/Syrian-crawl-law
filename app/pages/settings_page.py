@@ -42,7 +42,8 @@ class SettingsPage(QWidget):
         pv.addWidget(note)
         ua_row = QHBoxLayout()
         ua_row.addWidget(QLabel("User-Agent:"))
-        ua = QLineEdit("MizanHarvester/1.0 (Legal Archive; contact: …)")
+        from config import USER_AGENT as _UA
+        ua = QLineEdit(_UA)
         ua_row.addWidget(ua, 1)
         pv.addLayout(ua_row)
         root.addWidget(polite_card := polite)

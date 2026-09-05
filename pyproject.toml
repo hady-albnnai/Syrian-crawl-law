@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mizan-harvester"
+version = "0.1.0"
+description = "حاصدة ميزان — أداة جمع التشريعات السورية وتصديرها لتطبيق ميزان"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+dependencies = [
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+    "lxml>=4.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "PySide6>=6.6"]
+ui = ["PySide6>=6.6"]
+
+[project.scripts]
+mizan-harvest = "cli:main"
+
+[tool.setuptools]
+py-modules = ["cli", "config", "crawler", "database", "discovery",
+              "extractor", "fetcher", "logging_setup"]
+packages = ["app", "app.pages"]
+
+[tool.pytest.ini_options]
+markers = [
+    "network: اختبارات تحتاج اتصالاً حياً بالإنترنت — مستبعدة افتراضياً",
+]
+# فصل اختبارات الشبكة عن اختبارات الوحدة (التسليم 1): الافتراضي محلي فقط.
+addopts = "-m 'not network'"

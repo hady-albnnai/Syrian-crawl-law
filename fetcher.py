@@ -22,13 +22,8 @@ from config import (
     RESPECT_ROBOTS
 )
 from database import insert_log
-
-# --- إصلاح طباعة العربية على ويندوز ---
-try:
-    sys.stdout.reconfigure(encoding="utf-8")
-except Exception:
-    pass
-
+from logging_setup import get_log
+log = get_log("fetch")
 
 # ════════════════════════════════════════
 #  إعداد الجلسة (Session)
@@ -53,7 +48,7 @@ def polite_sleep():
     
     if elapsed < wait_time:
         sleep_duration = wait_time - elapsed
-        print(f"      ... انتظار مهذب {sleep_duration:.1f} ثانية")
+        log.info(f"      ... انتظار مهذب {sleep_duration:.1f} ثانية")
         time.sleep(sleep_duration)
     else:
         time.sleep(0.3)
@@ -119,7 +114,7 @@ def fetch(url: str) -> dict:
     """
     if not is_allowed(url):
         msg = "ممنوع حسب robots.txt"
-        print(f"      [X] {msg}")
+        log.info(f"      [X] {msg}")
         insert_log(url, "blocked_robots", msg, "skip")
         return {"ok": False, "status": None, "html": "", "error": "blocked_by_robots"}
 
@@ -127,7 +122,7 @@ def fetch(url: str) -> dict:
         polite_sleep()
 
         try:
-            print(f"      → محاولة {attempt}/{MAX_RETRIES}: {url[:75]}...")
+            log.info(f"      → محاولة {attempt}/{MAX_RETRIES}: {url[:75]}...")
             t0 = time.time()
             
             r = SESSION.get(url, timeout=TIMEOUT)
@@ -138,7 +133,7 @@ def fetch(url: str) -> dict:
                 r.encoding = r.apparent_encoding or "utf-8"
 
             if r.status_code == 200:
-                print(f"      [✓] نجح | {ms}ms | {len(r.content)//1024} KB | ترميز: {r.encoding}")
+                log.info(f"      [✓] نجح | {ms}ms | {len(r.content)//1024} KB | ترميز: {r.encoding}")
                 insert_log(url, "fetch_success", f"Status 200 - {ms}ms", "success")
                 return {
                     "ok": True,
@@ -149,22 +144,22 @@ def fetch(url: str) -> dict:
                     "encoding": r.encoding,
                 }
             else:
-                print(f"      [X] فشل - الحالة: {r.status_code}")
+                log.info(f"      [X] فشل - الحالة: {r.status_code}")
                 insert_log(url, "fetch_failed", f"HTTP {r.status_code}", "fail")
                 return {"ok": False, "status": r.status_code, "html": "", "error": f"http_{r.status_code}"}
 
         except requests.Timeout:
-            print(f"      [!] انتهت المهلة (Timeout) - محاولة {attempt}")
+            log.info(f"      [!] انتهت المهلة (Timeout) - محاولة {attempt}")
         except requests.ConnectionError:
-            print(f"      [!] خطأ في الاتصال - محاولة {attempt}")
+            log.info(f"      [!] خطأ في الاتصال - محاولة {attempt}")
         except Exception as e:
-            print(f"      [!] خطأ غير متوقع: {type(e).__name__}")
+            log.info(f"      [!] خطأ غير متوقع: {type(e).__name__}")
 
         time.sleep(2 ** attempt)  # backoff
 
     # إذا فشلت كل المحاولات
     msg = f"فشل بعد {MAX_RETRIES} محاولات"
-    print(f"      [X] {msg}")
+    log.info(f"      [X] {msg}")
     insert_log(url, "fetch_failed", msg, "fail")
     return {"ok": False, "status": None, "html": "", "error": "max_retries_exceeded"}
 
@@ -173,22 +168,22 @@ def fetch(url: str) -> dict:
 #  اختبار سريع
 # ════════════════════════════════════════
 if __name__ == "__main__":
-    print("=" * 65)
-    print("اختبار الجالب المهذب (fetcher.py)")
-    print("=" * 65)
-    print(f"RESPECT_ROBOTS = {RESPECT_ROBOTS} ← (نحن نتجاهله حالياً)")
-    print("-" * 65)
+    log.info("=" * 65)
+    log.info("اختبار الجالب المهذب (fetcher.py)")
+    log.info("=" * 65)
+    log.info(f"RESPECT_ROBOTS = {RESPECT_ROBOTS} ← (نحن نتجاهله حالياً)")
+    log.info("-" * 65)
 
     result = fetch(BASE_URL)
 
-    print("\n" + "=" * 65)
-    print("النتيجة النهائية:")
-    print(f"   النجاح: {result['ok']}")
+    log.info("\n" + "=" * 65)
+    log.info("النتيجة النهائية:")
+    log.info(f"   النجاح: {result['ok']}")
     if result['ok']:
-        print(f"   الوقت: {result.get('ms')} مللي ثانية")
-        print(f"   حجم النص: {len(result['html'])} حرف")
-        print("\n✅ الجالب يعمل بشكل جيد!")
+        log.info(f"   الوقت: {result.get('ms')} مللي ثانية")
+        log.info(f"   حجم النص: {len(result['html'])} حرف")
+        log.info("\n✅ الجالب يعمل بشكل جيد!")
     else:
-        print(f"   السبب: {result.get('error')}")
-        print("\n⚠️  حدث خطأ - أرسل النتيجة كاملة")
-    print("=" * 65)
+        log.info(f"   السبب: {result.get('error')}")
+        log.info("\n⚠️  حدث خطأ - أرسل النتيجة كاملة")
+    log.info("=" * 65)

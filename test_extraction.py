@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.network  # يفحص مصدراً حياً — لا يُشغَّل في CI
+
 # -*- coding: utf-8 -*-
 """
 test_extraction.py

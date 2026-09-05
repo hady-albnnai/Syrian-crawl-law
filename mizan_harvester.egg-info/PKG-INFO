@@ -1,3 +1,19 @@
+Metadata-Version: 2.4
+Name: mizan-harvester
+Version: 0.1.0
+Summary: حاصدة ميزان — أداة جمع التشريعات السورية وتصديرها لتطبيق ميزان
+License: Proprietary
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: requests>=2.31
+Requires-Dist: beautifulsoup4>=4.12
+Requires-Dist: lxml>=4.9
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: PySide6>=6.6; extra == "dev"
+Provides-Extra: ui
+Requires-Dist: PySide6>=6.6; extra == "ui"
+
 # مشروع ميزان — الزاحف القانوني السوري
 
 هذا المستودع هو نواة **طبقة جمع واستخراج البيانات القانونية** لمشروع ميزان. يحتوي حالياً على نموذج أولي لزاحف مهذب، ومستخرج نصوص قانونية، وطبقة SQLite تجريبية.
@@ -14,30 +30,6 @@
 - لا توجد حالياً نسخة قاعدة بيانات أو بيانات إنتاجية ضمن Git.
 - `tests/test_p0_identity.py`: 12 اختباراً محلياً بلا شبكة (دفعة P0).
 - عدد المواد المستخرج فعلياً من بيئة خارجية غير قابل للتحقق من هذا المستودع وحده.
-
-## التشغيل الموحد (التسليم 1)
-
-```bash
-pip install -e ".[dev]"          # التبعيات + أدوات التطوير (+ PySide6 للواجهة)
-python -m cli init               # إنشاء الجداول والمجلدات
-python -m cli stats              # الأعداد الفعلية من قاعدة البيانات
-
-# الزحف (الخيار الآمن افتراضياً: dry بلا حفظ)
-python -m cli crawl --pages 10 --mode dry
-python -m cli crawl --pages 30 --mode limited
-python -m cli crawl --pages 500 --mode full --yes
-
-# استكشاف المصادر
-python -m cli discover "القانون المدني السوري" --via ddg --evaluate
-python -m cli seeds
-python -m cli sources list|approve 1|reject 1
-
-# الواجهة النموذجية والاختبارات
-python -m app.main
-pytest -q                        # محلي فقط — اختبارات الشبكة مستبعدة افتراضياً
-```
-
-السجلات: طرفية + `logs/harvester.log`. لا أسرار في Git (`.env.example`).
 
 ## الوثائق
 

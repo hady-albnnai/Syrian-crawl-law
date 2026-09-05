@@ -1,0 +1,2 @@
+[console_scripts]
+mizan-harvest = cli:main

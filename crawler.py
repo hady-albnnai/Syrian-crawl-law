@@ -15,6 +15,8 @@ from config import BASE_URL, MIN_LEGAL_SCORE, MIN_TEXT_LENGTH
 from fetcher import fetch
 from extractor import extract_main_content, is_legal_content, detect_branch, legal_score
 from database import get_connection, insert_log
+from logging_setup import get_log
+log = get_log("crawl")
 
 
 def clean_url(url: str) -> str:
@@ -88,16 +90,18 @@ def extract_topic_links(html: str, base_url: str) -> list:
     return links[:30]   # حد أعلى معقول
 
 
-def start_crawling(max_pages=40):
-    print("=" * 110)
-    print("🚀 الزاحف المتكامل v2.1 — استخراج المواد + حفظ في قاعدة البيانات")
-    print("=" * 110)
-    print(f"الحد الأقصى: {max_pages} صفحة | التاريخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("-" * 110)
+def start_crawling(max_pages=40, dry_run=False):
+    log.info("=" * 110)
+    log.info("🚀 الزاحف المتكامل v2.1 — استخراج المواد + حفظ في قاعدة البيانات")
+    log.info("=" * 110)
+    log.info(f"الحد الأقصى: {max_pages} صفحة | التاريخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log.info("-" * 110)
 
     pages_crawled = 0
     documents_saved = 0
     articles_saved = 0
+    would_docs = 0
+    would_arts = 0
     visited = set()
     seen_hashes = set()
 
@@ -121,18 +125,18 @@ def start_crawling(max_pages=40):
         visited.add(url)
         pages_crawled += 1
 
-        print(f"\n[{pages_crawled}/{max_pages}] 📂 {section}")
-        print(f"   🔗 {url}")
+        log.info(f"\n[{pages_crawled}/{max_pages}] 📂 {section}")
+        log.info(f"   🔗 {url}")
 
         result = fetch(url)
         if not result.get("ok", False):
-            print("   ❌ فشل الجلب")
+            log.info("   ❌ فشل الجلب")
             continue
 
         # تجاهل صفحات الأقسام الكبيرة ومعالجتها فقط لاستخراج الروابط
         if "/f" in url and "/t" not in url:
             topic_links = extract_topic_links(result["html"], BASE_URL)
-            print(f"   📌 تم العثور على {len(topic_links)} موضوع جديد")
+            log.info(f"   📌 تم العثور على {len(topic_links)} موضوع جديد")
             for link in topic_links:
                 if link not in visited:
                     queue.append((link, section))
@@ -142,7 +146,7 @@ def start_crawling(max_pages=40):
         ext = extract_main_content(result["html"], url)
         
         if not ext["success"]:
-            print(f"   ⚠️ فشل الاستخراج: {ext.get('error', 'unknown')}")
+            log.info(f"   ⚠️ فشل الاستخراج: {ext.get('error', 'unknown')}")
             continue
 
         title = ext["title"]
@@ -151,12 +155,12 @@ def start_crawling(max_pages=40):
         content_hash = get_hash(clean_text)
 
         if content_hash in seen_hashes:
-            print("   🔁 مكرر — تخطي")
+            log.info("   🔁 مكرر — تخطي")
             continue
         seen_hashes.add(content_hash)
 
         if not is_legal_content(clean_text, title):
-            print("   ⚠️ لم يجتز الفحص القانوني")
+            log.info("   ⚠️ لم يجتز الفحص القانوني")
             continue
 
         branch, confidence = detect_branch(clean_text, section)
@@ -166,6 +170,13 @@ def start_crawling(max_pages=40):
         conn = get_connection()
         cursor = conn.cursor()
 
+        if dry_run:
+            conn.close()
+            would_docs += 1
+            would_arts += len(articles)
+            log.info(f"   [dry-run] سيُحفظ: {title[:60]} ({len(articles)} مادة، جودة {score})")
+            continue
+
         # حفظ الوثيقة (idempotent — منع التكرار عند إعادة التشغيل، بند P0)
         doc_row_id, created = save_document(
             cursor, doc_id, title, url, branch,
@@ -173,7 +184,7 @@ def start_crawling(max_pages=40):
         )
         if not created:
             conn.close()
-            print("   🔁 الوثيقة محفوظة في قاعدة البيانات سابقاً — تخطي بلا تكرار")
+            log.info("   🔁 الوثيقة محفوظة في قاعدة البيانات سابقاً — تخطي بلا تكرار")
             continue
         conn.commit()
 
@@ -197,35 +208,40 @@ def start_crawling(max_pages=40):
         conn.close()
 
         documents_saved += 1
-        print(f"   ✅ تم الحفظ بنجاح! ({len(articles)} مادة)")
-        print(f"      العنوان : {title[:75]}...")
-        print(f"      الفرع   : {branch} (ثقة {confidence})")
+        log.info(f"   ✅ تم الحفظ بنجاح! ({len(articles)} مادة)")
+        log.info(f"      العنوان : {title[:75]}...")
+        log.info(f"      الفرع   : {branch} (ثقة {confidence})")
 
         # استخراج روابط إضافية
         if "/t" not in url.lower():
             topic_links = extract_topic_links(result["html"], BASE_URL)
-            print(f"   📌 {len(topic_links)} موضوع جديد تم إضافته للطابور")
+            log.info(f"   📌 {len(topic_links)} موضوع جديد تم إضافته للطابور")
             for link in topic_links:
                 if link not in visited:
                     queue.append((link, section))
 
         time.sleep(1.6)
 
-    print("\n" + "="*110)
-    print("🏁 انتهى الزحف بنجاح")
-    print(f"الصفحات المزحوفة : {pages_crawled}")
-    print(f"الوثائق المحفوظة : {documents_saved}")
-    print(f"إجمالي المواد     : {articles_saved}")
-    print("="*110)
+    log.info("\n" + "="*110)
+    log.info("🏁 انتهى الزحف بنجاح")
+    log.info(f"الصفحات المزحوفة : {pages_crawled}")
+    log.info(f"الوثائق المحفوظة : {documents_saved}")
+    log.info(f"إجمالي المواد     : {articles_saved}")
+    log.info("="*110)
 
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) as c FROM documents")
-    docs = cursor.fetchone()["c"]
-    cursor.execute("SELECT COUNT(*) as c FROM articles")
-    arts = cursor.fetchone()["c"]
-    print(f"📊 الحالة النهائية في قاعدة البيانات: {docs} وثيقة | {arts} مادة")
-    conn.close()
+    if dry_run:
+        log.info("🏁 انتهى الزحف التجريبي (dry-run) — لم يُحفظ شيء")
+        log.info(f"الصفحات المزحوفة : {pages_crawled}")
+        log.info(f"سيُحفظ عند التشغيل الفعلي: {would_docs} وثيقة | {would_arts} مادة")
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as c FROM documents")
+        docs = cursor.fetchone()["c"]
+        cursor.execute("SELECT COUNT(*) as c FROM articles")
+        arts = cursor.fetchone()["c"]
+        log.info(f"📊 الحالة النهائية في قاعدة البيانات: {docs} وثيقة | {arts} مادة")
+        conn.close()
 
 
 if __name__ == "__main__":

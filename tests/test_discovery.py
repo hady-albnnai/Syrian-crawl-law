@@ -147,3 +147,25 @@ def test_no_crawl_before_approval(tmp_path, monkeypatch):
     decide_source(conn, key, approve=False)
     assert approved_sources(conn) == []
     conn.close()
+
+
+# ───────────── انحدار: علة الرمز العريض "es" في robots المصدر ─────────────
+
+def test_overbroad_robots_token_regression(monkeypatch):
+    """robots.txt المنتدى حوى 'User-agent: es' فطابق 'Research' بالمصادفة.
+    المعرف الجديد يجب ألا يطابقه، مع بقاء قيود '*' نافذة."""
+    import fetcher
+    from urllib.robotparser import RobotFileParser
+    rp = RobotFileParser()
+    rp.parse((FIX / "robots_overbroad.txt").read_text(encoding="utf-8").splitlines())
+    monkeypatch.setattr(fetcher, "RESPECT_ROBOTS", True)
+    fetcher._ROBOT_CACHE.clear()
+    fetcher._ROBOT_CACHE["law-library.example"] = rp
+    base = "https://law-library.example/f3-montada"
+    old_ua = "SyrianLawResearchBot/0.1 (Educational Legal Archiving Project)"
+    from config import USER_AGENT
+    assert "es" in old_ua.lower() and rp.can_fetch(old_ua, base) is False
+    assert rp.can_fetch(USER_AGENT, base) is True          # محتوى: مسموح
+    assert fetcher.is_allowed(base) is True
+    assert rp.can_fetch(USER_AGENT, "https://law-library.example/abuse") is False
+    fetcher._ROBOT_CACHE.clear()

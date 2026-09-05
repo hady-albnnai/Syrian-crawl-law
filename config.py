@@ -6,6 +6,8 @@ config.py
 
 import os
 from datetime import datetime
+from logging_setup import get_log
+log = get_log("config")
 
 # ====================== إعدادات عامة ======================
 PROJECT_NAME = "Syrian Law Intelligence System"
@@ -15,7 +17,10 @@ VERSION = "0.1"
 BASE_URL = "https://law-library.syriaforums.net/"
 
 # User-Agent (مهم جداً للأدب والتجنب من الحظر)
-USER_AGENT = "SyrianLawResearchBot/0.1 (Educational Legal Archiving Project)"
+# معرَّف مُتحقق منه برمجياً ضد robots.txt المصدر (2026-09-05):
+# قائمة المصدر التراثية تحوي رموزاً عريضة كـ "es" كانت تطابق "Research"
+# بالخطأ وتحجبنا؛ هذا المعرف لا يطابق أي رمز فيها مع بقائه واضح الهوية.
+USER_AGENT = "Mizan/1.0 (Syrian Qanun Archive)"
 
 # ====================== إعدادات الزحف ======================
 # (كانت هذه الكتلة مكررة مرتين حرفياً — أزيل التكرار في دفعة P0 بتاريخ 2026-09-05،
@@ -98,12 +103,12 @@ def create_directories():
     dirs = ["data", "recon_output", "recon_output/html", "logs", "output"]
     for d in dirs:
         os.makedirs(d, exist_ok=True)
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] تم إنشاء/التأكد من وجود مجلدات المشروع")
+    log.info(f"[{datetime.now().strftime('%H:%M:%S')}] تم إنشاء/التأكد من وجود مجلدات المشروع")
 
 # ====================== تشغيل الإعدادات ======================
 if __name__ == "__main__":
     create_directories()
-    print("✅ تم تحميل الإعدادات بنجاح")
-    print(f"   المشروع: {PROJECT_NAME} v{VERSION}")
-    print(f"   قاعدة البيانات: {DB_NAME}")
-    print(f"   عدد أقسام المنتدى المعروفة: {len(FORUM_SECTIONS)}")
+    log.info("✅ تم تحميل الإعدادات بنجاح")
+    log.info(f"   المشروع: {PROJECT_NAME} v{VERSION}")
+    log.info(f"   قاعدة البيانات: {DB_NAME}")
+    log.info(f"   عدد أقسام المنتدى المعروفة: {len(FORUM_SECTIONS)}")

@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 
 from config import DB_PATH, create_directories
+from logging_setup import get_log
+log = get_log("db")
 
 # التأكد من وجود المجلدات
 create_directories()
@@ -145,7 +147,7 @@ def create_tables():
 
     conn.commit()
     conn.close()
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] تم إنشاء جميع جداول قاعدة البيانات بنجاح")
+    log.info(f"[{datetime.now().strftime('%H:%M:%S')}] تم إنشاء جميع جداول قاعدة البيانات بنجاح")
 
 
 def insert_log(url: str, event_type: str, message: str, status: str = "info"):
@@ -165,19 +167,19 @@ def get_db_info():
     path = Path(DB_PATH)
     if path.exists():
         size = path.stat().st_size / (1024*1024)
-        print(f"قاعدة البيانات موجودة بحجم: {size:.2f} MB")
+        log.info(f"قاعدة البيانات موجودة بحجم: {size:.2f} MB")
         return True
     else:
-        print("قاعدة البيانات غير موجودة بعد")
+        log.info("قاعدة البيانات غير موجودة بعد")
         return False
 
 
 # ====================== تشغيل عند فتح الملف مباشرة ======================
 if __name__ == "__main__":
-    print("=" * 60)
-    print("إعداد قاعدة بيانات مشروع الأرشفة القانونية السورية")
-    print("=" * 60)
+    log.info("=" * 60)
+    log.info("إعداد قاعدة بيانات مشروع الأرشفة القانونية السورية")
+    log.info("=" * 60)
     create_tables()
     get_db_info()
-    print("\n✅ تم إعداد قاعدة البيانات بنجاح!")
-    print(f"   المسار: {DB_PATH}")
+    log.info("\n✅ تم إعداد قاعدة البيانات بنجاح!")
+    log.info(f"   المسار: {DB_PATH}")

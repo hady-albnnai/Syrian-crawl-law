@@ -46,16 +46,16 @@
 
 ## التسليم 1 — أساس التطوير
 
-- [ ] إضافة `pyproject.toml` أو `requirements.txt`.
-- [ ] إضافة `.env.example`.
-- [ ] تثبيت طريقة تشغيل موحدة.
-- [ ] إضافة logging موحد.
-- [ ] إضافة CLI.
-- [ ] فصل اختبارات الشبكة عن اختبارات الوحدة.
-- [ ] إضافة CI.
-- [ ] إضافة Fixtures HTML عربية.
+- [x] إضافة `pyproject.toml` (مع console script `mizan-harvest` وإعدادات pytest).
+- [x] إضافة `.env.example` (BING_API_KEY فقط — بلا أسرار).
+- [x] تثبيت طريقة تشغيل موحدة (`cli.py`: init/stats/crawl/discover/seeds/sources).
+- [x] إضافة logging موحد (`logging_setup.py`: طرفية UTF-8 + logs/harvester.log) وتحويل كل print.
+- [x] إضافة CLI (أعلاه) مع أوضاع dry/limited/full(--yes).
+- [x] فصل اختبارات الشبكة (marker `network` + addopts يستبعدها؛ 25 محلية ناجحة).
+- [x] إضافة CI (`.github/workflows/ci.yml`: اختبارات + CLI smoke + GUI smoke offscreen).
+- [x] إضافة Fixtures HTML عربية (tests/fixtures: قانوني phpBB، غير قانوني، نتائج بحث، robots عريض).
 
-**مخرج التسليم:** بيئة جديدة قابلة للتشغيل واختبارات محلية ثابتة.
+**مخرج التسليم:** بيئة جديدة قابلة للتشغيل واختبارات محلية ثابتة. ✅ سُلم 2026-09-05 — تحقق حي: زحف limited حفظ 1 وثيقة/5 مواد ثم أعيد التشغيل فتخطاها بلا تكرار.
 
 ---
 
