@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-crawler.py — النسخة المحسنة v2.2
-دفعة P0: معرّف وثيقة مستقر (sha256 للرابط المطبَّع) + حفظ idempotent
-يمنع التكرار عند إعادة التشغيل + درجة قانونية محسوبة
+crawler.py — النسخة المحسنة v2.3
+دفعة P0 + الزاحف على Extractor v4: فقرات وهرمية حقيقيتان في الحفظ
 """
 
+import json
 import time
 import re
 import hashlib
@@ -13,7 +13,8 @@ from urllib.parse import urljoin, urlparse, urlunparse
 
 from config import BASE_URL, MIN_LEGAL_SCORE, MIN_TEXT_LENGTH
 from fetcher import fetch
-from extractor import extract_main_content, is_legal_content, detect_branch, legal_score
+from extractor import is_legal_content, detect_branch, legal_score
+from extractor_v4 import extract_main_content  # v4 (التسليم 2)
 from database import get_connection, insert_log
 from logging_setup import get_log
 log = get_log("crawl")
@@ -188,18 +189,19 @@ def start_crawling(max_pages=40, dry_run=False):
             continue
         conn.commit()
 
-        # حفظ المواد
+        # حفظ المواد — الفقرات والهرمية حقيقيتان منذ v4
         for art in articles:
             cursor.execute('''
-                INSERT INTO articles (doc_id, article_number, article_label, 
-                                    text, paragraphs_json, char_count)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO articles (doc_id, article_number, article_label,
+                                    text, paragraphs_json, hierarchy_path, char_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
                 doc_row_id,
                 str(art["article_number"]),
                 art["label"],
                 art["text"],
-                "[]",                    # يمكن تطويره لاحقاً
+                json.dumps(art.get("paragraphs", []), ensure_ascii=False),
+                json.dumps(art.get("hierarchy_path", []), ensure_ascii=False),
                 art["char_count"]
             ))
             articles_saved += 1
