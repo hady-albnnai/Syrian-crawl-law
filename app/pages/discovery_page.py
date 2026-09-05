@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QPushButton, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
-from app import mock_data as md
+from app import core_data as md
 from ._common import badge, card, page_header
 
 COLUMNS = ["العنوان / الرابط", "المحرك", "الدرجة", "الحكم", "القناة"]

@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
             sv.addWidget(b)
         self.nav_buttons[0].setChecked(True)
         sv.addStretch()
-        footer = QLabel("نموذج أولي 0.1 — بيانات تجريبية")
+        footer = QLabel("متصل بقاعدة البيانات والطابور الدائم — لا بيانات تجريبية")
         footer.setObjectName("sidebarFooter")
         sv.addWidget(footer)
         root.addWidget(sidebar)

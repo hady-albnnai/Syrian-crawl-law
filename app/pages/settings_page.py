@@ -61,7 +61,7 @@ class SettingsPage(QWidget):
         root.addWidget(data)
 
         ver, vv = card("الإصدارات")
-        for k, v in [("حاصدة ميزان", "0.1.0 — نموذج أولي"),
+        for k, v in [("حاصدة ميزان", "0.2.0 — متصلة بالنواة"),
                      ("المستخرج (extractor)", "v4.0"),
                      ("عقد حزمة ميزان", "1.0 (laws_decrees_index.csv)"),
                      ("Python / Qt", f"{sys.version_info.major}.{sys.version_info.minor} / Qt6")]:

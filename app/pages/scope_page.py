@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout,
                                QLabel, QRadioButton, QSpinBox, QVBoxLayout, QWidget)
 
-from app import mock_data as md
+from app import core_data as md
 from ._common import badge, card, page_header
 
 

@@ -150,7 +150,7 @@ def _handle_topic(conn, task, html, dry_run, stats):
     log.info(f"   ✅ حُفظت {title[:60]} ({len(articles)} مادة)")
 
 
-def start_crawling(max_pages=40, dry_run=False):
+def start_crawling(max_pages=40, dry_run=False, stop_event=None):
     log.info("=" * 100)
     log.info(f"🚀 الزاحف القابل للاستئناف v2.4 — طابور دائم + تقرير دورة")
     log.info(f"الحد الأقصى: {max_pages} | الوضع: {'تجريبي' if dry_run else 'فعلي'} | "
@@ -180,6 +180,9 @@ def start_crawling(max_pages=40, dry_run=False):
 
     stats = {"pages": 0, "docs": 0, "articles": 0, "skipped": 0, "failures": 0}
     while stats["pages"] < max_pages:
+        if stop_event is not None and stop_event.is_set():
+            log.info("⏹ إيقاف تعاوني طُلب — تُغلق الدورة بأمان (الطابور دائم)")
+            break
         task = taskqueue.claim_next(conn)
         if task is None:
             log.info("📭 الطابور فارغ — لا عمل متبقٍ")
