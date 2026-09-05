@@ -128,6 +128,38 @@ def create_tables():
     )
     ''')
 
+    # طابور الزحف الدائم (التسليم 3): إيقاف/استئناف بلا تكرار
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS crawl_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url TEXT UNIQUE,
+        section TEXT,
+        kind TEXT,
+        status TEXT DEFAULT 'queued',
+        attempts INTEGER DEFAULT 0,
+        last_error TEXT,
+        created_at TEXT,
+        updated_at TEXT
+    )
+    ''')
+
+    # سجل دورات الزحف وتقاريرها (التسليم 3)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS crawl_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at TEXT,
+        finished_at TEXT,
+        mode TEXT,
+        max_pages INTEGER,
+        pages INTEGER DEFAULT 0,
+        docs INTEGER DEFAULT 0,
+        articles INTEGER DEFAULT 0,
+        skipped INTEGER DEFAULT 0,
+        failures INTEGER DEFAULT 0,
+        report TEXT
+    )
+    ''')
+
     # جدول مصادر الزحف (استكشاف المصادر — 2026-09-05):
     # المرشح proposed ولا يزحف إلا بعد approved صريح من المستخدم.
     cursor.execute('''

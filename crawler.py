@@ -1,59 +1,49 @@
 # -*- coding: utf-8 -*-
-"""
-crawler.py — النسخة المحسنة v2.3
-دفعة P0 + الزاحف على Extractor v4: فقرات وهرمية حقيقيتان في الحفظ
-"""
+"""crawler.py — v2.4 (التسليم 3): زحف قابل للاستئناف.
 
-import json
-import time
-import re
+الطابور دائم في SQLite (crawl_tasks): الإيقاف/الانقطاع لا يضيع العمل،
+والاستئناف يكمل بلا تكرار. كل دورة زحف تسجل في crawl_runs بتقرير.
+اللقطات الخام تُحفظ خارج Git (data/snapshots) للتدقيق وإعادة الاستخراج.
+"""
 import hashlib
+import json
+import re
+import time
 from datetime import datetime
-from urllib.parse import urljoin, urlparse, urlunparse
+from pathlib import Path
+from urllib.parse import urljoin
 
-from config import BASE_URL, MIN_LEGAL_SCORE, MIN_TEXT_LENGTH
-from fetcher import fetch
-from extractor import is_legal_content, detect_branch, legal_score
-from extractor_v4 import extract_main_content  # v4 (التسليم 2)
-from database import get_connection, insert_log
+from bs4 import BeautifulSoup
+
+import crawl_queue as taskqueue
+from config import BASE_URL, SAVE_RAW_HTML
+from database import get_connection
+from extractor import detect_branch, is_legal_content, legal_score
+from extractor_v4 import extract_main_content
+from fetcher import classify_error, fetch
 from logging_setup import get_log
+from urls import canonicalize_url, clean_url  # إعادة تصدير للتوافق
+
 log = get_log("crawl")
 
-
-def clean_url(url: str) -> str:
-    return url.split('#')[0].split('?')[0].strip()
-
-
-def canonicalize_url(url: str) -> str:
-    """تطبيع الرابط: إزالة fragment/query، توحيد حالة المضيف، وشطب / الختامية.
-
-    أساس هوية الوثيقة المستقرة (ROADMAP §4.2، عقد §6.1).
-    """
-    u = urlparse(clean_url(url))
-    netloc = u.netloc.lower()
-    path = u.path.rstrip('/') or '/'
-    return urlunparse((u.scheme.lower(), netloc, path, '', '', ''))
+SNAPSHOT_DIR = Path(__file__).parent / "data" / "snapshots"
+MAX_TASK_ATTEMPTS = 2
 
 
 def make_doc_id(url: str) -> str:
-    """معرّف وثيقة مستقر مشتق من الرابط المطبَّع — لا من وقت التشغيل.
-
-    دفعة P0 (2026-09-05): استبدلت الصيغة الزمنية المعيبة
-    f"doc_{int(time.time())}" التي كانت تولّد هوية جديدة لكل إعادة زحف،
-    فتكسر idempotency وتُنشئ مواد مكررة أو يتيمة.
-    """
+    """معرّف وثيقة مستقر مشتق من الرابط المطبَّع — لا من وقت التشغيل (P0)."""
     normalized = canonicalize_url(url)
     return "sha256:" + hashlib.sha256(normalized.encode('utf-8')).hexdigest()
 
 
-def save_document(cursor, doc_id: str, title: str, url: str, branch: str,
-                  confidence: float, score: float, content_hash: str,
-                  clean_text: str):
-    """يحفظ وثيقة إن لم تكن موجودة مسبقاً. يعيد (row_id, created).
+def get_hash(text: str) -> str:
+    # md5 تاريخي لمحتوى clean_content — الترحيل إلى sha256 قرار تسليم 4 (ADR-001)
+    return hashlib.md5(text.strip().encode('utf-8')).hexdigest()
 
-    الحفظ idempotent: الفحص بـ doc_id المستقر، فلا اعتماد على
-    INSERT OR IGNORE + lastrowid (غير موثوق عند تجاهل الإدخال).
-    """
+
+def save_document(cursor, doc_id, title, url, branch, confidence, score,
+                  content_hash, clean_text):
+    """حفظ idempotent: فحص doc_id قبل الإدراج (P0). يعيد (row_id, created)."""
     cursor.execute("SELECT id FROM documents WHERE doc_id = ?", (doc_id,))
     row = cursor.fetchone()
     if row is not None:
@@ -63,187 +53,193 @@ def save_document(cursor, doc_id: str, title: str, url: str, branch: str,
         (doc_id, title, source_url, branch, branch_confidence, legal_score,
          content_hash, scraped_at, clean_content, doc_type)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        doc_id, title, url, branch, confidence, score,
-        content_hash, datetime.now().isoformat(), clean_text, "law"
-    ))
+    ''', (doc_id, title, url, branch, confidence, score, content_hash,
+          datetime.now().isoformat(), clean_text, "law"))
     return cursor.lastrowid, True
 
 
-def get_hash(text: str) -> str:
-    # ملاحظة: md5 تاريخي لمحتوى clean_content — الانتقال إلى sha256 قرار ترحيل
-    # مؤجل إلى التسليم 4 حتى لا تنكسر مطابقة بصمات القواعد القائمة (ADR-001).
-    return hashlib.md5(text.strip().encode('utf-8')).hexdigest()
-
-
 def extract_topic_links(html: str, base_url: str) -> list:
-    """استخراج روابط المواضيع من صفحات الأقسام"""
-    from bs4 import BeautifulSoup
     soup = BeautifulSoup(html, "lxml")
     links = []
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
-        if re.search(r"/t\d+", href):           # روابط المواضيع
-            full_url = urljoin(base_url, href)
-            cleaned = clean_url(full_url)
-            if cleaned not in links:
-                links.append(cleaned)
-    return links[:30]   # حد أعلى معقول
+        if re.search(r"/t\d+", href):
+            full = clean_url(urljoin(base_url, href))
+            if full not in links:
+                links.append(full)
+    return links[:30]
+
+
+def extract_pagination_links(html: str, base_url: str, limit: int = 3) -> list:
+    """روابط صفحات الأقسام التالية (start=) — تدعم pagination المنتدى."""
+    soup = BeautifulSoup(html, "lxml")
+    out = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "start=" in href and re.search(r"/f\d+|[?&]f=\d+", href):
+            full = urljoin(base_url, href)
+            if full not in out:
+                out.append(full)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def save_snapshot(html: str) -> str:
+    """لقطة خام خارج Git للتدقيق وإعادة الاستخراج (ROADMAP §4.1)."""
+    h = "sha256:" + hashlib.sha256(html.encode("utf-8", "ignore")).hexdigest()
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    (SNAPSHOT_DIR / (h.split(":")[1] + ".html")).write_text(html, encoding="utf-8")
+    return h
+
+
+def _handle_topic(conn, task, html, dry_run, stats):
+    ext = extract_main_content(html, task["url"])
+    if not ext["success"]:
+        taskqueue.mark(conn, task["id"], "failed", ext.get("error"))
+        stats["failures"] += 1
+        log.info(f"   ⚠️ فشل الاستخراج: {ext.get('error')}")
+        return
+    title, clean = ext["title"], ext["clean_text"]
+    articles = ext["articles"]
+    if SAVE_RAW_HTML:
+        save_snapshot(html)
+    if not is_legal_content(clean, title):
+        taskqueue.mark(conn, task["id"], "needs_review", "غير قانوني ظاهرياً")
+        log.info("   ⚠️ لم يجتز الفحص القانوني — needs_review")
+        return
+    content_hash = get_hash(clean)
+    if dry_run:
+        taskqueue.mark(conn, task["id"], "success")
+        stats["docs"] += 1
+        stats["articles"] += len(articles)
+        log.info(f"   [dry-run] سيُحفظ: {title[:60]} ({len(articles)} مادة، "
+                 f"جودة {ext['quality_score']})")
+        return
+    branch, confidence = detect_branch(clean, task["section"])
+    cursor = conn.cursor()
+    doc_row_id, created = save_document(
+        cursor, make_doc_id(task["url"]), title, task["url"], branch,
+        float(confidence), legal_score(clean, title), content_hash,
+        clean[:15000])
+    if not created:
+        conn.commit()
+        taskqueue.mark(conn, task["id"], "success")
+        stats["skipped"] += 1
+        log.info("   🔁 الوثيقة محفوظة سابقاً — تخطي بلا تكرار")
+        return
+    for art in articles:
+        cursor.execute('''
+            INSERT INTO articles (doc_id, article_number, article_label,
+                                text, paragraphs_json, hierarchy_path, char_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (doc_row_id, str(art["article_number"]), art["label"], art["text"],
+              json.dumps(art.get("paragraphs", []), ensure_ascii=False),
+              json.dumps(art.get("hierarchy_path", []), ensure_ascii=False),
+              art["char_count"]))
+        stats["articles"] += 1
+    conn.commit()
+    taskqueue.mark(conn, task["id"], "success")
+    stats["docs"] += 1
+    log.info(f"   ✅ حُفظت {title[:60]} ({len(articles)} مادة)")
 
 
 def start_crawling(max_pages=40, dry_run=False):
-    log.info("=" * 110)
-    log.info("🚀 الزاحف المتكامل v2.1 — استخراج المواد + حفظ في قاعدة البيانات")
-    log.info("=" * 110)
-    log.info(f"الحد الأقصى: {max_pages} صفحة | التاريخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    log.info("-" * 110)
+    log.info("=" * 100)
+    log.info(f"🚀 الزاحف القابل للاستئناف v2.4 — طابور دائم + تقرير دورة")
+    log.info(f"الحد الأقصى: {max_pages} | الوضع: {'تجريبي' if dry_run else 'فعلي'} | "
+             f"{datetime.now():%Y-%m-%d %H:%M:%S}")
+    log.info("-" * 100)
 
-    pages_crawled = 0
-    documents_saved = 0
-    articles_saved = 0
-    would_docs = 0
-    would_arts = 0
-    visited = set()
-    seen_hashes = set()
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO crawl_runs (started_at, mode, max_pages) "
+                "VALUES (?, ?, ?)",
+                (datetime.now().isoformat(), "dry" if dry_run else "live",
+                 max_pages))
+    run_id = cur.lastrowid
+    conn.commit()
 
-    important_forums = [
-        (f"{BASE_URL}f3-montada", "القانون المدني"),
-        (f"{BASE_URL}f9-montada", "القانون الجزائي"),
-        (f"{BASE_URL}f15-montada", "أصول المحاكمات"),
-        (f"{BASE_URL}f24-montada", "الأحوال الشخصية"),
-        (f"{BASE_URL}f14-montada", "القانون التجاري"),
-        (f"{BASE_URL}f4-montada", "الدساتير والقانون الدستوري"),
-    ]
+    # بذر الطابور إن كان فارغاً تماماً (أول تشغيل)
+    if taskqueue.pending_count(conn) == 0 and not conn.execute(
+            "SELECT 1 FROM crawl_tasks WHERE status='success' LIMIT 1").fetchone():
+        for path, section in [(f"{BASE_URL}f3-montada", "القانون المدني"),
+                              (f"{BASE_URL}f9-montada", "القانون الجزائي"),
+                              (f"{BASE_URL}f15-montada", "أصول المحاكمات"),
+                              (f"{BASE_URL}f24-montada", "الأحوال الشخصية"),
+                              (f"{BASE_URL}f14-montada", "القانون التجاري"),
+                              (f"{BASE_URL}f4-montada", "الدساتير")]:
+            taskqueue.enqueue(conn, path, section, "section")
+        log.info(" بُذر الطابور بأقسام البداية")
 
-    queue = important_forums.copy()
+    stats = {"pages": 0, "docs": 0, "articles": 0, "skipped": 0, "failures": 0}
+    while stats["pages"] < max_pages:
+        task = taskqueue.claim_next(conn)
+        if task is None:
+            log.info("📭 الطابور فارغ — لا عمل متبقٍ")
+            break
+        stats["pages"] += 1
+        log.info(f"[{stats['pages']}/{max_pages}] {'📂' if task['kind']=='section' else '📄'} "
+                 f"{task['section']} ← {task['url'][:70]}")
 
-    while queue and pages_crawled < max_pages:
-        raw_url, section = queue.pop(0)
-        url = clean_url(raw_url)
-        
-        if url in visited:
-            continue
-        visited.add(url)
-        pages_crawled += 1
-
-        log.info(f"\n[{pages_crawled}/{max_pages}] 📂 {section}")
-        log.info(f"   🔗 {url}")
-
-        result = fetch(url)
-        if not result.get("ok", False):
-            log.info("   ❌ فشل الجلب")
-            continue
-
-        # تجاهل صفحات الأقسام الكبيرة ومعالجتها فقط لاستخراج الروابط
-        if "/f" in url and "/t" not in url:
-            topic_links = extract_topic_links(result["html"], BASE_URL)
-            log.info(f"   📌 تم العثور على {len(topic_links)} موضوع جديد")
-            for link in topic_links:
-                if link not in visited:
-                    queue.append((link, section))
-            continue
-
-        # معالجة صفحات المواضيع فقط
-        ext = extract_main_content(result["html"], url)
-        
-        if not ext["success"]:
-            log.info(f"   ⚠️ فشل الاستخراج: {ext.get('error', 'unknown')}")
+        result = fetch(task["url"])
+        if not result.get("ok"):
+            err = result.get("error", "fetch_failed")
+            kind = classify_error(err)
+            if kind == "block":
+                taskqueue.mark(conn, task["id"], "blocked", err)
+            elif kind == "retry" and task["attempts"] < MAX_TASK_ATTEMPTS:
+                taskqueue.mark(conn, task["id"], "queued", err, bump_attempts=True)
+                log.info(f"   ↻ عطل عابر ({err}) — أعيدت المهمة للطابور")
+                stats["pages"] -= 1  # الإعادة لا تُحتسب صفحة جديدة
+                continue
+            else:
+                taskqueue.mark(conn, task["id"], "failed", err)
+                stats["failures"] += 1
+            log.info(f"   ❌ {err}")
             continue
 
-        title = ext["title"]
-        clean_text = ext["clean_text"]
-        articles = ext.get("articles", [])
-        content_hash = get_hash(clean_text)
+        if SAVE_RAW_HTML and task["kind"] == "section":
+            save_snapshot(result["html"])
 
-        if content_hash in seen_hashes:
-            log.info("   🔁 مكرر — تخطي")
-            continue
-        seen_hashes.add(content_hash)
-
-        if not is_legal_content(clean_text, title):
-            log.info("   ⚠️ لم يجتز الفحص القانوني")
-            continue
-
-        branch, confidence = detect_branch(clean_text, section)
-        score = legal_score(clean_text, title)
-        doc_id = make_doc_id(url)
-
-        conn = get_connection()
-        cursor = conn.cursor()
-
-        if dry_run:
-            conn.close()
-            would_docs += 1
-            would_arts += len(articles)
-            log.info(f"   [dry-run] سيُحفظ: {title[:60]} ({len(articles)} مادة، جودة {score})")
-            continue
-
-        # حفظ الوثيقة (idempotent — منع التكرار عند إعادة التشغيل، بند P0)
-        doc_row_id, created = save_document(
-            cursor, doc_id, title, url, branch,
-            float(confidence), score, content_hash, clean_text[:15000]
-        )
-        if not created:
-            conn.close()
-            log.info("   🔁 الوثيقة محفوظة في قاعدة البيانات سابقاً — تخطي بلا تكرار")
-            continue
-        conn.commit()
-
-        # حفظ المواد — الفقرات والهرمية حقيقيتان منذ v4
-        for art in articles:
-            cursor.execute('''
-                INSERT INTO articles (doc_id, article_number, article_label,
-                                    text, paragraphs_json, hierarchy_path, char_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                doc_row_id,
-                str(art["article_number"]),
-                art["label"],
-                art["text"],
-                json.dumps(art.get("paragraphs", []), ensure_ascii=False),
-                json.dumps(art.get("hierarchy_path", []), ensure_ascii=False),
-                art["char_count"]
-            ))
-            articles_saved += 1
-
-        conn.commit()
-        conn.close()
-
-        documents_saved += 1
-        log.info(f"   ✅ تم الحفظ بنجاح! ({len(articles)} مادة)")
-        log.info(f"      العنوان : {title[:75]}...")
-        log.info(f"      الفرع   : {branch} (ثقة {confidence})")
-
-        # استخراج روابط إضافية
-        if "/t" not in url.lower():
-            topic_links = extract_topic_links(result["html"], BASE_URL)
-            log.info(f"   📌 {len(topic_links)} موضوع جديد تم إضافته للطابور")
-            for link in topic_links:
-                if link not in visited:
-                    queue.append((link, section))
+        if task["kind"] == "section":
+            topics = extract_topic_links(result["html"], BASE_URL)
+            pages = extract_pagination_links(result["html"], BASE_URL)
+            for link in topics:
+                taskqueue.enqueue(conn, link, task["section"], "topic")
+            for link in pages:
+                taskqueue.enqueue(conn, link, task["section"], "section")
+            taskqueue.mark(conn, task["id"], "success")
+            log.info(f"   📌 {len(topics)} موضوعاً + {len(pages)} صفحات تالية في الطابور")
+        else:
+            _handle_topic(conn, task, result["html"], dry_run, stats)
 
         time.sleep(1.6)
 
-    log.info("\n" + "="*110)
-    log.info("🏁 انتهى الزحف بنجاح")
-    log.info(f"الصفحات المزحوفة : {pages_crawled}")
-    log.info(f"الوثائق المحفوظة : {documents_saved}")
-    log.info(f"إجمالي المواد     : {articles_saved}")
-    log.info("="*110)
+    by_status = taskqueue.counts_by_status(conn)
+    report = (f"دورة #{run_id} — {datetime.now():%Y-%m-%d %H:%M}\n"
+              f"الوضع: {'تجريبي' if dry_run else 'فعلي'} | صفحات: {stats['pages']}\n"
+              f"وثائق: {stats['docs']} | مواد: {stats['articles']} | "
+              f"تخطي تكرار: {stats['skipped']} | إخفاقات: {stats['failures']}\n"
+              f"الطابور: {by_status}\n")
+    conn.execute("UPDATE crawl_runs SET finished_at=?, pages=?, docs=?, "
+                 "articles=?, skipped=?, failures=?, report=? WHERE id=?",
+                 (datetime.now().isoformat(), stats["pages"], stats["docs"],
+                  stats["articles"], stats["skipped"], stats["failures"],
+                  report, run_id))
+    conn.commit()
+    out = Path(__file__).parent / "output"
+    out.mkdir(exist_ok=True)
+    (out / f"run_{run_id}.md").write_text(report, encoding="utf-8")
 
-    if dry_run:
-        log.info("🏁 انتهى الزحف التجريبي (dry-run) — لم يُحفظ شيء")
-        log.info(f"الصفحات المزحوفة : {pages_crawled}")
-        log.info(f"سيُحفظ عند التشغيل الفعلي: {would_docs} وثيقة | {would_arts} مادة")
-    else:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) as c FROM documents")
-        docs = cursor.fetchone()["c"]
-        cursor.execute("SELECT COUNT(*) as c FROM articles")
-        arts = cursor.fetchone()["c"]
-        log.info(f"📊 الحالة النهائية في قاعدة البيانات: {docs} وثيقة | {arts} مادة")
-        conn.close()
+    log.info("=" * 100)
+    log.info("🏁 انتهت الدورة")
+    log.info(report)
+    if not dry_run:
+        docs = conn.execute("SELECT COUNT(*) c FROM documents").fetchone()["c"]
+        arts = conn.execute("SELECT COUNT(*) c FROM articles").fetchone()["c"]
+        log.info(f"📊 القاعدة: {docs} وثيقة | {arts} مادة")
+    conn.close()
 
 
 if __name__ == "__main__":

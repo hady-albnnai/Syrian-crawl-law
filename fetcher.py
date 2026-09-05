@@ -105,6 +105,22 @@ def is_allowed(url: str) -> bool:
     return _ROBOT_CACHE[netloc].can_fetch(USER_AGENT, url)
 
 
+def classify_error(error: str) -> str:
+    """يصنف خطأ الجلب ليقرر الطابور: block / fail / retry.
+
+    - robots                → block  (سياسة مصدر، لا إعادة)
+    - 404/410/بقية 4xx      → fail   (عطل محتوي، لا معنى للإعادة)
+    - 5xx / مهلة / اتصال    → retry  (عطل عابر)
+    """
+    if error == "blocked_by_robots":
+        return "block"
+    if error and error.startswith("http_4"):
+        return "fail"
+    if error and error.startswith("http_5"):
+        return "retry"
+    return "retry"
+
+
 # ════════════════════════════════════════
 #  الدالة الرئيسية لجلب الصفحات
 # ════════════════════════════════════════

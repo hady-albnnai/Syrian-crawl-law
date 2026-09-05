@@ -26,7 +26,14 @@ def setup(level: int = logging.INFO) -> logging.Logger:
     except Exception:
         pass
 
-    console = logging.StreamHandler(sys.stdout)
+    class _PipeSafeHandler(logging.StreamHandler):
+        def emit(self, record):
+            try:
+                super().emit(record)
+            except BrokenPipeError:
+                pass  # أغلق المستهلك الأنبوب (head/أنبوب مغلق) — ليس خطأ منتجياً
+
+    console = _PipeSafeHandler(sys.stdout)
     console.setFormatter(logging.Formatter("%(message)s"))
     root.addHandler(console)
 

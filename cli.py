@@ -77,6 +77,28 @@ def cmd_discover(args):
     return 0
 
 
+def cmd_runs(args):
+    from database import get_connection
+    conn = get_connection()
+    rows = conn.execute("SELECT id, started_at, mode, pages, docs, articles, "
+                        "skipped, failures FROM crawl_runs ORDER BY id DESC "
+                        "LIMIT ?", (args.limit,)).fetchall()
+    if not rows:
+        log.info("لا دورات مسجلة بعد")
+        return 0
+    for r in rows:
+        log.info(f"#{r['id']:>3} {r['started_at'][:16]} [{r['mode']:4s}] "
+                 f"صفحات {r['pages']:>3} | وثائق {r['docs']:>2} | مواد "
+                 f"{r['articles']:>4} | تخطي {r['skipped']:>2} | إخفاق {r['failures']:>2}")
+    if args.report:
+        rep = conn.execute("SELECT report FROM crawl_runs WHERE id = ?",
+                           (args.report,)).fetchone()
+        if rep:
+            log.info("\n" + rep["report"])
+    conn.close()
+    return 0
+
+
 def cmd_seeds(_args):
     from discovery import seed_candidates
     for cand in seed_candidates():
@@ -145,6 +167,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--evaluate", action="store_true",
                     help="تقييم كل مرشح وتسجيله proposed")
     sp.set_defaults(fn=cmd_discover)
+
+    sp = sub.add_parser("runs", help="سجل دورات الزحف وتقاريرها")
+    sp.add_argument("--limit", type=int, default=10)
+    sp.add_argument("--report", type=int, metavar="RUN_ID",
+                    help="طباعة تقرير دورة معينة")
+    sp.set_defaults(fn=cmd_runs)
 
     sp = sub.add_parser("seeds", help="عرض دليل البذور المرفق")
     sp.set_defaults(fn=cmd_seeds)
