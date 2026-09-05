@@ -1,0 +1,27 @@
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+
+# Temporary outputs
+recon_output/
+logs/
+output/
+*.html
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
