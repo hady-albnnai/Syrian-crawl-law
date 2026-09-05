@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-extractor.py — v3.3 (النسخة النهائية المستقرة)
+extractor.py — v3.4 (v3.3 المستقرة + legal_score المحسوبة — دفعة P0)
 """
 
 import re
@@ -209,6 +209,28 @@ def is_legal_content(text: str, title: str = "") -> bool:
               "الجريدة الرسمية", "رئيس الجمهورية", "بناء على أحكام الدستور"]
     hits = sum(1 for s in strong if s in full)
     return hits >= 1 or len(text) > 1000
+
+
+def legal_score(text: str, title: str = "") -> float:
+    """درجة قانونية شفافة 0..100 تُحفظ في documents.legal_score.
+
+    أضيفت في دفعة P0 (2026-09-05) لتحل محل الرقم الثابت الوهمي 85.0 الذي كان
+    يُحفظ لكل وثيقة — مخالفة صريحة لقاعدة «لا رقم بلا قياس» في الدستور.
+    المركبات: إشارات «المادة» (+40)، عبارات تشريعية قوية (حتى +30)،
+    طول النص (حتى +20)، تكرار المواد (حتى +10).
+    """
+    if not text:
+        return 0.0
+    full = (title + " " + text).lower()
+    score = 0.0
+    if re.search(r"الماد[ةه]\s*[/\d٠-٩]", text):
+        score += 40.0
+    strong = ["يرسم ما يلي", "المرسوم التشريعي", "القانون رقم", "مجلس الشعب",
+              "الجريدة الرسمية", "رئيس الجمهورية", "بناء على أحكام الدستور"]
+    score += min(30.0, 10.0 * sum(1 for s in strong if s in full))
+    score += min(20.0, len(text) / 1000.0 * 20.0)
+    score += min(10.0, 2.0 * len(re.findall(r"الماد[ةه]\s*[/\d٠-٩]+", text)))
+    return round(min(score, 100.0), 1)
 
 
 def detect_branch(text: str, section_name: str = "") -> tuple:

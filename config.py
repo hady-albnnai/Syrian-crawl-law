@@ -18,21 +18,18 @@ BASE_URL = "https://law-library.syriaforums.net/"
 USER_AGENT = "SyrianLawResearchBot/0.1 (Educational Legal Archiving Project)"
 
 # ====================== إعدادات الزحف ======================
+# (كانت هذه الكتلة مكررة مرتين حرفياً — أزيل التكرار في دفعة P0 بتاريخ 2026-09-05،
+#  لأن الاستبدال النصي الأعمى على كتلة مكررة يصيب نسخة ويترك الأخرى — قاعدة
+#  التعديل الآمن #3 في CONSTITUTION.md)
 DELAY_MIN = 2.0          # الحد الأدنى للتأخير بين الطلبات (ثواني)
 DELAY_MAX = 4.5          # الحد الأعلى للتأخير (عشوائي بينهما)
 TIMEOUT = 25             # مهلة انتظار الرد من الموقع
 MAX_RETRIES = 3          # عدد المحاولات عند الفشل
 MAX_DEPTH = 6            # أقصى عمق للزحف (لمنع الدخول في حلقات لا نهائية)
-# ====================== إعدادات الزحف ======================
-DELAY_MIN = 2.0
-DELAY_MAX = 4.5
-TIMEOUT = 25
-MAX_RETRIES = 3
-MAX_DEPTH = 6
 
-# هل نحترم robots.txt؟ 
-# في مرحلة التطوير نضعه False، وبعدين نرجعه True
-RESPECT_ROBOTS = False        # ←←← أضف هذا السطر
+# احترام robots.txt — مبدأ غير قابل للتفاوض (ROADMAP §4.3 وبند P0).
+# التطبيق الفعلي في fetcher.is_allowed عبر RobotFileParser مع تخزين مؤقت لكل مضيف.
+RESPECT_ROBOTS = True
 # ====================== إعدادات قاعدة البيانات ======================
 DB_NAME = "syrian_law.db"
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", DB_NAME)

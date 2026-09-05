@@ -7,7 +7,8 @@ fetcher.py
 import sys
 import time
 import random
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
+from urllib.robotparser import RobotFileParser
 
 import requests
 
@@ -61,15 +62,52 @@ def polite_sleep():
 
 
 # ════════════════════════════════════════
-#  فحص robots.txt (مع خيار التجاهل)
+#  فحص robots.txt (تطبيق فعلي — دفعة P0)
 # ════════════════════════════════════════
+# كان هذا الجزء غلافاً فارغاً يعيد True دائماً حتى مع RESPECT_ROBOTS=True.
+# الآن: RobotFileParser حقيقي مع تخزين مؤقت لكل مضيف (طلب robots.txt مرة واحدة).
+_ROBOT_CACHE = {}  # netloc -> RobotFileParser
+
+
+def _load_robot_parser(netloc: str, scheme: str = "https"):
+    """يجلب robots.txt للمضيف ويبني المحلل. سياسات الأعطال:
+    - 401/403 على robots.txt → المصدر يحميه → نعتبر كل شيء ممنوعاً (الأحوط).
+    - 404 أو أي 4xx آخر → لا سياسة معلنة → مسموح.
+    - خطأ شبكة → لا نوقف الزحف بعطل عابر؛ نعتبره بلا سياسة ونسجل ذلك.
+    """
+    robots_url = f"{scheme}://{netloc}/robots.txt"
+    rp = RobotFileParser()
+    rp.set_url(robots_url)
+    try:
+        resp = SESSION.get(robots_url, timeout=TIMEOUT)
+        if resp.status_code in (401, 403):
+            rp.parse(["Disallow: /"])
+            insert_log(robots_url, "robots_protected", f"HTTP {resp.status_code} — اعتبرنا كل شيء ممنوعاً", "blocked")
+        elif resp.status_code >= 400:
+            rp.parse([])  # لا يوجد robots.txt
+        else:
+            if resp.encoding is None or resp.encoding.lower() in ("iso-8859-1", "ascii"):
+                resp.encoding = resp.apparent_encoding or "utf-8"
+            rp.parse(resp.text.splitlines())
+            insert_log(robots_url, "robots_loaded", f"HTTP {resp.status_code}", "success")
+    except requests.RequestException as exc:
+        rp.parse([])
+        insert_log(robots_url, "robots_error", f"{type(exc).__name__} — تابعنا بلا سياسة", "warn")
+    return rp
+
+
 def is_allowed(url: str) -> bool:
+    """يفحص إذن robots.txt للرابط عبر محلل مخزَّن لكل مضيف."""
     if not RESPECT_ROBOTS:
-        return True  # نحن في وضع التطوير → نتجاهل robots.txt
-    
-    # إذا أردنا احترام robots.txt (في المستقبل)
-    print("      [robots] يتم التحقق من robots.txt...")
-    return True  # حالياً نعود True دائماً حتى نطور هذا الجزء لاحقاً
+        return True  # وضع تطوير صريح — الافتصار الآن True في config
+
+    parsed = urlparse(url)
+    netloc = parsed.netloc
+    if not netloc:
+        return False
+    if netloc not in _ROBOT_CACHE:
+        _ROBOT_CACHE[netloc] = _load_robot_parser(netloc, parsed.scheme or "https")
+    return _ROBOT_CACHE[netloc].can_fetch(USER_AGENT, url)
 
 
 # ════════════════════════════════════════

@@ -19,6 +19,9 @@ def get_connection():
     """إرجاع اتصال بقاعدة البيانات"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row  # لإرجاع النتائج كـ dictionary
+    # تفعيل القيود الخارجية (دفعة P0): sqlite يعطّلها افتراضياً، وبدونها كانت
+    # المواد اليتيمة (doc_id خاطئ) تمر بصمت عند تجاهل INSERT OR IGNORE.
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
