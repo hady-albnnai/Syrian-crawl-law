@@ -5,25 +5,31 @@
 لأفضل ممارسات تصميم الواجهات (Microsoft UX Guide، Progressive Disclosure):
   - قرار رئيسي واحد لكل شاشة، لا تنقّل بين شاشتين لعمل مهمة واحدة مترابطة.
   - إعدادات افتراضية معقولة تعمل فوراً بلا أي ضبط من المستخدم.
-  - التفاصيل النادر تعديلها (المصدر، عدد الصفحات، الوضع، الأقسام) تُخفى
-    خلف قسم واحد قابل للطي «خيارات متقدّمة» — تظهر فقط لمن يطلبها.
+  - التفاصيل النادر تعديلها (حد الصفحات، وضع التجربة) خلف طيّة واحدة.
 
-يستخدم نفس app.run_state.SETTINGS ونفس crawler.start_crawling الحقيقيَّين
-دون أي تغيير في المنطق — إعادة تنظيم عرض فقط.
+تصحيح صدق (2026-09-06): أُزيلت من هذه الشاشة عناصر كانت معروضة كأنها
+تتحكم بسلوك الزحف بينما لا أثر فعلي لها بالكود — تضليل بصري لمستخدم
+غير تقني، اكتُشف بتجربة فعلية للأداة:
+  - قائمة اختيار «مصدر» — لا شيء يقرأ اختيار المستخدم منها؛ الزاحف
+    يكتشف مصادره وأقسامه بنفسه تلقائياً (crawler.start_crawling +
+    الطيار الآلي)، فلا معنى لعرض اختيار وهمي.
+  - صناديق اختيار «الأقسام» — نفس المشكلة، بلا أي تأثير على ما يُجمع.
+  - وضعا «محدود» و«كامل» — كانا يبدوان خيارين مختلفين وهما فعلياً نفس
+    السلوك بالكود (كلاهما dry_run=False) — استُبدلا بمفتاح واحد صادق:
+    «تجريبي (بلا حفظ)» تشغّل/تشغّل، لأنه الفارق الحقيقي الوحيد المبرمج.
+
+يستخدم نفس app.run_state.SETTINGS ونفس crawler.start_crawling الحقيقيَّين.
 """
 import threading
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QHBoxLayout,
-                               QLabel, QPlainTextEdit, QProgressBar,
-                               QPushButton, QRadioButton, QSpinBox,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel,
+                               QPlainTextEdit, QProgressBar, QPushButton,
+                               QSpinBox, QVBoxLayout, QWidget)
 
 from app import core_data as md
 from app.run_state import SETTINGS
-from ._common import Collapsible, badge, card, page_header
-
-_MODE_LABEL_AR = {"dry": "تجريبي (بلا حفظ)", "limited": "محدود", "full": "كامل"}
+from ._common import Collapsible, card, page_header
 
 
 def _stat(value: str, label: str) -> QWidget:
@@ -64,7 +70,7 @@ class HomePage(QWidget):
         root.setSpacing(16)
         root.addWidget(page_header(
             "البداية",
-            "اضغط زراً واحداً لبدء جمع التشريعات — الإعدادات الافتراضية آمنة وجاهزة"))
+            "اضغط زراً واحداً لبدء جمع التشريعات — الأداة تكتشف مصادرها وأقسامها بنفسها"))
 
         # ── بطاقة التشغيل الرئيسية: فعل واحد بارز ──
         main_card, mv = card()
@@ -88,44 +94,25 @@ class HomePage(QWidget):
         mv.addLayout(launch_row)
         root.addWidget(main_card)
 
-        # ── خيارات متقدّمة (مطوية افتراضياً) ──
-        adv = Collapsible("خيارات متقدّمة (المصدر، الحدود، الأقسام)")
-
-        src_row = QHBoxLayout(); src_row.setSpacing(12)
-        src_row.addWidget(QLabel("المصدر:"))
-        self.combo = QComboBox()
-        for name in md.APPROVED_SOURCES:
-            self.combo.addItem(name)
-        src_row.addWidget(self.combo, 1)
-        cred = md.SOURCE_CREDIBILITY
-        src_row.addWidget(badge(f"المصداقية {cred:.2f}", "badgeWarning"))
-        adv.addLayout(src_row)
-        src_hint = QLabel("لإضافة مصادر جديدة استخدم تبويب «متقدّم ← استكشاف المصادر»")
-        src_hint.setProperty("class", "hint")
-        adv.addWidget(src_hint)
+        # ── خيارات متقدّمة (مطوية افتراضياً) — فقط ما له أثر فعلي بالكود ──
+        adv = Collapsible("خيارات متقدّمة (حد الصفحات، وضع التجربة)")
 
         limits_row = QHBoxLayout(); limits_row.setSpacing(18)
-        limits_row.addWidget(QLabel("أقصى عدد صفحات:"))
+        limits_row.addWidget(QLabel("أقصى عدد صفحات بكل دورة:"))
         self.spin = QSpinBox(); self.spin.setRange(5, 5000)
         self.spin.setValue(SETTINGS.max_pages)
         limits_row.addWidget(self.spin)
-        self.m_dry = QRadioButton("تجريبي (بلا حفظ)")
-        self.m_limited = QRadioButton("محدود")
-        self.m_full = QRadioButton("كامل — بعد مراجعة النتائج")
-        {"dry": self.m_dry, "limited": self.m_limited,
-         "full": self.m_full}[SETTINGS.mode].setChecked(True)
-        for m in (self.m_dry, self.m_limited, self.m_full):
-            limits_row.addWidget(m)
         limits_row.addStretch()
         adv.addLayout(limits_row)
 
-        grid = QGridLayout(); grid.setSpacing(10)
-        self._section_boxes = []
-        for i, name in enumerate(md.SECTIONS):
-            cb = QCheckBox(name); cb.setChecked(True)
-            self._section_boxes.append(cb)
-            grid.addWidget(cb, i // 2, i % 2)
-        adv.addLayout(grid)
+        self.dry_box = QCheckBox("وضع تجريبي — يفحص فقط بلا حفظ أي شيء بالقاعدة")
+        self.dry_box.setChecked(SETTINGS.dry_run)
+        adv.addWidget(self.dry_box)
+
+        src_hint = QLabel("المصدر والأقسام تُكتشف تلقائياً — لا حاجة لاختيارها؛ "
+                          "لإضافة مصدر جديد يدوياً استخدم «متقدّم ← استكشاف المصادر»")
+        src_hint.setProperty("class", "hint")
+        adv.addWidget(src_hint)
 
         apply_row = QHBoxLayout()
         apply_btn = QPushButton("حفظ الخيارات"); apply_btn.setProperty("class", "ghost")
@@ -165,12 +152,7 @@ class HomePage(QWidget):
 
     def _apply_settings(self):
         SETTINGS.max_pages = self.spin.value()
-        if self.m_dry.isChecked():
-            SETTINGS.mode = "dry"
-        elif self.m_limited.isChecked():
-            SETTINGS.mode = "limited"
-        else:
-            SETTINGS.mode = "full"
+        SETTINGS.dry_run = self.dry_box.isChecked()
         self._sync_settings_label()
 
     def refresh(self):
@@ -195,7 +177,7 @@ class HomePage(QWidget):
         self._sync_settings_label()
 
     def _sync_settings_label(self):
-        mode_ar = _MODE_LABEL_AR.get(SETTINGS.mode, SETTINGS.mode)
+        mode_ar = "تجريبي (بلا حفظ)" if SETTINGS.dry_run else "فعلي (يحفظ بالقاعدة)"
         self.settings_label.setText(
             f"الإعدادات النشطة: {SETTINGS.max_pages} صفحة — وضع {mode_ar} — "
             "يمكن إغلاق الأداة واستئنافها دون تكرار وثيقة أو مادة")
@@ -220,8 +202,7 @@ class HomePage(QWidget):
         self.resume.setEnabled(False)
         self.stop.setEnabled(True)
         self.worker = _CrawlWorker(self.stop_event, SETTINGS.max_pages,
-                                   dry_run=(SETTINGS.mode == "dry"),
-                                   parent=self)
+                                   dry_run=SETTINGS.dry_run, parent=self)
         self.worker.finished_run.connect(self._run_finished)
         self.worker.start()
 
