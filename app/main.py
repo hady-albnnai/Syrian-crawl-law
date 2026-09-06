@@ -5,37 +5,30 @@
     python -m app.main            # نافذة كاملة
     python -m app.main --smoke    # بناء وفحص ثم خروج (لـ CI)
 
-إعادة تصميم الواجهة (٢٠٢٦-٠٩) اعتماداً على أفضل ممارسات موثقة (دليل
-مايكروسوفت لتصميم واجهات سطح المكتب + الإفصاح التدريجي Progressive
-Disclosure): كانت الواجهة السابقة تعرض ٨ شاشات متتالية أرهقت مستخدماً
-عادياً (تحديد نطاق ثم تشغيل منفصلين لمهمة واحدة، واستكشاف/فجوات في
-الواجهة الرئيسية رغم أن الأداة تنفذهما تلقائياً). التصميم الجديد:
-  ١. البداية   — فعل رئيسي واحد «ابدأ الزحف الآن» بإعدادات افتراضية
-     جاهزة؛ التفاصيل النادرة (المصدر/الحدود/الأقسام) خلف طيّة واحدة.
-  ٢. المكتبة   — مراجعة ما جُمع.
-  ٣. جواب موثَّق — السؤال المباشر بالاستشهاد.
-  ٤. التصدير  — إخراج الحزمة لميزان.
-  ٥. متقدّم    — تبويبات (استكشاف المصادر، الفجوات والتعلّم، الإعدادات)
-     لمن يريد تدخلاً يدوياً؛ الأداة تُنفّذ هذه المهام تلقائياً بخلفية
-     العمل دون الحاجة لأي تدخل من مستخدم عادي.
+تصميم الواجهة (2026-09-06 — تصميم مباشر من المالك): شاشتان فقط بلا
+قائمة جانبية تقليدية — تدفّق خطي واحد:
+
+  البداية (ابدأ الزحف / إيقاف / نتائج الزحف)
+       │  الأداة تكتشف مصادرها بنفسها تلقائياً وتزحف بلا أي اختيار مسبق
+       ▼
+  نتائج الزحف (قائمة + معاينة نص كامل + موافقة/رفض لكل نتيجة)
+       │  زر «اعتماد وتجهيز لميزان» مؤجَّل عمداً لمرحلة لاحقة (بعد
+       │  استقرار دقّة الزحف وتحديد صيغة الاستيراد الفعلية لميزان)
+       ▼
+  رجوع للبداية
+
+كل الشاشات الإضافية السابقة (المكتبة، جواب موثَّق، التصدير، استكشاف
+المصادر، الفجوات والتعلّم، الإعدادات) أُزيلت بقرار صريح من المالك: لا
+حاجة لها بهذه المرحلة — التركيز الآن فقط على دقّة نتائج الزحف نفسها.
 """
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QLabel,
-                               QMainWindow, QPushButton, QStackedWidget,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QMainWindow, QStackedWidget,
+                               QWidget, QVBoxLayout)
 
 from app import theme
-from app.pages import AdvancedPage, AnswerPage, ExportPage, HomePage, LibraryPage
-
-PAGES = [
-    ("البداية", HomePage),
-    ("المكتبة والمراجعة", LibraryPage),
-    ("جواب موثَّق", AnswerPage),
-    ("التصدير لميزان", ExportPage),
-    ("متقدّم", AdvancedPage),
-]
+from app.pages import HomePage, ReviewPage
 
 
 class MainWindow(QMainWindow):
@@ -46,59 +39,34 @@ class MainWindow(QMainWindow):
 
         central = QWidget(); central.setObjectName("central")
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        # ── الشريط الجانبي ──
-        sidebar = QWidget(); sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(212)
-        sv = QVBoxLayout(sidebar)
-        sv.setContentsMargins(18, 24, 14, 18)
-        sv.setSpacing(6)
-        title = QLabel("⚖  حاصدة ميزان"); title.setObjectName("appTitle")
-        subtitle = QLabel("أداة جمع التشريعات السورية"); subtitle.setObjectName("appSubtitle")
-        sv.addWidget(title); sv.addWidget(subtitle)
-        sv.addSpacing(18)
-
-        self.group = QButtonGroup(self)
-        self.group.setExclusive(True)
-        self.nav_buttons = []
-        for i, (label, _) in enumerate(PAGES):
-            b = QPushButton(label)
-            b.setProperty("class", "nav")
-            b.setCheckable(True)
-            b.setCursor(Qt.PointingHandCursor)
-            self.group.addButton(b, i)
-            self.nav_buttons.append(b)
-            sv.addWidget(b)
-        self.nav_buttons[0].setChecked(True)
-        sv.addStretch()
-        footer = QLabel("متصل بقاعدة البيانات والطابور الدائم — لا بيانات تجريبية")
-        footer.setObjectName("sidebarFooter")
-        sv.addWidget(footer)
-        root.addWidget(sidebar)
-
-        # ── الصفحات ──
         self.stack = QStackedWidget()
-        self.page_instances = []
-        for _, cls in PAGES:
-            inst = cls()
-            self.page_instances.append(inst)
-            self.stack.addWidget(inst)
-        root.addWidget(self.stack, 1)
+        layout.addWidget(self.stack)
 
-        self.group.idClicked.connect(self._on_nav_clicked)
+        self.home = HomePage()
+        self.review = ReviewPage()
+        self.stack.addWidget(self.home)
+        self.stack.addWidget(self.review)
 
-    def _on_nav_clicked(self, index: int):
-        self.stack.setCurrentIndex(index)
-        w = self.page_instances[index]
-        if hasattr(w, "refresh"):
-            w.refresh()
+        self.home.on_open_results = self._open_results
+        self.review.on_back = self._back_home
+
+    def _open_results(self):
+        self.review.refresh()
+        self.stack.setCurrentWidget(self.review)
+
+    def _back_home(self):
+        self.home.refresh()
+        self.stack.setCurrentWidget(self.home)
 
     def goto(self, index: int):
-        self.nav_buttons[index].setChecked(True)
-        self._on_nav_clicked(index)
+        """للتوافق مع render_screens.py: 0=البداية، 1=نتائج الزحف."""
+        if index == 0:
+            self._back_home()
+        else:
+            self._open_results()
 
 
 def build_app() -> QApplication:

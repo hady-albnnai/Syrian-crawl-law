@@ -6,10 +6,10 @@
 import sys
 from pathlib import Path
 
-from app.main import PAGES, MainWindow, build_app
+from app.main import MainWindow, build_app
 
 OUT = Path(__file__).parent.parent / "docs" / "screenshots"
-NAMES = ["01-home", "02-library", "03-answer", "04-export", "05-advanced"]
+NAMES = ["01-home", "02-review"]
 
 
 def main() -> int:

@@ -122,7 +122,20 @@ def _documents():
     return out
 
 
+def document_text(doc_id: int) -> str:
+    """نص وثيقة كاملاً (clean_content) لمعاينة المراجعة — قراءة مباشرة
+    بمعرّف الوثيقة، لا كل الأعمدة الثقيلة ضمن _documents() الافتراضية."""
+    conn = _connect()
+    if conn is None:
+        return ""
+    row = conn.execute(
+        "SELECT clean_content FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    conn.close()
+    return (row["clean_content"] if row else "") or ""
+
+
 def _log_events(limit=200):
+
     conn = _connect()
     if conn is None or not _has_table(conn, "crawl_log"):
         conn and conn.close()
