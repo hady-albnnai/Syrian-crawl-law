@@ -1,12 +1,8 @@
 # -*- coding: utf-8 -*-
-from .discovery_page import DiscoveryPage
-from .scope_page import ScopePage
-from .run_page import RunPage
+from .home_page import HomePage
 from .library_page import LibraryPage
-from .insights_page import InsightsPage
 from .answer_page import AnswerPage
 from .export_page import ExportPage
-from .settings_page import SettingsPage
+from .advanced_page import AdvancedPage
 
-__all__ = ["DiscoveryPage", "ScopePage", "RunPage", "LibraryPage",
-          "InsightsPage", "AnswerPage", "ExportPage", "SettingsPage"]
+__all__ = ["HomePage", "LibraryPage", "AnswerPage", "ExportPage", "AdvancedPage"]

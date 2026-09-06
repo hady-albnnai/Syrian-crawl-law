@@ -167,4 +167,13 @@ def build_qss() -> str:
     }}
     QScrollBar:vertical {{ background: transparent; width: 10px; }}
     QScrollBar::handle:vertical {{ background: #C9CFD8; border-radius: 5px; min-height: 30px; }}
+
+    /* ── التبويبات (شاشة متقدّم) ── */
+    QTabWidget::pane {{ border: 1px solid #E4E7EC; border-radius: 12px; background: {CARD_BG}; top: -1px; }}
+    QTabBar::tab {{
+        background: transparent; color: {TEXT_SECONDARY}; padding: 10px 18px;
+        font-size: 12.5px; font-weight: 600; border: none;
+    }}
+    QTabBar::tab:selected {{ color: {PRIMARY_NAVY}; border-bottom: 3px solid {SECONDARY_GOLD}; }}
+    QTabBar::tab:hover {{ color: {PRIMARY_NAVY}; }}
     """

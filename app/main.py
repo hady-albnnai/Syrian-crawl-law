@@ -4,6 +4,20 @@
 التشغيل:
     python -m app.main            # نافذة كاملة
     python -m app.main --smoke    # بناء وفحص ثم خروج (لـ CI)
+
+إعادة تصميم الواجهة (٢٠٢٦-٠٩) اعتماداً على أفضل ممارسات موثقة (دليل
+مايكروسوفت لتصميم واجهات سطح المكتب + الإفصاح التدريجي Progressive
+Disclosure): كانت الواجهة السابقة تعرض ٨ شاشات متتالية أرهقت مستخدماً
+عادياً (تحديد نطاق ثم تشغيل منفصلين لمهمة واحدة، واستكشاف/فجوات في
+الواجهة الرئيسية رغم أن الأداة تنفذهما تلقائياً). التصميم الجديد:
+  ١. البداية   — فعل رئيسي واحد «ابدأ الزحف الآن» بإعدادات افتراضية
+     جاهزة؛ التفاصيل النادرة (المصدر/الحدود/الأقسام) خلف طيّة واحدة.
+  ٢. المكتبة   — مراجعة ما جُمع.
+  ٣. جواب موثَّق — السؤال المباشر بالاستشهاد.
+  ٤. التصدير  — إخراج الحزمة لميزان.
+  ٥. متقدّم    — تبويبات (استكشاف المصادر، الفجوات والتعلّم، الإعدادات)
+     لمن يريد تدخلاً يدوياً؛ الأداة تُنفّذ هذه المهام تلقائياً بخلفية
+     العمل دون الحاجة لأي تدخل من مستخدم عادي.
 """
 import sys
 
@@ -13,19 +27,14 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QLabel,
                                QVBoxLayout, QWidget)
 
 from app import theme
-from app.pages import (AnswerPage, DiscoveryPage, ExportPage,
-                       InsightsPage, LibraryPage, RunPage, ScopePage,
-                       SettingsPage)
+from app.pages import AdvancedPage, AnswerPage, ExportPage, HomePage, LibraryPage
 
 PAGES = [
-    ("استكشاف المصادر", DiscoveryPage),
-    ("تحديد النطاق", ScopePage),
-    ("التشغيل", RunPage),
+    ("البداية", HomePage),
     ("المكتبة والمراجعة", LibraryPage),
-    ("الفجوات والتعلّم", InsightsPage),
     ("جواب موثَّق", AnswerPage),
     ("التصدير لميزان", ExportPage),
-    ("الإعدادات", SettingsPage),
+    ("متقدّم", AdvancedPage),
 ]
 
 
@@ -43,7 +52,7 @@ class MainWindow(QMainWindow):
 
         # ── الشريط الجانبي ──
         sidebar = QWidget(); sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(232)
+        sidebar.setFixedWidth(212)
         sv = QVBoxLayout(sidebar)
         sv.setContentsMargins(18, 24, 14, 18)
         sv.setSpacing(6)
@@ -56,7 +65,7 @@ class MainWindow(QMainWindow):
         self.group.setExclusive(True)
         self.nav_buttons = []
         for i, (label, _) in enumerate(PAGES):
-            b = QPushButton(f"{i+1}.  {label}")
+            b = QPushButton(label)
             b.setProperty("class", "nav")
             b.setCheckable(True)
             b.setCursor(Qt.PointingHandCursor)
@@ -79,20 +88,17 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(inst)
         root.addWidget(self.stack, 1)
 
-        self.group.idClicked.connect(self.stack.setCurrentIndex)
+        self.group.idClicked.connect(self._on_nav_clicked)
 
-        # شاشة النطاق تنتقل فعلياً لشاشة التشغيل بعد حفظ الإعدادات — كانتا
-        # معزولتين تماماً سابقاً (زر «بدء الزحف» لا يفعل شيئاً).
-        scope_idx = next(i for i, (_, cls) in enumerate(PAGES)
-                         if cls.__name__ == "ScopePage")
-        run_idx = next(i for i, (_, cls) in enumerate(PAGES)
-                      if cls.__name__ == "RunPage")
-        self.page_instances[scope_idx].go_to_run.connect(
-            lambda: self.goto(run_idx))
+    def _on_nav_clicked(self, index: int):
+        self.stack.setCurrentIndex(index)
+        w = self.page_instances[index]
+        if hasattr(w, "refresh"):
+            w.refresh()
 
     def goto(self, index: int):
         self.nav_buttons[index].setChecked(True)
-        self.stack.setCurrentIndex(index)
+        self._on_nav_clicked(index)
 
 
 def build_app() -> QApplication:
