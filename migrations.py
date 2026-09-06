@@ -181,12 +181,40 @@ def _migration_004_self_discovery(cursor) -> dict:
     return {"columns_added": added}
 
 
+def _migration_005_rejection_feedback(cursor) -> dict:
+    """سبب رفض صريح عند المراجعة البشرية (طلب المالك 2026-09-06): «حتى
+    يتعلّم الزاحف للمرات القادمة». سجل تدقيق كامل (من رفض ماذا ولماذا)
+    + عمود تنازلي بسيط على sources يُقرأ عند البذر القادم (learning.py).
+
+    - rejection_reasons: سجل كل رفض بشري (doc_id, source_key, الفئة، ملاحظة حرة).
+    - sources.rejection_count: عدّاد تراكمي بسيط — يُستشار قبل البذر
+      (نفس فكرة learned_status الحالية، بس مصدرها قرار بشري صريح لا
+      عدّاد فارغ آلي). إضافي بحت، لا يمسّ learned_status الموجود أصلاً.
+    """
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS rejection_reasons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id INTEGER,
+            source_key TEXT,
+            category TEXT,
+            note TEXT,
+            rejected_at TEXT,
+            FOREIGN KEY (doc_id) REFERENCES documents(id)
+        )
+    ''')
+    added = _add_column_if_missing(cursor, "sources", "rejection_count",
+                                   "INTEGER DEFAULT 0")
+    return {"table_created": True, "columns_added": added}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
     (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
     (3, "sources.decided_by (user vs autopilot)", _migration_003_sources_decided_by),
     (4, "self-discovery: identity_key + domain_tier + versions/dedup/perf",
      _migration_004_self_discovery),
+    (5, "rejection_reasons + sources.rejection_count (learn from human review)",
+     _migration_005_rejection_feedback),
 ]
 LATEST = MIGRATIONS[-1][0]
 

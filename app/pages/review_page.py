@@ -14,14 +14,65 @@ import sqlite3
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QMessageBox,
-                               QPlainTextEdit, QPushButton, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QDialog, QDialogButtonBox,
+                               QHBoxLayout, QHeaderView, QLabel,
+                               QPlainTextEdit, QPushButton, QRadioButton,
+                               QTableWidget, QTableWidgetItem, QTextEdit,
+                               QVBoxLayout, QWidget)
 
 from app import core_data as md
 from ._common import card, page_header
 
 COLUMNS = ["العنوان", "الفرع", "المواد", "الحالة"]
+
+
+class RejectionReasonDialog(QDialog):
+    """يفرض اختيار سبب رفض قبل التأكيد (طلب المالك 2026-09-06): «حتى يتعلم
+    الزاحف للمرات القادمة» — لا رفض بلا سبب صريح؛ زر التأكيد يبقى معطَّلاً
+    حتى تُختار فئة واحدة على الأقل."""
+
+    def __init__(self, doc_title: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("سبب الرفض")
+        self.setMinimumWidth(420)
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel(f"لماذا تُرفض «{doc_title[:70]}»؟"))
+
+        self._group = QButtonGroup(self)
+        self._radios = {}
+        from learning import REJECTION_CATEGORIES
+        for code, label in REJECTION_CATEGORIES.items():
+            rb = QRadioButton(label)
+            self._group.addButton(rb)
+            self._radios[rb] = code
+            v.addWidget(rb)
+        self._group.buttonToggled.connect(self._on_toggled)
+
+        v.addWidget(QLabel("ملاحظة إضافية (اختياري):"))
+        self.note = QTextEdit(); self.note.setMaximumHeight(70)
+        v.addWidget(self.note)
+
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttons.button(QDialogButtonBox.Ok).setText("تأكيد الرفض")
+        self.buttons.button(QDialogButtonBox.Cancel).setText("إلغاء")
+        self.buttons.button(QDialogButtonBox.Ok).setEnabled(False)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        v.addWidget(self.buttons)
+
+    def _on_toggled(self, _btn, checked):
+        if checked:
+            self.buttons.button(QDialogButtonBox.Ok).setEnabled(True)
+
+    def selected_category(self) -> str | None:
+        for rb, code in self._radios.items():
+            if rb.isChecked():
+                return code
+        return None
+
+    def note_text(self) -> str:
+        return self.note.toPlainText().strip()
 
 SUCCESS = QColor("#28A745"); WARNING = QColor("#C08A00"); ERROR = QColor("#DC3545")
 
@@ -163,20 +214,39 @@ class ReviewPage(QWidget):
         doc = self._selected_doc()
         if doc is None:
             return
-        reply = QMessageBox.question(
-            self, "تأكيد الرفض",
-            f"رفض «{doc.title[:60]}» — لن تدخل حزمة التصدير لميزان. متابعة؟")
-        if reply != QMessageBox.Yes:
+        dlg = RejectionReasonDialog(doc.title, self)
+        if dlg.exec() != QDialog.Accepted:
             return
+        category = dlg.selected_category()
+        if not category:
+            return  # لا يحدث فعلياً (زر التأكيد معطَّل بلا اختيار) — درع إضافي
+        note = dlg.note_text()
+
         from config import DB_PATH
+        import learning
         conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
         conn.execute(
             "UPDATE documents SET status='rejected', updated_at=datetime('now') "
             "WHERE id=?", (doc.doc_id,))
         conn.commit()
+        result = learning.record_rejection(
+            conn, doc.doc_id, doc.source_url, category, note)
         conn.close()
+
         from database import insert_log
-        insert_log("", "review", f"وثيقة #{doc.doc_id} رُفضت من المراجعة")
+        from learning import REJECTION_CATEGORIES
+        insert_log("", "review",
+                   f"وثيقة #{doc.doc_id} رُفضت — السبب: "
+                   f"{REJECTION_CATEGORIES[category]}")
+        if result.get("source_key"):
+            msg = (f"مصدر «{result['source_key']}»: المصداقية الآن "
+                  f"{result['credibility']:.2f}، رفضات متراكمة "
+                  f"{result['rejection_count']}")
+            if result.get("excluded"):
+                msg += " — تم استبعاده تلقائياً من الزحف القادم."
+            insert_log("", "learning", msg,
+                      "warning" if result.get("excluded") else "info")
         self.refresh()
 
     def _back(self):

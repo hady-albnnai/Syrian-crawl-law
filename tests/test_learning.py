@@ -124,3 +124,79 @@ def test_source_with_no_performance_record_yet_still_listed(tmp_path, monkeypatc
     ordered = learning.prioritized_active_sources(conn)
     assert len(ordered) == 1
     assert ordered[0]["base_url"] == "https://brand-new.example/"
+
+
+# ─────────────── record_rejection (تعلّم من رفض المراجعة البشرية) ───────────────
+
+def _add_document_row(conn, doc_id, source_url):
+    """صف بمخطط documents الحقيقي (id تلقائي، لا doc_id نصّي كما بقية
+    اختبارات هذا الملف — record_rejection يبحث بـ documents.id)."""
+    conn.execute(
+        "INSERT INTO documents (id, title, source_url, review_status, status) "
+        "VALUES (?, ?, ?, 'auto_accepted', 'active')",
+        (doc_id, "وثيقة اختبار", source_url))
+    conn.commit()
+
+
+def test_record_rejection_rejects_unknown_category(tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    _approve_source(conn, "s1", "https://forum.example/")
+    _add_document_row(conn, 1, "https://forum.example/t1")
+    import pytest
+    with pytest.raises(ValueError):
+        learning.record_rejection(conn, 1, "https://forum.example/t1", "غير_موجودة")
+
+
+def test_record_rejection_logs_reason_and_downranks_source(tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    _approve_source(conn, "s1", "https://forum.example/")
+    conn.execute("UPDATE sources SET credibility = 0.6 WHERE source_key = 's1'")
+    conn.commit()
+    _add_document_row(conn, 1, "https://forum.example/t1")
+
+    result = learning.record_rejection(
+        conn, 1, "https://forum.example/t1", "not_legal", "دعاية لا نص قانوني")
+
+    assert result["source_key"] == "s1"
+    assert result["rejection_count"] == 1
+    assert result["credibility"] == 0.5  # 0.6 - PENALTY(0.1)
+    assert result["excluded"] is False
+
+    logged = conn.execute(
+        "SELECT doc_id, source_key, category, note FROM rejection_reasons"
+    ).fetchall()
+    assert len(logged) == 1
+    assert logged[0]["category"] == "not_legal"
+    assert logged[0]["note"] == "دعاية لا نص قانوني"
+
+
+def test_record_rejection_accumulates_and_excludes_after_threshold(tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    _approve_source(conn, "s1", "https://forum.example/")
+    _add_document_row(conn, 1, "https://forum.example/t1")
+
+    for category in ("not_legal", "duplicate", "bad_extraction"):
+        result = learning.record_rejection(
+            conn, 1, "https://forum.example/t1", category)
+
+    assert result["rejection_count"] == learning.REJECTION_EXCLUDE_THRESHOLD
+    assert result["excluded"] is True
+
+    # مصدر مستبعَد بقرار بشري متراكم ⇒ لا يظهر ضمن الأولوية للبذر القادم
+    ordered = learning.prioritized_active_sources(conn)
+    assert ordered == []
+
+
+def test_record_rejection_with_unlinked_source_only_logs(tmp_path, monkeypatch):
+    """رابط لا يطابق أي مصدر مُدار (نطاق غير مسجَّل) ⇒ يُسجَّل السبب فقط
+    للتدقيق بلا استثناء ولا محاولة تحديث مصدر غير موجود."""
+    conn = _tmp_db(tmp_path, monkeypatch)
+    _add_document_row(conn, 1, "https://unmanaged.example/t1")
+
+    result = learning.record_rejection(
+        conn, 1, "https://unmanaged.example/t1", "untrusted_source")
+
+    assert result["source_key"] is None
+    assert result["excluded"] is False
+    logged = conn.execute("SELECT category FROM rejection_reasons").fetchall()
+    assert len(logged) == 1

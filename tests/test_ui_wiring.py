@@ -77,6 +77,18 @@ class TestCoreData:
         conn.commit(); conn.close()
         assert core_data.DOCUMENTS[0].title == "بعد التحديث"
 
+    def test_rejected_document_status_and_source_url_exposed(self, wired_db):
+        """رفض بشري صريح (status='rejected') يظهر «مرفوض ✗» في شاشة
+        المراجعة — لا «يحتاج مراجعة» عاماً (طلب المالك 2026-09-06:
+        سبب الرفض حتى يتعلّم الزاحف). source_url أيضاً متاح لربط
+        الوثيقة بمصدرها عند تسجيل الرفض (learning.record_rejection)."""
+        conn = sqlite3.connect(wired_db)
+        conn.execute("UPDATE documents SET status='rejected'")
+        conn.commit(); conn.close()
+        doc = core_data.DOCUMENTS[0]
+        assert doc.status == "rejected"
+        assert doc.source_url == "https://x/t1"
+
 
 class TestPackageGate:
     def test_validate_missing_then_real(self, wired_db, tmp_path):

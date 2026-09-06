@@ -37,6 +37,7 @@ class DocumentRow:
     status: str
     year: int
     doc_id: int = 0
+    source_url: str = ""
 
 
 @dataclass
@@ -99,7 +100,7 @@ def _documents():
         return []
     rows = conn.execute("""
         SELECT d.id, d.title, d.doc_type, d.branch, d.year, d.legal_score,
-               d.review_status, d.status,
+               d.review_status, d.status, d.source_url,
                (SELECT COUNT(*) FROM articles a WHERE a.doc_id = d.id)
                    AS n_articles
         FROM documents d ORDER BY d.id""").fetchall()
@@ -107,7 +108,9 @@ def _documents():
     out = []
     for r in rows:
         status = _STATUS_MAP.get(r["review_status"], "needs_review")
-        if r["status"] != "active":
+        if r["status"] == "rejected":
+            status = "rejected"
+        elif r["status"] != "active":
             status = "needs_review"
         from config import BRANCH_AR  # مصدر حقيقة واحد — 14 فرعاً
         out.append(DocumentRow(
@@ -118,7 +121,8 @@ def _documents():
             articles=r["n_articles"],
             quality=round(r["legal_score"] or 0.0, 2),
             status=status,
-            year=r["year"] or 0))
+            year=r["year"] or 0,
+            source_url=r["source_url"] or ""))
     return out
 
 

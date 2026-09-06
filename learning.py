@@ -18,6 +18,21 @@ from urllib.parse import urlparse
 # محافظ شائع بأنظمة retry/backoff (موثّق بالتصميم §9).
 EXHAUSTION_THRESHOLD = 3
 
+# التعلّم من رفض المراجعة البشرية (طلب المالك 2026-09-06): كل رفض
+# لوثيقة ينزّل مصداقية مصدرها — قرار بشري صريح أقوى من عدّاد آلي فارغ.
+REJECTION_CREDIBILITY_PENALTY = 0.1
+MIN_CREDIBILITY = 0.1
+# 3 رفضات متراكمة من نفس المصدر ⇒ يُستبعد كلياً من البذر القادم (نفس
+# منطق «مصدر مستنفد» أعلاه، لكن مصدره قرار بشري لا عدّاد فارغ).
+REJECTION_EXCLUDE_THRESHOLD = 3
+
+REJECTION_CATEGORIES = {
+    "not_legal": "ليس نصاً قانونياً فعلاً (دعاية/منتدى عام)",
+    "duplicate": "مكرر مع وثيقة موجودة أصلاً",
+    "bad_extraction": "جودة استخراج رديئة (نص مبعثر/ناقص)",
+    "untrusted_source": "مصدر غير موثوق أصلاً",
+}
+
 
 def _netloc(url: str) -> str:
     host = (urlparse(url or "").netloc or "").lower()
@@ -106,7 +121,8 @@ def is_source_exhausted(conn, source_key: str) -> bool:
 def prioritized_active_sources(conn) -> list:
     """المصادر المعتمدة مرتّبة: الأكثر إنتاجاً لقوانين فريدة جديداً أولاً،
     ثم المصادر بلا سجل أداء بعد (جديدة كلياً) — المستنفدة تُستبعد كلياً
-    (§5.1: «لا يُعاد تقييمه تلقائياً كل دورة»)."""
+    (§5.1: «لا يُعاد تقييمه تلقائياً كل دورة»)، وكذلك المصادر التي
+    تراكمت عليها رفضات بشرية كافية (انظر record_rejection أدناه)."""
     rows = conn.execute('''
         SELECT s.base_url, s.name, s.credibility,
                COALESCE(p.new_identities_total, 0) AS total,
@@ -115,6 +131,66 @@ def prioritized_active_sources(conn) -> list:
         LEFT JOIN source_performance p ON p.source_key = s.source_key
         WHERE s.status = 'approved'
           AND (p.learned_status IS NULL OR p.learned_status != 'exhausted')
+          AND COALESCE(s.rejection_count, 0) < ?
         ORDER BY total DESC
-    ''').fetchall()
+    ''', (REJECTION_EXCLUDE_THRESHOLD,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def _source_key_by_domain(conn, doc_source_url: str) -> str | None:
+    """يطابق نطاق (netloc) رابط الوثيقة الفعلي مع sources.base_url — نفس
+    منطق ربط مصدر↔وثيقة في _count_unique_identities_for_source أعلاه
+    (source_key الحقيقي يُحسب من base_url الجذري للمصدر، لا من رابط
+    الوثيقة المحدَّد، فلا يصح hash مباشر لرابط الوثيقة)."""
+    domain = _netloc(doc_source_url)
+    if not domain:
+        return None
+    rows = conn.execute("SELECT source_key, base_url FROM sources").fetchall()
+    for r in rows:
+        if _netloc(r["base_url"]) == domain:
+            return r["source_key"]
+    return None
+
+
+def record_rejection(conn, doc_id: int, source_url: str, category: str,
+                     note: str = "") -> dict:
+    """يُستدعى من شاشة المراجعة عند رفض نتيجة — التعلّم من التغذية
+    الراجعة البشرية (طلب المالك 2026-09-06): «حتى يتعلم الزاحف للمرات
+    القادمة». يسجل السبب للتدقيق، ثم:
+      1. ينزّل مصداقية المصدر (credibility -= PENALTY، بحد أدنى).
+      2. يزيد rejection_count تراكمياً على sources.
+      3. عند بلوغ REJECTION_EXCLUDE_THRESHOLD: المصدر يُستبعد تلقائياً
+         من بذر الطابور القادم (نفس فحص «مستنفد» — prioritized_active_sources).
+
+    لا مصدر مسجَّل لنطاق هذا الرابط (وثيقة مصدرها ليس ضمن sources
+    المُدارة بعد) ⇒ يُسجَّل السبب فقط للتدقيق بلا تأثير على تعلّم مصدر
+    غير موجود.
+    """
+    if category not in REJECTION_CATEGORIES:
+        raise ValueError(f"فئة رفض غير معروفة: {category}")
+    source_key = _source_key_by_domain(conn, source_url) if source_url else None
+    conn.execute('''
+        INSERT INTO rejection_reasons (doc_id, source_key, category, note, rejected_at)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (doc_id, source_key, category, note, datetime.now().isoformat()))
+
+    result = {"source_key": source_key, "credibility": None,
+             "rejection_count": None, "excluded": False}
+    if source_key:
+        row = conn.execute(
+            "SELECT credibility, rejection_count FROM sources "
+            "WHERE source_key = ?", (source_key,)).fetchone()
+        if row is not None:
+            new_credibility = max(
+                MIN_CREDIBILITY,
+                (row[0] or 0.6) - REJECTION_CREDIBILITY_PENALTY)
+            new_count = (row[1] or 0) + 1
+            conn.execute(
+                "UPDATE sources SET credibility = ?, rejection_count = ? "
+                "WHERE source_key = ?",
+                (new_credibility, new_count, source_key))
+            result.update(credibility=new_credibility,
+                          rejection_count=new_count,
+                          excluded=new_count >= REJECTION_EXCLUDE_THRESHOLD)
+    conn.commit()
+    return result

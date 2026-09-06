@@ -213,7 +213,8 @@ def create_tables():
         discovered_at TEXT,
         decided_at TEXT,
         decided_by TEXT,
-        domain_tier INTEGER DEFAULT 4
+        domain_tier INTEGER DEFAULT 4,
+        rejection_count INTEGER DEFAULT 0
     )
     ''')
 
@@ -255,6 +256,20 @@ def create_tables():
         consecutive_empty_runs INTEGER DEFAULT 0,
         last_evaluated_at TEXT,
         learned_status TEXT DEFAULT 'active'
+    )
+    ''')
+
+    # سبب رفض صريح من المراجعة البشرية — تعلّم من التغذية الراجعة (طلب
+    # المالك 2026-09-06): «حتى يتعلم الزاحف للمرات القادمة».
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS rejection_reasons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        doc_id INTEGER,
+        source_key TEXT,
+        category TEXT,
+        note TEXT,
+        rejected_at TEXT,
+        FOREIGN KEY (doc_id) REFERENCES documents(id)
     )
     ''')
 
