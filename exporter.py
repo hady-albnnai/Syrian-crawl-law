@@ -16,7 +16,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from config import DB_PATH
+from config import BRANCH_AR, DB_PATH  # مصدر حقيقة واحد لكل الـ14 فرعاً
 from logging_setup import get_log
 
 log = get_log(__name__)
@@ -25,16 +25,6 @@ COLUMNS = ["id", "title", "type", "number", "year", "date", "category",
            "url", "format", "priority", "status", "local_path",
            "size_bytes", "sha256"]
 DEFAULT_PREFIX = "content/legal_library/laws_decrees/"
-# مفاتيح detect_branch ⇒ تسميات ميزان العربية (فئات الفهرس عربية كلها)
-BRANCH_AR = {
-    "civil_law": "مدني",
-    "penal_law": "جزائي",
-    "procedural_law": "أصول ومحاكمات",
-    "personal_status": "أحوال شخصية",
-    "commercial_law": "تجاري",
-    "constitutional": "دستوري",
-    "administrative": "إداري",
-}
 SNAPSHOT_DIR = Path("data/snapshots")
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 

@@ -3,6 +3,9 @@
 
 الزحف يعمل في QThread (لا تجميد للواجهة)، والإيقاف تعاوني عبر
 stop_event يفحصه الزاحف بين مهمة وأخرى — الطابور دائم فالاستئناف آمن.
+
+يقرأ فعلياً من app.run_state.SETTINGS (تُحدَّث من شاشة «تحديد النطاق»)
+بدل رقم 25 ثابت ووضع live مفروض دائماً — كانت الشاشتان معزولتين تماماً.
 """
 import threading
 
@@ -11,7 +14,10 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPlainTextEdit,
                                QProgressBar, QPushButton, QVBoxLayout, QWidget)
 
 from app import core_data as md
+from app.run_state import SETTINGS
 from ._common import card, page_header
+
+_MODE_LABEL_AR = {"dry": "تجريبي (بلا حفظ)", "limited": "محدود", "full": "كامل"}
 
 
 def _stat(value: str, label: str) -> QWidget:
@@ -27,15 +33,16 @@ class _CrawlWorker(QThread):
     """يشغّل دورة زحف حقيقية خارج خيط الواجهة."""
     finished_run = Signal()
 
-    def __init__(self, stop_event, max_pages, parent=None):
+    def __init__(self, stop_event, max_pages, dry_run, parent=None):
         super().__init__(parent)
         self.stop_event = stop_event
         self.max_pages = max_pages
+        self.dry_run = dry_run
 
     def run(self):
         from crawler import start_crawling
         try:
-            start_crawling(max_pages=self.max_pages, dry_run=False,
+            start_crawling(max_pages=self.max_pages, dry_run=self.dry_run,
                            stop_event=self.stop_event)
         finally:
             self.finished_run.emit()
@@ -49,7 +56,13 @@ class RunPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(18)
-        root.addWidget(page_header("التشغيل", "الطابور دائم — يمكن إغلاق الأداة واستئنافها دون تكرار وثيقة أو مادة"))
+        root.addWidget(page_header(
+            "التشغيل",
+            "الطابور دائم — يمكن إغلاق الأداة واستئنافها دون تكرار وثيقة أو مادة"))
+
+        self.settings_label = QLabel("")
+        self.settings_label.setProperty("class", "hint")
+        root.addWidget(self.settings_label)
 
         self.stats_row = QHBoxLayout(); self.stats_row.setSpacing(16)
         root.addLayout(self.stats_row)
@@ -77,7 +90,7 @@ class RunPage(QWidget):
         self.stop = QPushButton("■  إيقاف"); self.stop.setProperty("class", "ghost")
         self.stop.clicked.connect(self._request_stop)
         self.stop.setEnabled(False)
-        self.resume = QPushButton("▶  تشغيل دورة (25 صفحة)")
+        self.resume = QPushButton("")
         self.resume.setProperty("class", "primary")
         self.resume.clicked.connect(self._start_run)
         btns.addWidget(self.stop); btns.addStretch(); btns.addWidget(self.resume)
@@ -108,6 +121,15 @@ class RunPage(QWidget):
         self.bar.setValue(pct)
         self.pct.setText(f"{pct}% من {total} مهمة")
         self._reload_log()
+        self._sync_settings_label()
+
+    def _sync_settings_label(self):
+        mode_ar = _MODE_LABEL_AR.get(SETTINGS.mode, SETTINGS.mode)
+        self.settings_label.setText(
+            f"الإعدادات النشطة (من شاشة «تحديد النطاق»): "
+            f"{SETTINGS.max_pages} صفحة — وضع {mode_ar}")
+        if not (self.worker and self.worker.isRunning()):
+            self.resume.setText(f"▶  تشغيل دورة ({SETTINGS.max_pages} صفحة)")
 
     def _reload_log(self):
         pos = self.log.verticalScrollBar().value()
@@ -125,7 +147,9 @@ class RunPage(QWidget):
         self.stop_event = threading.Event()
         self.resume.setEnabled(False)
         self.stop.setEnabled(True)
-        self.worker = _CrawlWorker(self.stop_event, 25, self)
+        self.worker = _CrawlWorker(self.stop_event, SETTINGS.max_pages,
+                                   dry_run=(SETTINGS.mode == "dry"),
+                                   parent=self)
         self.worker.finished_run.connect(self._run_finished)
         self.worker.start()
 

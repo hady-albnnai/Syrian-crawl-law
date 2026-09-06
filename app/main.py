@@ -14,13 +14,15 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QLabel,
 
 from app import theme
 from app.pages import (AnswerPage, DiscoveryPage, ExportPage,
-                       LibraryPage, RunPage, ScopePage, SettingsPage)
+                       InsightsPage, LibraryPage, RunPage, ScopePage,
+                       SettingsPage)
 
 PAGES = [
     ("استكشاف المصادر", DiscoveryPage),
     ("تحديد النطاق", ScopePage),
     ("التشغيل", RunPage),
     ("المكتبة والمراجعة", LibraryPage),
+    ("الفجوات والتعلّم", InsightsPage),
     ("جواب موثَّق", AnswerPage),
     ("التصدير لميزان", ExportPage),
     ("الإعدادات", SettingsPage),
@@ -70,11 +72,23 @@ class MainWindow(QMainWindow):
 
         # ── الصفحات ──
         self.stack = QStackedWidget()
+        self.page_instances = []
         for _, cls in PAGES:
-            self.stack.addWidget(cls())
+            inst = cls()
+            self.page_instances.append(inst)
+            self.stack.addWidget(inst)
         root.addWidget(self.stack, 1)
 
         self.group.idClicked.connect(self.stack.setCurrentIndex)
+
+        # شاشة النطاق تنتقل فعلياً لشاشة التشغيل بعد حفظ الإعدادات — كانتا
+        # معزولتين تماماً سابقاً (زر «بدء الزحف» لا يفعل شيئاً).
+        scope_idx = next(i for i, (_, cls) in enumerate(PAGES)
+                         if cls.__name__ == "ScopePage")
+        run_idx = next(i for i, (_, cls) in enumerate(PAGES)
+                      if cls.__name__ == "RunPage")
+        self.page_instances[scope_idx].go_to_run.connect(
+            lambda: self.goto(run_idx))
 
     def goto(self, index: int):
         self.nav_buttons[index].setChecked(True)

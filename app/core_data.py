@@ -47,6 +47,25 @@ class DiscoveryRow:
     score: float
     verdict: str     # recommended / rejected / blocked
     via: str
+    source_key: str = ""
+
+
+@dataclass
+class GapRow:
+    branch: str          # اسم الفرع بالعربية (config.BRANCH_AR)
+    count: int
+    expected_min: float
+    is_gap: bool
+
+
+@dataclass
+class SourcePerformanceRow:
+    name: str
+    runs_count: int
+    new_identities_total: int
+    consecutive_empty_runs: int
+    learned_status: str   # active | exhausted
+
 
 
 def _connect() -> sqlite3.Connection | None:
@@ -90,7 +109,7 @@ def _documents():
         status = _STATUS_MAP.get(r["review_status"], "needs_review")
         if r["status"] != "active":
             status = "needs_review"
-        from exporter import BRANCH_AR  # مفاتيح الكاشف ⇒ عربية للشاشات
+        from config import BRANCH_AR  # مصدر حقيقة واحد — 14 فرعاً
         out.append(DocumentRow(
             doc_id=r["id"],
             title=r["title"] or "بدون عنوان",
@@ -139,13 +158,18 @@ def _run_stats():
 
 def _discovery_rows():
     _verdict = {"approved": "recommended", "proposed": "recommended",
-                "rejected": "rejected"}
-    return [DiscoveryRow(
+                "rejected": "rejected", "exhausted": "recommended"}
+    rows = [DiscoveryRow(
         title=s["name"] or s["base_url"], url=s["base_url"],
         engine=s["engine"] or "unknown",
         score=round(s["credibility"] or 0.0, 2),
         verdict=_verdict.get(s["status"], "rejected"),
-        via=s["discovered_via"] or "manual") for s in _sources()]
+        via=s["discovered_via"] or "manual",
+        source_key=s["source_key"]) for s in _sources()]
+    # الأحدث اكتشافاً أولاً — نفس ترتيب ما يراه المستخدم منطقياً بعد ضغط
+    # «اكتشاف تلقائي» (أضيف حديثاً ⇒ id أكبر ⇒ id غير محمَّل هنا فنستخدم
+    # ترتيب _sources نفسه، وهو بحسب id تصاعدياً من SELECT * أعلاه، فنعكسه)
+    return list(reversed(rows))
 
 
 def _approved_sources():
@@ -195,6 +219,87 @@ def validate_package(pkg_dir=None) -> list:
     return checks
 
 
+def _gap_report():
+    """تحليل فجوات فروع القانون (gap_analysis.py، §7) — حية من القاعدة،
+    لا جدول مُخمَّن. تعيد قائمة مرتبة: الفجوات أولاً (الأكثر نقصاً أعلى)."""
+    from config import BRANCH_AR
+    conn = _connect()
+    if conn is None:
+        return []
+    import gap_analysis
+    report = gap_analysis.analyze_gaps(conn)
+    conn.close()
+    rows = [GapRow(branch=BRANCH_AR.get(b, b), count=info["count"],
+                   expected_min=info["expected_min"], is_gap=info["gap"])
+            for b, info in report.items()]
+    rows.sort(key=lambda r: (not r.is_gap, r.count))
+    return rows
+
+
+def _gap_queries(limit_branches: int = 5):
+    """أمثلة استعلامات بحث موجَّهة للفروع الناقصة — نفس ما يستخدمه
+    autopilot.generate_candidates فعلياً بالدورة القادمة (لا نص توضيحي)."""
+    conn = _connect()
+    if conn is None:
+        return []
+    import gap_analysis
+    report = gap_analysis.analyze_gaps(conn)
+    conn.close()
+    gapped = [b for b, info in report.items() if info["gap"]]
+    out = []
+    for branch in gapped[:limit_branches]:
+        out.extend(gap_analysis.gap_queries_for_branch(branch, limit=2))
+    return out
+
+
+def _source_performance():
+    """أداء كل مصدر معتمد عبر الدورات (learning.py، §5) — حي من القاعدة."""
+    conn = _connect()
+    if conn is None or not _has_table(conn, "source_performance"):
+        conn and conn.close()
+        return []
+    rows = conn.execute("""
+        SELECT sp.*, s.name, s.base_url FROM source_performance sp
+        JOIN sources s ON s.source_key = sp.source_key
+        ORDER BY sp.new_identities_total DESC
+    """).fetchall()
+    conn.close()
+    return [SourcePerformanceRow(
+        name=r["name"] or r["base_url"],
+        runs_count=r["runs_count"],
+        new_identities_total=r["new_identities_total"],
+        consecutive_empty_runs=r["consecutive_empty_runs"],
+        learned_status=r["learned_status"]) for r in rows]
+
+
+def _dedup_stats():
+    """عدد قرارات التنقيح المسجَّلة فعلياً (dedup.py، §4) — للشفافية:
+    كم مرة اكتُشف قانون مكرر من مصدرين وحُسم آلياً."""
+    conn = _connect()
+    if conn is None or not _has_table(conn, "dedup_decisions"):
+        conn and conn.close()
+        return {"total": 0, "recent": []}
+    total = conn.execute(
+        "SELECT COUNT(*) FROM dedup_decisions").fetchone()[0]
+    recent = conn.execute(
+        "SELECT identity_key, decisive_criterion, decided_at "
+        "FROM dedup_decisions ORDER BY id DESC LIMIT 10").fetchall()
+    conn.close()
+    return {"total": total, "recent": [dict(r) for r in recent]}
+
+
+def _db_info():
+    """معلومات القاعدة الحقيقية لشاشة الإعدادات — لا مسار Windows وهمي."""
+    from config import DB_PATH, VERSION
+    p = Path(DB_PATH)
+    return {
+        "path": str(p.resolve()),
+        "exists": p.exists(),
+        "size_mb": round(p.stat().st_size / (1024 * 1024), 2) if p.exists() else 0.0,
+        "version": VERSION,
+    }
+
+
 def _package_tree():
     index = PACKAGE_DIR / "laws_decrees_index.csv"
     if not index.exists():
@@ -226,6 +331,11 @@ _LIVE = {
     "PACKAGE_TREE": _package_tree,
     "VALIDATION_CHECKS": validate_package,
     "RUN_STATS": _run_stats,
+    "GAP_REPORT": _gap_report,
+    "GAP_QUERIES": _gap_queries,
+    "SOURCE_PERFORMANCE": _source_performance,
+    "DEDUP_STATS": _dedup_stats,
+    "DB_INFO": _db_info,
 }
 
 

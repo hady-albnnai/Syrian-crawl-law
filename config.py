@@ -11,7 +11,9 @@ log = get_log("config")
 
 # ====================== إعدادات عامة ======================
 PROJECT_NAME = "Syrian Law Intelligence System"
-VERSION = "0.1"
+# مطابق حرفياً لـ pyproject.toml [project].version — مصدر واحد لرقم
+# الإصدار المعروض بشاشة الإعدادات (كان مختلَقاً "0.2.0" هناك بلا مصدر).
+VERSION = "0.1.0"
 
 # الموقع المستهدف
 BASE_URL = "https://law-library.syriaforums.net/"
@@ -113,6 +115,27 @@ BRANCH_KEYWORDS = {
     "international_private": ["تنازع قوانين", "تحكيم دولي", "جنسية", "قانون دولي خاص"],
     "military_judiciary": ["محكمة عسكرية", "قانون العقوبات العسكري", "قضاء عسكري"],
 }
+
+# تسميات عربية لكل فرع — مصدر حقيقة واحد يستخدمه exporter.py وapp/core_data.py
+# معاً (كان BRANCH_AR منسوخاً جزئياً وناقصاً بـexporter.py قبل هذا التوحيد،
+# فتظهر الفروع السبعة الجديدة بمفاتيحها الإنجليزية الخام بالواجهة والتصدير).
+BRANCH_AR = {
+    "civil_law": "مدني",
+    "penal_law": "جزائي",
+    "procedural_law": "أصول ومحاكمات",
+    "personal_status": "أحوال شخصية",
+    "commercial_law": "تجاري",
+    "constitutional": "دستوري",
+    "administrative": "إداري",
+    "tax_law": "ضريبي",
+    "banking_finance": "مصرفي ومالي",
+    "intellectual_property": "ملكية فكرية",
+    "environment_law": "بيئي",
+    "investment_law": "استثماري",
+    "international_private": "قانون دولي خاص",
+    "military_judiciary": "قضاء عسكري",
+}
+
 
 # ====================== فئات رسمية مصادر التشريع (domain_tier) ======================
 # DELIVERY/DESIGN-SELF-DISCOVERY.md §4.2.1 — قائمة محصورة يدوياً بإشراف
