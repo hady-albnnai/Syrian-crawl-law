@@ -110,6 +110,39 @@ def test_phpbb_fixture_full_pipeline():
     assert res["source_locator"]["html_hash"].startswith("sha256:")
 
 
+# ── نص كامل عبر عدة مساهمات متتالية (عطل حقيقي أبلغ عنه المالك 2026-09-06:
+# «النصوص المستخرجة يا اما بتبدأ من المنتصف يا اما بتبلش من الاول وما
+# بيكون محمل كلو») ──
+
+def test_law_split_across_multiple_forum_posts_is_merged_in_order():
+    """منتديات phpBB تفرض حداً أقصى لطول الرسالة — القوانين الطويلة
+    تُقسَّم فعلياً على عدة «مساهمات» متتالية بنفس الموضوع (مؤكَّد بفحص
+    حي على المصدر الحقيقي law-library.syriaforums.net). أخذ حاوية واحدة
+    فقط (السلوك القديم) كان يقطع النص من نقطة القسمة تماماً."""
+    res = v4.extract_main_content(_html("phpbb_multipost_law.html"), "https://x/t44")
+    assert res["success"] is True
+    real = [a for a in res["articles"] if not a["is_preamble"]]
+    nums = sorted(a["article_number"] for a in real)
+    # المادتان 4 و5 موجودتان بالمساهمة الثانية — كانتا تُفقدان كلياً
+    # بالسلوك القديم (حاوية واحدة فقط = المساهمة الأولى الأعلى درجة).
+    assert nums == [1, 2, 3, 4, 5]
+    assert res["selector_info"]["containers_merged"] == 2
+
+
+def test_short_reply_posts_excluded_from_merge():
+    """مساهمة قصيرة («شكرا استاذ نايف») لا تدخل الدمج — نفس عتبة الأهلية
+    المستخدمة أصلاً بكل حاوية (_score_el: طول ≥200 حرفاً)، فلا ضجيج."""
+    res = v4.extract_main_content(_html("phpbb_multipost_law.html"), "https://x/t44")
+    assert "شكرا" not in res["clean_text"]
+
+
+def test_single_post_law_unaffected_by_merge_change():
+    """قانون بمساهمة واحدة (الحالة الشائعة) يبقى بلا تغيير — لا انحدار
+    بالسلوك القديم لأبسط حالة."""
+    res = v4.extract_main_content(_html("phpbb_legal_topic.html"), "https://x/t9")
+    assert res["selector_info"]["containers_merged"] == 1
+
+
 def test_non_legal_fixture_low_quality():
     res = v4.extract_main_content(_html("generic_non_legal.html"), "https://x/f")
     assert res["success"] is True  # نص طويل لكنه غير قانوني

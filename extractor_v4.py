@@ -158,6 +158,60 @@ def pick_container(soup):
     return generic_best or best
 
 
+def pick_containers(soup):
+    """يعيد **قائمة** كل الحاويات المؤهَّلة بنفس المحدِّد الفائز، لا حاوية
+    واحدة فقط — عطل حقيقي أبلغ عنه المالك (2026-09-06): «النصوص المستخرجة
+    يا اما بتبدأ من المنتصف يا اما ما بيكون محمل كلو».
+
+    السبب الجذري المؤكَّد بفحص حي على المصدر الفعلي: منتديات phpBB تفرض
+    حداً أقصى لطول الرسالة، فتُقسَّم القوانين الطويلة إلى عدة «مساهمات»
+    متتالية بنفس الموضوع (نفس الكاتب غالباً) — أخذ حاوية واحدة (الأعلى
+    درجة) فقط كان يقطع النص من نقطة القسمة تماماً، أو يبدأ من المساهمة
+    الثانية فيبدو النص وكأنه «يبدأ من المنتصف».
+
+    الإصلاح: بعد تحديد المحدِّد الفائز (نفس معيار pick_container)، تُجمَع
+    **كل** العناصر التي تطابق نفس المحدِّد وتتجاوز حد الأهلية (نفس عتبة
+    _score_el: طول ≥200 حرفاً) — بترتيب ظهورها الفعلي بالـHTML (DOM
+    order)، لا حسب الدرجة، فيبقى تسلسل النص القانوني صحيحاً. هذا يستبعد
+    تلقائياً مساهمات الشكر القصيرة («شكرا استاذ نايف» ونحوها، أقل من
+    200 حرف) والإعلانات الفارغة، بلا الحاجة لمطابقة الكاتب صراحة.
+    """
+    best = None
+    for sel in KNOWN_SELECTORS:
+        for el in soup.select(sel):
+            info = _score_el(el)
+            if info and (best is None or info["score"] > best[2]["score"]):
+                best = (sel, el, info)
+
+    if best and best[2]["score"] > 800:
+        winning_selector = best[0]
+        candidates = []
+        seen_elements = []
+        for el in soup.select(winning_selector):
+            # تجاهل عنصر متداخل داخل عنصر سبق اعتماده — يمنع ازدواج النص
+            # لو تطابق المحدِّد مع عنصر وسليله معاً (حالة نادرة).
+            if any(el in anc.descendants for anc in seen_elements):
+                continue
+            info = _score_el(el)
+            if info:
+                candidates.append((winning_selector, el, info))
+                seen_elements.append(el)
+        if candidates:
+            return candidates
+        return [best]
+
+    generic_best = None
+    for el in soup.find_all(["div", "td", "section"]):
+        info = _score_el(el)
+        if info and info["length"] < 200_000:
+            if generic_best is None or info["score"] > generic_best[2]["score"]:
+                generic_best = (f"generic:{el.name}", el, info)
+    if generic_best:
+        return [generic_best]
+    return [best] if best else []
+
+
+
 # ═══════════════════ 5) الهرمية ═══════════════════
 
 def scan_hierarchy(text: str) -> list:
@@ -285,19 +339,38 @@ def extract_main_content(html: str, url: str = "") -> dict:
 
     soup = BeautifulSoup(html, "lxml")
     title = _extract_title(soup)
-    picked = pick_container(soup)
-    if not picked:
+    picked_list = pick_containers(soup)
+    if not picked_list:
         return {"success": False, "error": "no_suitable_element", "title": title}
 
-    selector, element, info = picked
-    for tag in ("script", "style", "iframe", "form", "button", "nav",
-                "header", "footer"):
-        for junk in element.find_all(tag):
-            junk.decompose()
+    # قانون طويل مقسَّم على عدة مساهمات متتالية بنفس الموضوع (منتديات
+    # phpBB تفرض حداً أقصى لطول الرسالة) — تُجمَع كل الحاويات المؤهَّلة
+    # بترتيب ظهورها الفعلي، لا حاوية واحدة فقط (كان هذا سبب نص «يبدأ من
+    # المنتصف أو غير مكتمل» المؤكَّد بفحص حي على المصدر — 2026-09-06).
+    selector = picked_list[0][0]
+    text_parts = []
+    for _, element, _info in picked_list:
+        for tag in ("script", "style", "iframe", "form", "button", "nav",
+                    "header", "footer"):
+            for junk in element.find_all(tag):
+                junk.decompose()
+        text_parts.append(element.get_text(separator="\n", strip=True))
 
-    clean = normalize_unicode(element.get_text(separator="\n", strip=True))
+    clean = normalize_unicode("\n".join(text_parts))
     if len(clean) < 300:
         return {"success": False, "error": "content_too_short", "title": title}
+
+    # إحصاءات الحاوية للتقرير: مجموع كل المساهمات المدمَجة (لا أول واحدة
+    # فقط) — تعكس الحجم/الإشارات الفعلية للنص الكامل المُستخرَج.
+    n_containers = len(picked_list)
+    info = {
+        "score": sum(i["score"] for _, _, i in picked_list),
+        "length": sum(i["length"] for _, _, i in picked_list),
+        "article_hits": sum(i["article_hits"] for _, _, i in picked_list),
+        "link_density": round(
+            sum(i["link_density"] for _, _, i in picked_list) / n_containers, 2),
+        "containers_merged": n_containers,
+    }
 
     raw_matches = len(ARTICLE_RE.findall(clean))
     preamble, articles = extract_articles_v4(clean)
