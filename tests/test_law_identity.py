@@ -206,3 +206,24 @@ def test_reidentify_unchanged_when_same_key(tmp_path, monkeypatch):
             identity="القانون:17:2010")
     stats = li.reidentify_documents(conn)
     assert stats["unchanged"] == 1
+
+
+# ───────────── ف١-ب: صيغة الإسناد المائلة «رقم 148/1949» (ويبو ليكس) ────────
+
+def test_slash_year_citation_in_title():
+    r = li.extract_law_identity(
+        "القانون الجنائي (الصادر بالمرسوم التشريعي رقم 148/1949), "
+        "الجمهورية العربية السورية", "")
+    assert r["identity_key"] == "المرسوم التشريعي:148:1949"
+
+
+def test_slash_year_and_full_year_share_key():
+    a = li.extract_law_identity("المرسوم التشريعي رقم 148/1949", "")
+    b = li.extract_law_identity("المرسوم التشريعي رقم 148 لعام 1949", "")
+    assert a["identity_key"] == b["identity_key"]
+
+
+def test_slash_year_reference_extracted_from_body():
+    refs = li.extract_law_references(
+        "المادة 1- تعدل المواد 12 و45 من المرسوم التشريعي رقم 148/1949.")
+    assert any(r["identity_key"] == "المرسوم التشريعي:148:1949" for r in refs)

@@ -51,13 +51,20 @@ _TYPE_ALT = "|".join(_type_pattern(t) for t in DOC_TYPES)
 # رقم الصك: يقبل فواصل شائعة بين "رقم" والرقم نفسه (شرطة مائلة/أقواس)،
 # ويقبل الأرقام الغربية والعربية المشرقية (extractor_v4.to_western_digits
 # يطبّعها بعد الاستخراج فلا حاجة لتكرار منطق الأرقام اللفظية هنا).
+# السنة بصيغتين واقعيتين (ف١-ب): «رقم 17 لعام 2010» و«رقم 148/1949» —
+# صيغة الإسناد المائلة الشائعة بعناوين ويبو ليكس الرسمية.
 _NUM = r"\d+|[٠-٩]+|[۰-۹]+"
 
 LAW_ID_RE = re.compile(
     rf"({_TYPE_ALT})"
-    rf"[^\d]{{0,15}}رقم\s*[/\(]?\s*({_NUM})\s*[/\)]?"
-    rf"[^\d]{{0,20}}لعام\s*({_NUM})",
+    rf"[^\d]{{0,15}}رقم\s*[/\(]?\s*(?P<num>{_NUM})\s*[/\)]?"
+    rf"(?:[^\d]{{0,20}}لعام\s*(?P<year_full>{_NUM})|/\s*(?P<year_slash>{_NUM}))",
 )
+
+
+def _year_of(m) -> int:
+    """سنة الصك من المطابقة: صيغة «لعام» أو الصيغة المائلة."""
+    return int(to_western_digits(m.group("year_full") or m.group("year_slash")))
 
 # نطاق سنوات معقول للتشريع السوري الحديث — يستبعد مطابقات زائفة (مثلاً
 # "رقم 5 لعام 12" من عبارة غير قانونية التقطها التعبير عرضاً).
@@ -106,8 +113,8 @@ def extract_law_identity(title: str, text: str) -> dict:
             continue
         doc_type = _normalize_type(m.group(1))
         try:
-            number = int(to_western_digits(m.group(2)))
-            year = int(to_western_digits(m.group(3)))
+            number = int(to_western_digits(m.group("num")))
+            year = _year_of(m)
         except ValueError:
             continue
         if number <= 0:
@@ -201,8 +208,8 @@ def extract_law_references(text: str) -> list:
     for m in LAW_ID_RE.finditer(text):
         doc_type = _normalize_type(m.group(1))
         try:
-            number = int(to_western_digits(m.group(2)))
-            year = int(to_western_digits(m.group(3)))
+            number = int(to_western_digits(m.group("num")))
+            year = _year_of(m)
         except ValueError:
             continue
         if number <= 0 or not (_MIN_YEAR <= year <= _MAX_YEAR):

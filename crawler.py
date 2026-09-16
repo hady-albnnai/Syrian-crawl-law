@@ -21,7 +21,8 @@ import engines
 import law_identity
 import law_status
 import source_quality
-from config import BASE_URL, SAVE_RAW_HTML
+import wipo_source
+from config import BASE_URL, MAX_CLEAN_CONTENT_CHARS, SAVE_RAW_HTML
 from database import get_connection
 from extractor import detect_branch, is_legal_content, legal_score
 from extractor_v4 import extract_main_content
@@ -181,7 +182,7 @@ def _handle_topic(conn, task, html, dry_run, stats):
     doc_row_id, created = save_document(
         cursor, make_doc_id(task["url"]), title, task["url"], branch,
         float(confidence), legal_score(clean, title), content_hash,
-        clean[:15000], snapshot_sha256=snapshot_sha256,
+        clean[:MAX_CLEAN_CONTENT_CHARS], snapshot_sha256=snapshot_sha256,
         identity_key=identity["identity_key"],
         identity_confidence=identity["identity_confidence"],
         law_number=identity["law_number"], law_year=identity["law_year"],
@@ -307,6 +308,18 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
                 stats["failures"] += 1
             log.info(f"   ❌ {err}")
             continue
+
+        # ف١-ب: صفحة تفاصيل ويبو ليكس — الـPDF الموقّع يُجلب ويحوَّل إلى
+        # HTML مصنّع يمشي بنفس بوابات الأنبوب (لا مسار خاص يتجاوزها).
+        if wipo_source.is_wipo_details(task["url"]):
+            result = wipo_source.as_pipeline_result(task["url"],
+                                                    result["html"])
+            if not result.get("ok"):
+                err = result.get("error", "wipo_transform_failed")
+                taskqueue.mark(conn, task["id"], "failed", err)
+                stats["failures"] += 1
+                log.info(f"   ❌ {err}")
+                continue
 
         if SAVE_RAW_HTML and task["kind"] == "section":
             save_snapshot(result["html"])

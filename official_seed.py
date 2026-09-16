@@ -65,6 +65,26 @@ def fetch_post_urls(base_url: str = MOJ_BASE_URL, post_types: dict = None,
     return out
 
 
+def seed_wipo(conn, dry_run: bool = False) -> dict:
+    """بذر قوانين ويبو ليكس من config.WIPO_SEED_LAWS — مهام topic."""
+    import crawl_queue as taskqueue
+    from config import WIPO_SEED_LAWS
+
+    added = skipped = 0
+    for url, section in WIPO_SEED_LAWS:
+        if dry_run:
+            log.info(f"[dry] {section} ← {url[:70]}")
+            continue
+        if taskqueue.enqueue(conn, url, section, "topic"):
+            added += 1
+        else:
+            skipped += 1
+    stats = {"found": len(WIPO_SEED_LAWS), "added": added,
+             "skipped": skipped}
+    log.info(f"بذر ويبو: {stats}")
+    return stats
+
+
 def seed_moj(conn, http_get=None, post_types: dict = None,
              dry_run: bool = False) -> dict:
     """بذر روابط moj بالطابور كمهام topic — يعيد خلاصة الأعداد."""

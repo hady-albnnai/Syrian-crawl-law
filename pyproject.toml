@@ -13,6 +13,7 @@ dependencies = [
     "requests>=2.31",
     "beautifulsoup4>=4.12",
     "lxml>=4.9",
+    "pymupdf>=1.24",
 ]
 
 [project.optional-dependencies]
@@ -23,9 +24,13 @@ ui = ["PySide6>=6.6"]
 mizan-harvest = "cli:main"
 
 [tool.setuptools]
-py-modules = ["cli", "config", "crawler", "crawl_queue", "database",
-              "discovery", "exporter", "extractor", "extractor_v4",
-              "fetcher", "logging_setup", "migrations", "recon", "urls"]
+py-modules = ["answer", "autopilot", "chunker", "cli", "config",
+              "crawl_queue", "crawler", "database", "dedup", "discovery",
+              "engines", "exporter", "extractor", "extractor_v4", "fetcher",
+              "gap_analysis", "law_identity", "law_status", "learning",
+              "logging_setup", "migrations", "official_seed", "recon",
+              "search", "source_matrix", "source_quality", "urls",
+              "wipo_source"]
 packages = ["app", "app.pages"]
 
 [tool.pytest.ini_options]

@@ -312,12 +312,13 @@ def cmd_gaps(_args):
 
 
 def cmd_seed_official(args):
-    """ف١: بذر روابط المصدر الرسمي الأول (moj.gov.sy) من فهرس sitemap."""
+    """ف١/ف١-ب: بذر المصادر الرسمية — moj من sitemap + قوانين ويبو."""
     from database import create_tables, get_connection
-    from official_seed import seed_moj
+    from official_seed import seed_moj, seed_wipo
     create_tables()
     conn = get_connection()
-    stats = seed_moj(conn, dry_run=args.dry)
+    stats = {"moj": seed_moj(conn, dry_run=args.dry),
+             "wipo": seed_wipo(conn, dry_run=args.dry)}
     conn.close()
     log.info(f"خلاصة البذر: {stats}")
     return 0
