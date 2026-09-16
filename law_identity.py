@@ -131,6 +131,48 @@ def extract_law_identity(title: str, text: str) -> dict:
     }
 
 
+def reidentify_documents(conn) -> dict:
+    """إعادة استخراج هوية الوثائق المخزَّنة — صيانة بعد تحسّن الاستخراج.
+
+    الحالة النموذجية: قاعدة بُنيت نسخها بكود أقدم (مثلاً قبل قبول أل
+    التعريف الاختيارية بف١) فوثائق عناوينها سليمة حُفظت بلا identity_key.
+    هذه الدالة تعيد الفحص بالكود الحالي وتكتب ما وجدته فقط:
+
+    - لا تُمحى هوية قائمة إذا لم يُعثر على بديل (تكتب ما وجد، لا تمسح).
+    - تحدّث identity_key/identity_confidence/number/year حصراً — عمود
+      doc_type تصنيفُ وثائقٍ آخر (law/decision/…) لا يُمس.
+
+    قرار مجاور موثَّق (ف١، قياس على وثائق حية): لا توسيع لنافذة البحث
+    بأول 500 حرف — عينة حية أثبتت أن أول مطابقة بالمتن العميق قد تكون
+    إحالة لقانون آخر (قانون المحاماة: أول مطابقة بنصه إحالة لقانون
+    الشركات 3/2008) فيكون التوسيع اختطافاً للهوية وإفساداً للمنقّح.
+    """
+    rows = conn.execute(
+        "SELECT id, title, clean_content, identity_key FROM documents"
+    ).fetchall()
+    stats = {"gained": 0, "updated": 0, "unchanged": 0, "no_match": 0}
+    for r in rows:
+        ident = extract_law_identity(r["title"] or "",
+                                     r["clean_content"] or "")
+        if ident["identity_key"] is None:
+            stats["no_match"] += 1
+            continue
+        if r["identity_key"] == ident["identity_key"]:
+            stats["unchanged"] += 1
+            continue
+        if r["identity_key"] is None:
+            stats["gained"] += 1
+        else:
+            stats["updated"] += 1
+        conn.execute(
+            "UPDATE documents SET identity_key=?, identity_confidence=?, "
+            "number=?, year=? WHERE id=?",
+            (ident["identity_key"], ident["identity_confidence"],
+             ident["law_number"], ident["law_year"], r["id"]))
+    conn.commit()
+    return stats
+
+
 def build_identity_key(doc_type: str, number: int, year: int) -> str:
     """مفتاح مستقر لمطابقة نفس القانون عبر مصادر مختلفة.
 

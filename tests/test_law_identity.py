@@ -155,3 +155,54 @@ def test_bare_references_in_body_extracted():
         "المادة 1- تعدل المواد 12 و45 من القانون رقم 28 لعام 2001 المتعلق "
         "بعمل المصارف المرخصة في سورية.")
     assert any(r["identity_key"] == "القانون:28:2001" for r in refs)
+
+
+# ───────────── ف١: إعادة تحديد هوية الوثائق المخزَّنة ─────────────
+
+def _tmp_db(tmp_path, monkeypatch):
+    import database
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "reid.db"))
+    database.create_tables()
+    return database.get_connection()
+
+
+def _insert(conn, title, content, identity=None, doc_type="law"):
+    cur = conn.execute(
+        "INSERT INTO documents (doc_id, title, source_url, clean_content, "
+        "identity_key, doc_type) VALUES (?, ?, ?, ?, ?, ?)",
+        (f"d{title[:8]}", title, f"https://t/{title[:8]}", content,
+         identity, doc_type))
+    return cur.lastrowid
+
+
+def test_reidentify_gains_identity_for_old_code_victim(tmp_path, monkeypatch):
+    # وثيقة حُفظت بالكود القديم (قبل قبول أل التعريف الاختيارية):
+    # عنوانها سليم لكن هويتها NULL
+    conn = _tmp_db(tmp_path, monkeypatch)
+    doc_id = _insert(conn, "قانون العمل رقم /17/ لعام 2010",
+                     "نص القانون بمواده الكاملة هنا.")
+    stats = li.reidentify_documents(conn)
+    assert stats["gained"] == 1
+    row = conn.execute("SELECT identity_key, number, year, doc_type "
+                       "FROM documents WHERE id=?", (doc_id,)).fetchone()
+    assert row["identity_key"] == "القانون:17:2010"
+    assert (row["number"], row["year"]) == (17, 2010)
+    assert row["doc_type"] == "law"  # عمود تصنيف الوثائق لا يُمس
+
+
+def test_reidentify_keeps_existing_identity_when_no_new_match(tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    _insert(conn, "وثيقة موسومة سابقاً", "نص بلا هوية.",
+            identity="القانون:5:1999")
+    stats = li.reidentify_documents(conn)
+    assert stats["no_match"] == 1 and stats["gained"] == 0
+    row = conn.execute("SELECT identity_key FROM documents").fetchone()
+    assert row["identity_key"] == "القانون:5:1999"  # لا تُمحى هوية قائمة
+
+
+def test_reidentify_unchanged_when_same_key(tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    _insert(conn, "القانون رقم 17 لعام 2010", "نص.",
+            identity="القانون:17:2010")
+    stats = li.reidentify_documents(conn)
+    assert stats["unchanged"] == 1

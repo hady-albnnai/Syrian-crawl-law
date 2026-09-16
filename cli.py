@@ -324,12 +324,30 @@ def cmd_seed_official(args):
 
 
 def cmd_law_status(args):
-    """ف١: إعادة بناء سلسلة الإحالات + حساب الحالة القانونية لكل صك."""
+    """ف١: إعادة تحديد الهوية + سلسلة الإحالات + الحالة القانونية."""
     from database import create_tables, get_connection
+    from law_identity import reidentify_documents
     from law_status import compute_legal_statuses, law_chain, rebuild_links
     create_tables()
     conn = get_connection()
+    if args.reidentify:
+        stats = reidentify_documents(conn)
+        log.info(f"إعادة تحديد الهوية: {stats}")
     links = rebuild_links(conn) if args.rebuild else None
+    if args.list:
+        rows = conn.execute(
+            """SELECT a.target_identity, a.action, COUNT(*) AS n,
+                      (SELECT COUNT(*) FROM documents d
+                       WHERE d.identity_key = a.target_identity) AS present
+               FROM law_amendments a
+               GROUP BY a.target_identity, a.action
+               ORDER BY n DESC""").fetchall()
+        if not rows:
+            log.info("لا إحالات مسجلة بعد")
+        for r in rows:
+            verb = "إلغاء" if r["action"] == "repeal" else "تعديل"
+            here = "✓ موجود بالمتن" if r["present"] else "… خارج المتن بعد"
+            log.info(f"  {verb} ×{r['n']} ← {r['target_identity']} ({here})")
     counts = compute_legal_statuses(conn)
     summary = f"الحالات: {counts}"
     if links is not None:
@@ -422,8 +440,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("law-status",
                         help="ف١: حساب الحالة القانونية (ساري/معدَّل/ملغى)")
+    sp.add_argument("--reidentify", action="store_true",
+                    help="إعادة استخراج هوية الوثائق المخزَّنة بالكود الحالي أولاً")
     sp.add_argument("--rebuild", action="store_true",
                     help="إعادة بناء جدول الإحالات من كل الوثائق أولاً")
+    sp.add_argument("--list", action="store_true",
+                    help="عرض كل الإحالات المستخرجة (تعديل/إلغاء) ومستهدفاتها")
     sp.add_argument("--law", metavar="IDENTITY",
                     help="طباعة سلسلة تعديلات صك (مثل القانون:17:2010)")
     sp.set_defaults(fn=cmd_law_status)
