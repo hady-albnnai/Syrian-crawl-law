@@ -9,6 +9,7 @@
     python -m cli crawl --pages 500 --mode full --yes
     python -m cli discover "القانون المدني السوري" --via ddg
     python -m cli seeds                     # قائمة دليل البذور
+    python -m cli hf-import                 # ف٢: تبنٍّ مجموعة HF المجتمعية
     python -m cli tasks --contains wipo     # فحص حالة مهام الطابور
     python -m cli requeue --contains wipo   # إعادة مهمة فاشلة إلى الطابور
     python -m cli sources list|approve ID|reject ID
@@ -356,6 +357,22 @@ def cmd_gaps(_args):
     return 0
 
 
+def cmd_hf_import(args):
+    """التبني المرحلي لمجموعة HF ipfs_syria_laws عبر بوابات الأنبوب."""
+    from database import create_tables, get_connection
+    from hf_syria_laws import download_dataset, import_hf_laws
+    create_tables()
+    for name, st in download_dataset().items():
+        log.info(f"   {name}: {st}")
+    conn = get_connection()
+    rep = import_hf_laws(conn, dry_run=args.dry)
+    log.info(f"استيراد HF: حُفظ {rep['imported']} | بديل {rep['alternate']} | "
+             f"مطابق {rep['skipped']} | مراجعة {rep['needs_review']} | "
+             f"فشل {rep['failed']} | فارغ (للأرشيف) {rep['empty']}")
+    conn.close()
+    return 0
+
+
 def cmd_seed_official(args):
     """ف١/ف١-ب: بذر المصادر الرسمية — moj من sitemap + قوانين ويبو."""
     from database import create_tables, get_connection
@@ -501,6 +518,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry", action="store_true",
                     help="عرض ما سيُبذر دون إدراجه")
     sp.set_defaults(fn=cmd_seed_official)
+
+    sp = sub.add_parser("hf-import",
+                        help="ف٢: تبنٍّ مرحلي لمجموعة HF ipfs_syria_laws "
+                             "عبر بوابات الأنبوب (طبقة 3)")
+    sp.add_argument("--dry", action="store_true",
+                    help="عرض ما سيُستورد دون حفظ")
+    sp.set_defaults(fn=cmd_hf_import)
 
     sp = sub.add_parser("law-status",
                         help="ف١: حساب الحالة القانونية (ساري/معدَّل/ملغى)")

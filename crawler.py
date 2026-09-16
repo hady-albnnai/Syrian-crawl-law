@@ -144,7 +144,11 @@ def _handle_topic(conn, task, html, dry_run, stats):
     # للمصادر (DESIGN-SELF-DISCOVERY.md §2 و§4.2). حساب لا افتراض: كل
     # وثيقة تُفحص فعلياً حتى لو لم يُعثر على رقم/سنة (identity_key=None).
     identity = law_identity.extract_law_identity(title, clean)
-    domain_tier = source_quality.domain_tier_for_url(task["url"])
+    # الطبقة من الرابط إلا لو مرّرها المستدعي صراحة بالمهمة (استيراد HF
+    # يمرر 3: نص رسمي منقول بمجموعة مجتمعية — الإسناد الصادق) — عند
+    # زحف الأصل نفسه (طبقة 1) يفقده dedup فيستبدله في المكان.
+    domain_tier = task.get("domain_tier") or source_quality.domain_tier_for_url(
+        task["url"])
     complete = source_quality.is_complete_text(clean, articles)
     q_score = ext.get("quality_score")
     has_hierarchy = any(a.get("hierarchy_path") for a in real_articles)
