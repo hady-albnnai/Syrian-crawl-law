@@ -179,8 +179,9 @@ def _handle_topic(conn, task, html, dry_run, stats):
                  f"الفائز: {decision['winner']} "
                  f"({decision['decisive_criterion']})")
 
+    doc_id = make_doc_id(task["url"])
     doc_row_id, created = save_document(
-        cursor, make_doc_id(task["url"]), title, task["url"], branch,
+        cursor, doc_id, title, task["url"], branch,
         float(confidence), legal_score(clean, title), content_hash,
         clean[:MAX_CLEAN_CONTENT_CHARS], snapshot_sha256=snapshot_sha256,
         identity_key=identity["identity_key"],
@@ -189,11 +190,62 @@ def _handle_topic(conn, task, html, dry_run, stats):
         is_complete_text=complete, source_domain_tier=domain_tier,
         quality_score=q_score, status=doc_status)
     if not created:
-        conn.commit()
-        taskqueue.mark(conn, task["id"], "success")
-        stats["skipped"] += 1
-        log.info("   🔁 الوثيقة محفوظة سابقاً — تخطي بلا تكرار")
-        return
+        # نفس الرابط زُحف سابقاً (doc_id مستقر مشتق من الرابط). محتوى
+        # مطابق → تخطٍّ idempotent كما صُمم. محتوى مختلف → نفس ميزان
+        # dedup: إن كانت الجديدة أفضل (المصدر تطوّر — قِيس ف١-ب: صفحة
+        # تفاصيل ويبو كانت تُحفظ بـ11 مادة من متن الصفحة الخام، والخطّاف
+        # صيّر نفس الرابط 775 مادة من الـPDF الرسمي) تُؤرشف القديمة
+        # (نسخ لا حذف) ويُحدَّث الصف في مكانه.
+        cursor.execute(
+            "SELECT id, doc_id, title, source_url, clean_content, "
+            "quality_score, is_complete_text, source_domain_tier, "
+            "content_hash FROM documents WHERE doc_id = ?", (doc_id,))
+        old_row = cursor.fetchone()
+        same_content = (old_row is not None
+                        and old_row["content_hash"] == content_hash)
+        better = False
+        upgrade_reason = None
+        if old_row is not None and not same_content:
+            upgrade_decision = dedup.compare_candidates(
+                dedup.build_new_candidate(
+                    domain_tier, complete, q_score, len(real_articles),
+                    has_hierarchy, len(clean)),
+                dedup.build_existing_candidate(cursor, old_row))
+            better = upgrade_decision["winner"] == "new"
+            upgrade_reason = upgrade_decision["decisive_criterion"]
+        if old_row is None or same_content or not better:
+            conn.commit()
+            taskqueue.mark(conn, task["id"], "success")
+            stats["skipped"] += 1
+            log.info("   🔁 الوثيقة محفوظة سابقاً — تخطي بلا تكرار")
+            return
+        # الجديدة أفضل: أرشفة القديمة إن لم تكن أُرشفت لتوها بمطابقة
+        # الهوية أعلاه (نفس الصف)، ثم تحديث الصف في مكانه — doc_id مستقر.
+        if existing_row is None or existing_row["id"] != old_row["id"]:
+            dedup.archive_document_version(
+                cursor, original_doc_id=old_row["id"], doc_row=dict(old_row),
+                reason=f"استُبدلت — {upgrade_reason}")
+        cursor.execute('''
+            UPDATE documents SET
+                title=?, source_url=?, branch=?, branch_confidence=?,
+                legal_score=?, content_hash=?, scraped_at=?, clean_content=?,
+                doc_type=?, content_sha256=?, snapshot_sha256=?,
+                identity_key=?, identity_confidence=?, number=?, year=?,
+                is_complete_text=?, source_domain_tier=?, quality_score=?,
+                status=?
+            WHERE id=?''',
+            (title, task["url"], branch, float(confidence),
+             legal_score(clean, title), content_hash,
+             datetime.now().isoformat(),
+             clean[:MAX_CLEAN_CONTENT_CHARS], "law",
+             sha256_text(clean), snapshot_sha256,
+             identity["identity_key"], identity["identity_confidence"],
+             identity["law_number"], identity["law_year"], complete,
+             domain_tier, q_score, doc_status or "active", old_row["id"]))
+        cursor.execute("DELETE FROM articles WHERE doc_id=?", (old_row["id"],))
+        doc_row_id = old_row["id"]
+        log.info(f"   ♻️ استُبدلت بنسخة أفضل من نفس المصدر "
+                 f"({upgrade_reason})")
 
     if existing_row is not None:
         winner_id = doc_row_id if decision["winner"] == "new" else existing_row["id"]

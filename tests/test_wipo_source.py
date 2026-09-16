@@ -218,3 +218,86 @@ def test_as_pipeline_result_contains_transform_failure(monkeypatch):
         get_bytes=lambda u, referer=None: (200, _pdf_bytes()))
     assert r["ok"] is False
     assert "wipo_pdf_module_missing" in r["error"]
+
+
+# ────────── إعادة زحف نفس الرابط: الترقية بمحتوى أفضل (عطل المالك) ──────────
+
+def _upgrade_db(tmp_path, monkeypatch):
+    import database
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "up.db"))
+    database.create_tables()
+    return database.get_connection()
+
+
+def _run_topic(conn, tid, html):
+    """تشغيل مهمة topic عبر _handle_topic وإحصاءاتها."""
+    import crawler
+    conn.execute(
+        "INSERT OR IGNORE INTO crawl_tasks (id, url, section, kind, status) "
+        "VALUES (?, ?, 'س', 'topic', 'in_progress')", (tid, DETAILS_URL))
+    stats = {"pages": 0, "docs": 0, "articles": 0, "skipped": 0,
+             "failures": 0}
+    crawler._handle_topic(conn, {"id": tid, "url": DETAILS_URL,
+                                 "section": "س"}, html, False, stats)
+    return stats
+
+
+def test_recrawl_same_url_better_content_upgrades_in_place(tmp_path,
+                                                            monkeypatch):
+    """المحاكاة الحرفية لعطل المالك: الزحف القديم حفظ صفحة التفاصيل الخام
+    (11 مادة من متن الصفحة — قِيس بالمحاكاة على الطقم الذهبي)؛ بعد خطّاف
+    ويبو نفس الرابط يعطي الـPDF كاملاً — الترقية في المكان: doc_id مستقر،
+    القديمة مؤرشفة نسخاً لا حذف، المواد مستبدلة."""
+    conn = _upgrade_db(tmp_path, monkeypatch)
+    stats1 = _run_topic(conn, 1, _details_html())
+    assert stats1["docs"] == 1                      # الحفظ القديم تم
+    old_id = conn.execute("SELECT id FROM documents").fetchone()["id"]
+    n_old = conn.execute("SELECT COUNT(*) c FROM articles").fetchone()["c"]
+    assert 0 < n_old < 50                           # متن الصفحة — مواد قليلة
+
+    stats2 = _run_topic(conn, 2, _pipeline_result()["html"])
+    assert stats2["docs"] == 1 and stats2["skipped"] == 0
+
+    rows = conn.execute("SELECT id, identity_key, source_domain_tier, status "
+                        "FROM documents").fetchall()
+    assert len(rows) == 1                           # نفس الصف — في المكان
+    assert rows[0]["id"] == old_id
+    assert rows[0]["identity_key"] == "المرسوم التشريعي:148:1949"
+    assert rows[0]["source_domain_tier"] == 2
+    assert rows[0]["status"] == "active"
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM articles").fetchone()["c"] >= 700
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM document_versions").fetchone()["c"] == 1
+    conn.close()
+
+
+def test_recrawl_identical_content_still_skips(tmp_path, monkeypatch):
+    """إعادة زحف نفس الرابط بنفس المحتوى تبقى تخطياً idempotent —
+    الترقية لا تكسر ضمانة عدم التكرار."""
+    conn = _upgrade_db(tmp_path, monkeypatch)
+    html = _pipeline_result()["html"]
+    assert _run_topic(conn, 1, html)["docs"] == 1
+    stats2 = _run_topic(conn, 2, html)
+    assert stats2["docs"] == 0 and stats2["skipped"] == 1
+    assert conn.execute("SELECT COUNT(*) c FROM documents").fetchone()["c"] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM document_versions").fetchone()["c"] == 0
+    conn.close()
+
+
+def test_recrawl_worse_content_keeps_existing(tmp_path, monkeypatch):
+    """بعد دخول نسخة الـPDF الكاملة، إعادة زحف تعطي متن الصفحة الخام
+    (أفقر) لا تستبدلها — الميزان يعمل بالاتجاهين."""
+    conn = _upgrade_db(tmp_path, monkeypatch)
+    assert _run_topic(conn, 1, _pipeline_result()["html"])["docs"] == 1
+    stats2 = _run_topic(conn, 2, _details_html())
+    assert stats2["docs"] == 0 and stats2["skipped"] == 1
+    row = conn.execute("SELECT status, identity_key FROM documents").fetchone()
+    assert row["status"] == "active"
+    assert row["identity_key"] == "المرسوم التشريعي:148:1949"
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM articles").fetchone()["c"] >= 700
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM document_versions").fetchone()["c"] == 0
+    conn.close()
