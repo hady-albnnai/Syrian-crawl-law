@@ -97,3 +97,21 @@ def test_render_markdown_contains_rows():
     assert "وزارة العدل" in md
     assert "|---|" in md
     assert "قِيست 1 مصدراً" in md
+
+
+# ─────────────────────── ترميز عربي سليم (ف١) ───────────────────────
+
+def test_fix_encoding_overrides_latin1_default():
+    class _Resp:
+        encoding = "ISO-8859-1"
+        apparent_encoding = "windows-1256"
+    r = sm._fix_encoding(_Resp())
+    assert r.encoding == "windows-1256"
+
+
+def test_fix_encoding_keeps_explicit_charset():
+    class _Resp:
+        encoding = "utf-8"
+        apparent_encoding = "windows-1256"
+    r = sm._fix_encoding(_Resp())
+    assert r.encoding == "utf-8"

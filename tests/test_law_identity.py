@@ -111,3 +111,47 @@ def test_reference_to_search_query_format():
     ref = {"doc_type": "المرسوم التشريعي", "law_number": 32, "law_year": 2021}
     q = li.reference_to_search_query(ref)
     assert q == "المرسوم التشريعي رقم 32 لعام 2021 سوريا نص كامل"
+
+
+# ───────────── ف١ (2026-09-16): صيغ العناوين الحقيقية بلا أل التعريف ─────────────
+# اكتُشفت على وثائق حقيقية: قانون العمل رقم /17/ لعام 2010 (tss-est)
+# وقرار وزارة العدل رقم (349) ل لعام 2026 (moj.gov.sy) — كانت تفقد
+# هويتها كاملة لأن الأنماط تطلبت «القانون» بأل التعريف حصراً.
+
+def test_bare_type_without_article_matches():
+    r = li.extract_law_identity(
+        "قانون العمل رقم /17/ لعام 2010 الجمهورية العربية السورية", "")
+    assert r["identity_key"] == "القانون:17:2010"
+    assert r["identity_confidence"] == "number_year"
+
+
+def test_bare_and_definite_forms_share_one_key():
+    a = li.extract_law_identity("القانون رقم 17 لعام 2010", "")
+    b = li.extract_law_identity("قانون رقم 17 لعام 2010", "")
+    assert a["identity_key"] == b["identity_key"] == "القانون:17:2010"
+
+
+def test_moj_decision_title_with_minister_name():
+    r = li.extract_law_identity(
+        "قرار وزارة العدل رقم (349) ل لعام 2026 بشأن التنقلات القضائية", "")
+    assert r["identity_key"] == "القرار:349:2026"
+
+
+def test_circular_type_supported():
+    r = li.extract_law_identity(
+        "تعميم رقم 3 لعام 2026 بشأن صلاحيات المحامين المتمرنين", "")
+    assert r["doc_type"] == "التعميم"
+    assert r["identity_key"] == "التعميم:3:2026"
+
+
+def test_bare_legislative_decree_full_type():
+    r = li.extract_law_identity("مرسوم تشريعي رقم 55 لعام 1959 قانون مجلس الدولة", "")
+    assert r["doc_type"] == "المرسوم التشريعي"
+    assert r["identity_key"] == "المرسوم التشريعي:55:1959"
+
+
+def test_bare_references_in_body_extracted():
+    refs = li.extract_law_references(
+        "المادة 1- تعدل المواد 12 و45 من القانون رقم 28 لعام 2001 المتعلق "
+        "بعمل المصارف المرخصة في سورية.")
+    assert any(r["identity_key"] == "القانون:28:2001" for r in refs)

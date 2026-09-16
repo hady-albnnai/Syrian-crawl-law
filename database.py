@@ -73,7 +73,8 @@ def create_tables():
         identity_confidence TEXT,
         is_complete_text INTEGER,
         source_domain_tier INTEGER,
-        quality_score REAL
+        quality_score REAL,
+        legal_status TEXT
     )
     ''')
 
@@ -243,6 +244,22 @@ def create_tables():
         decisive_criterion TEXT,
         winner_value REAL, loser_value REAL,
         decided_at TEXT
+    )
+    ''')
+
+    # سلسلة التعديلات والإلغاءات بين الصكوك (ف١ — EXPANSION-CHARTER §2):
+    # كل صف = وثيقة (amending_doc_id) تستهدف صكاً آخر (target_identity)
+    # بفعل تعديل أو إلغاء، مستخرج من سياق الإحالة النصية (law_status.py).
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS law_amendments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        amending_doc_id INTEGER NOT NULL,
+        target_identity TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('amend','repeal')),
+        context TEXT,
+        created_at TEXT,
+        UNIQUE (amending_doc_id, target_identity, action),
+        FOREIGN KEY (amending_doc_id) REFERENCES documents(id)
     )
     ''')
 

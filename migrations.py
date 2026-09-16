@@ -207,6 +207,32 @@ def _migration_005_rejection_feedback(cursor) -> dict:
     return {"table_created": True, "columns_added": added}
 
 
+def _migration_006_law_status(cursor) -> dict:
+    """ف١ (EXPANSION-CHARTER §2): سلسلة التعديلات والحالة القانونية.
+
+    - law_amendments: كل وثيقة تستهدف صكاً آخر بتعديل/إلغاء (المصدر:
+      تصنيف سياق الإحالات المستخرجة نصياً — law_status.py).
+    - documents.legal_status: ملغى/معدَّل/ساري — يحسبه law_status.
+      compute_legal_statuses من السلسلة؛ القاعدة القائمة تُبنى بـ
+      `python3 cli.py law-status --rebuild`.
+    """
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS law_amendments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            amending_doc_id INTEGER NOT NULL,
+            target_identity TEXT NOT NULL,
+            action TEXT NOT NULL CHECK (action IN ('amend','repeal')),
+            context TEXT,
+            created_at TEXT,
+            UNIQUE (amending_doc_id, target_identity, action),
+            FOREIGN KEY (amending_doc_id) REFERENCES documents(id)
+        )
+    ''')
+    added = _add_column_if_missing(cursor, "documents", "legal_status",
+                                   "TEXT")
+    return {"law_amendments": True, "documents.legal_status_added": added}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
     (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
@@ -215,6 +241,8 @@ MIGRATIONS = [
      _migration_004_self_discovery),
     (5, "rejection_reasons + sources.rejection_count (learn from human review)",
      _migration_005_rejection_feedback),
+    (6, "law_amendments + documents.legal_status (ف١ amendment chain)",
+     _migration_006_law_status),
 ]
 LATEST = MIGRATIONS[-1][0]
 

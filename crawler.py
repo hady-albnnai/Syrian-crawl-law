@@ -19,6 +19,7 @@ import crawl_queue as taskqueue
 import dedup
 import engines
 import law_identity
+import law_status
 import source_quality
 from config import BASE_URL, SAVE_RAW_HTML
 from database import get_connection
@@ -212,6 +213,14 @@ def _handle_topic(conn, task, html, dry_run, stats):
               json.dumps(art.get("hierarchy_path", []), ensure_ascii=False),
               art["char_count"]))
         stats["articles"] += 1
+
+    # ف١ — سلسلة التعديلات: إحالات هذه الوثيقة (تعديل/إلغاء لصكوك أخرى)
+    # تُسجَّل فور حفظها؛ الحالة القانونية تُحسب منها (cli law-status).
+    n_links = law_status.record_amendments_for_doc(cursor, doc_row_id,
+                                                   title, clean)
+    if n_links:
+        log.info(f"   ⛓ سُجلت {n_links} إحالة تعديل/إلغاء")
+
     conn.commit()
     taskqueue.mark(conn, task["id"], "success")
     stats["docs"] += 1

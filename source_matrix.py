@@ -41,6 +41,16 @@ _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 # ════════════════════════════ طبقة الشبكة ════════════════════════════
 # دوال حقيقية قابلة للاستبدال بحقن بديائل زائفة بالاختبارات (بلا شبكة).
 
+def _fix_encoding(response):
+    """ترميز عربي سليم: بلا charset بالترويسة يفترض requests اللاتيني
+    فيفسد العناوين العربية (قيس فعلياً على cb/moi/mohamah بف٠) — نفس
+    إصلاح fetcher: iso-8859-1/ascii → الترميز المرصود من المحتوى."""
+    if response.encoding is None or response.encoding.lower() in (
+            "iso-8859-1", "ascii"):
+        response.encoding = response.apparent_encoding or "utf-8"
+    return response
+
+
 def real_http_get(url):
     """طلب واحد مهذب. يعيد (status, html, tls_broken).
 
@@ -48,15 +58,16 @@ def real_http_get(url):
     بمواقع gov.sy) تُتَحمَّل معوسم tls_broken — القياس وثائق لا زحف.
     """
     try:
-        r = requests.get(url, timeout=MATRIX_HTTP_TIMEOUT,
-                         headers={"User-Agent": USER_AGENT},
-                         allow_redirects=True)
+        r = _fix_encoding(requests.get(
+            url, timeout=MATRIX_HTTP_TIMEOUT,
+            headers={"User-Agent": USER_AGENT}, allow_redirects=True))
         return r.status_code, (r.text or ""), False
     except requests.exceptions.SSLError:
         try:
-            r = requests.get(url, timeout=MATRIX_HTTP_TIMEOUT,
-                             headers={"User-Agent": USER_AGENT},
-                             allow_redirects=True, verify=False)
+            r = _fix_encoding(requests.get(
+                url, timeout=MATRIX_HTTP_TIMEOUT,
+                headers={"User-Agent": USER_AGENT},
+                allow_redirects=True, verify=False))
             return r.status_code, (r.text or ""), True
         except requests.exceptions.RequestException:
             return None, "", False

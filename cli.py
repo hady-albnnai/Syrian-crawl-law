@@ -311,6 +311,43 @@ def cmd_gaps(_args):
     return 0
 
 
+def cmd_seed_official(args):
+    """ف١: بذر روابط المصدر الرسمي الأول (moj.gov.sy) من فهرس sitemap."""
+    from database import create_tables, get_connection
+    from official_seed import seed_moj
+    create_tables()
+    conn = get_connection()
+    stats = seed_moj(conn, dry_run=args.dry)
+    conn.close()
+    log.info(f"خلاصة البذر: {stats}")
+    return 0
+
+
+def cmd_law_status(args):
+    """ف١: إعادة بناء سلسلة الإحالات + حساب الحالة القانونية لكل صك."""
+    from database import create_tables, get_connection
+    from law_status import compute_legal_statuses, law_chain, rebuild_links
+    create_tables()
+    conn = get_connection()
+    links = rebuild_links(conn) if args.rebuild else None
+    counts = compute_legal_statuses(conn)
+    summary = f"الحالات: {counts}"
+    if links is not None:
+        summary = f"إحالات مُعاد بناؤها: {links} | " + summary
+    log.info(summary)
+    if args.law:
+        chain = law_chain(conn, args.law)
+        if not chain:
+            log.info(f"لا إحالات مسجلة تستهدف {args.law}")
+        for row in chain:
+            verb = "إلغاء" if row["action"] == "repeal" else "تعديل"
+            log.info(f"  {verb} ← {row['doc_type']} "
+                     f"{row['number']}/{row['year']}: "
+                     f"{(row['title'] or '')[:60]}")
+    conn.close()
+    return 0
+
+
 def _key_of(conn, ref: str) -> str:
     """يقبل معرف الصف أو بادئة مصدر — ويرجع source_key كاملاً."""
     cur = conn.cursor()
@@ -376,6 +413,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("migrate", help="تطبيق هجرات المخطط (مع نسخة احتياطية)")
     sp.set_defaults(fn=cmd_migrate)
+
+    sp = sub.add_parser("seed-official",
+                        help="ف١: بذر روابط moj.gov.sy من sitemap بالطابور")
+    sp.add_argument("--dry", action="store_true",
+                    help="عرض ما سيُبذر دون إدراجه")
+    sp.set_defaults(fn=cmd_seed_official)
+
+    sp = sub.add_parser("law-status",
+                        help="ف١: حساب الحالة القانونية (ساري/معدَّل/ملغى)")
+    sp.add_argument("--rebuild", action="store_true",
+                    help="إعادة بناء جدول الإحالات من كل الوثائق أولاً")
+    sp.add_argument("--law", metavar="IDENTITY",
+                    help="طباعة سلسلة تعديلات صك (مثل القانون:17:2010)")
+    sp.set_defaults(fn=cmd_law_status)
 
     sp = sub.add_parser("index", help="بناء chunks + فهرس FTS5")
     sp.set_defaults(fn=cmd_index)
