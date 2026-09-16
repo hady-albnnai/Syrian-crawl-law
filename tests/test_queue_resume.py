@@ -104,3 +104,68 @@ def test_snapshot_written_outside_git(tmp_path, monkeypatch):
     h = save_snapshot("<html>تجربة</html>")
     assert h.startswith("sha256:")
     assert (tmp_path / "snap" / (h.split(":")[1] + ".html")).exists()
+
+
+# ── إعادة المهام الفاشلة للطابور (requeue_by / cli requeue) ──
+def test_requeue_by_revives_failed_and_resets_attempts(tmp_path, monkeypatch):
+    """المهمة الفاشلة خارج الطابور للأبد والبذر يتخطى رابطها — الإعادة
+    هي سبيلها الوحيد (قِيس ف١-ب: مهمة ويبو فشلت قبل تثبيت pymupdf)."""
+    conn = _tmp_db(tmp_path, monkeypatch)
+    url = "https://wipo.int/wipolex/ar/legislation/details/10918"
+    assert taskqueue.enqueue(conn, url, "ويبو", "topic") is True
+    task = taskqueue.claim_next(conn)
+    taskqueue.mark(conn, task["id"], "failed",
+                   "wipo_pdf_module_missing", bump_attempts=True)
+    # فخ الإنتاج: البذر الآن يتخطى الرابط أياً كانت حالة مهمته
+    assert taskqueue.enqueue(conn, url, "ويبو", "topic") is False
+    assert taskqueue.pending_count(conn) == 0
+
+    revived = taskqueue.requeue_by(conn, ["failed"])
+    assert len(revived) == 1 and revived[0]["status"] == "failed"
+    row = conn.execute("SELECT status, attempts FROM crawl_tasks").fetchone()
+    assert row["status"] == "queued" and row["attempts"] == 0
+    assert taskqueue.pending_count(conn) == 1
+    conn.close()
+
+
+def test_requeue_by_status_and_contains_filters(tmp_path, monkeypatch):
+    """لا تُلمس إلا الحالات المطلوبة؛ الرشح بالرابط يحصر النطاق."""
+    conn = _tmp_db(tmp_path, monkeypatch)
+    for url in ("https://x.org/a", "https://x.org/b", "https://moj.gov.sy/c"):
+        taskqueue.enqueue(conn, url, "س", "topic")
+    t = taskqueue.claim_next(conn)
+    taskqueue.mark(conn, t["id"], "failed", "boom")            # a فشلت
+    t = taskqueue.claim_next(conn)
+    taskqueue.mark(conn, t["id"], "blocked", "robots_disallow")  # b حجبت
+    # c تبقى queued
+
+    revived = taskqueue.requeue_by(conn, ["failed"], contains="x.org")
+    assert [r["url"] for r in revived] == ["https://x.org/a"]
+
+    rows = {r["url"]: r["status"] for r in
+            conn.execute("SELECT url, status FROM crawl_tasks")}
+    assert rows["https://x.org/a"] == "queued"        # الفاشلة المستهدفة عادت
+    assert rows["https://x.org/b"] == "blocked"       # ليست ضمن الحالة المطلوبة
+    assert rows["https://moj.gov.sy/c"] == "queued"   # لم تُلمس أصلاً
+    conn.close()
+
+
+def test_cli_requeue_wiring(tmp_path, monkeypatch):
+    """أمر cli يعرض المهام المعادة ويعيد صفراً، ولا شيء عند غياب المطابقات."""
+    from cli import cmd_requeue
+
+    class _Args:
+        status = "failed"
+        contains = "wipo"
+
+    conn = _tmp_db(tmp_path, monkeypatch)
+    assert cmd_requeue(_Args()) == 0  # لا مهام — تقرير نظيف بلا انفجار
+
+    url = "https://wipo.int/wipolex/ar/legislation/details/10918"
+    taskqueue.enqueue(conn, url, "ويبو", "topic")
+    task = taskqueue.claim_next(conn)
+    taskqueue.mark(conn, task["id"], "failed", "wipo_pdf_module_missing")
+    assert cmd_requeue(_Args()) == 0
+    row = conn.execute("SELECT status FROM crawl_tasks").fetchone()
+    assert row["status"] == "queued"
+    conn.close()

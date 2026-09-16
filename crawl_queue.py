@@ -55,6 +55,34 @@ def requeue(conn, task_id: int):
     conn.commit()
 
 
+def requeue_by(conn, statuses, contains=None):
+    """إعادة مهام بالحالات المعطاة إلى الطابور مع تصفير عدّاد المحاولات.
+
+    يعيد قائمة المهام المعادة (dicts: id/url/status/last_error).
+    البذر (enqueue) يتخطى الرابط الموجود أياً كانت حالته، والمهمة
+    الفاشلة لا تُلتقط من الطابور ثانية — هذه هي العودة الوحيدة لها.
+    لا تمسّ queued/running/needs_review إلا بطلب صريح عبر statuses.
+    """
+    statuses = [s for s in statuses if s]
+    if not statuses:
+        return []
+    sql = ("SELECT id, url, status, last_error FROM crawl_tasks "
+           f"WHERE status IN ({','.join('?' * len(statuses))})")
+    params = list(statuses)
+    if contains:
+        sql += " AND url LIKE ?"
+        params.append(f"%{contains}%")
+    rows = conn.execute(sql, params).fetchall()
+    if not rows:
+        return []
+    ids = [r["id"] for r in rows]
+    conn.execute(f"UPDATE crawl_tasks SET status='queued', attempts=0, "
+                 f"updated_at=? WHERE id IN ({','.join('?' * len(ids))})",
+                 (datetime.now().isoformat(), *ids))
+    conn.commit()
+    return [dict(r) for r in rows]
+
+
 def pending_count(conn) -> int:
     return conn.execute("SELECT COUNT(*) c FROM crawl_tasks "
                         "WHERE status IN ('queued','running')").fetchone()["c"]

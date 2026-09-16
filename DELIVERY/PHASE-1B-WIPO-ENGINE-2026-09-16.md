@@ -76,14 +76,26 @@ $ python3 cli.py crawl --mode limited --pages 1     # زحف حي فعلي من 
 
 ```
 git pull
-pip install pymupdf
-python cli.py seed-official
+python cli.py requeue --contains wipo
 python cli.py crawl --mode limited --pages 3
-python cli.py law-status --rebuild --list
+python cli.py law-status --reidentify --rebuild --list
 ```
 
 المتوقع بالسطر الأخير: `تعديل ×3 ← المرسوم التشريعي:148:1949 (✓ موجود
 بالمتن)` وحالته **معدَّل** — بوابة ف١ بالنص الحرفي للميثاق.
+(إن كانت مهمة ويبو غير فاشلة بل محجوبة: `requeue --status failed,blocked
+--contains wipo`.)
+
+### ٦-أ. ملاحظة نشر — أول تشغيل عند المالك كشف فجوة عتاد (أُصلحت)
+
+أول تشغيل حقيقي عند المالك (2026-09-16) كشف: استيراد pymupdf كسول
+بـ`pdf_to_text`، فمحاولة زحف قبل اكتمال `pip install` تصل لحد التحويل
+ثم تفشل المهمة — والبذر يتخطى الرابط الموجود **أياً كانت حالته**
+والطابور لا يلتقط الفاشلة ثانية، فتبقى المهمة ميتة بلا سبيل للعودة
+(العَرض: «بذر ويبو: skipped 1» + «الطابور فارغ»). الإصلاح: أمر
+`requeue` (منطقه `crawl_queue.requeue_by` — يعيد بالحالات المطلوبة
+مع تصفير عدّاد المحاولات، ورشح `--contains`، ولا يمسّ needs_review
+إلا بطلب صريح) + 3 اختبارات. عتاد قياسي لطابور دائم سيلزم ف٢ كثيراً.
 
 ## 7. التالي بالترتيب المعتمد
 

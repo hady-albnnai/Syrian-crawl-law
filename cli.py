@@ -9,6 +9,7 @@
     python -m cli crawl --pages 500 --mode full --yes
     python -m cli discover "القانون المدني السوري" --via ddg
     python -m cli seeds                     # قائمة دليل البذور
+    python -m cli requeue --contains wipo   # إعادة مهمة فاشلة إلى الطابور
     python -m cli sources list|approve ID|reject ID
     python -m cli gaps                      # فجوات فروع القانون + استعلامات مقترحة
 """
@@ -254,6 +255,27 @@ def cmd_runs(args):
     return 0
 
 
+def cmd_requeue(args):
+    """إعادة مهام فاشلة/محجوبة إلى الطابور (تصفير عدّاد المحاولات)."""
+    from database import create_tables, get_connection
+    from crawl_queue import requeue_by
+    create_tables()
+    conn = get_connection()
+    statuses = [s.strip() for s in args.status.split(",") if s.strip()]
+    revived = requeue_by(conn, statuses, contains=args.contains)
+    if not revived:
+        log.info("لا مهام بهذه الحالة"
+                 + (f" ورابطها يحوي «{args.contains}»" if args.contains else ""))
+    for t in revived:
+        err = f" — آخر عطل: {t['last_error']}" if t["last_error"] else ""
+        log.info(f"↻ #{t['id']} {t['status']} → queued{err}")
+        log.info(f"   {t['url'][:75]}")
+    if revived:
+        log.info(f"أعيد للطابور {len(revived)} مهمة — شغّل crawl لمعالجتها")
+    conn.close()
+    return 0
+
+
 def cmd_seeds(_args):
     from discovery import seed_candidates
     for cand in seed_candidates():
@@ -429,6 +451,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--report", type=int, metavar="RUN_ID",
                     help="طباعة تقرير دورة معينة")
     sp.set_defaults(fn=cmd_runs)
+
+    sp = sub.add_parser("requeue",
+                        help="إعادة مهام فاشلة/محجوبة إلى الطابور")
+    sp.add_argument("--status", default="failed",
+                    help="الحالات المستهدفة مفصولة بفواصل (الافتراضي failed)")
+    sp.add_argument("--contains", metavar="TEXT",
+                    help="حصر الإعادة بالمهام التي يحوي رابطها هذا النص")
+    sp.set_defaults(fn=cmd_requeue)
 
     sp = sub.add_parser("migrate", help="تطبيق هجرات المخطط (مع نسخة احتياطية)")
     sp.set_defaults(fn=cmd_migrate)
