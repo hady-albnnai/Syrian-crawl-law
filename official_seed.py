@@ -65,13 +65,31 @@ def fetch_post_urls(base_url: str = MOJ_BASE_URL, post_types: dict = None,
     return out
 
 
-def seed_wipo(conn, dry_run: bool = False) -> dict:
-    """بذر قوانين ويبو ليكس من config.WIPO_SEED_LAWS — مهام topic."""
+def seed_wipo(conn, http_get=None, dry_run: bool = False) -> dict:
+    """بذر قوانين ويبو ليكس — فهرس صفحة عضوية سوريا حياً + مثبتات config.
+
+    الفهرس يُقرأ بكل بذر: صك مودع حديثاً يظهر تلقائياً. إن تعذّر الفهرس
+    تعمل المثبتات وحدها (احتياط). الجلب هنا لصفحة الفهرس فقط — صفحات
+    المحتوى تبقى حصراً للزحف عبر fetcher ببواباته وأدبه.
+    """
     import crawl_queue as taskqueue
-    from config import WIPO_SEED_LAWS
+    import wipo_source
+    from config import WIPO_INDEX_URL, WIPO_SEED_LAWS
+
+    http_get = http_get or _real_get
+    pairs = list(WIPO_SEED_LAWS)
+    index_found = 0
+    st, index_html = http_get(WIPO_INDEX_URL)
+    if st == 200:
+        urls = wipo_source.extract_index_links(index_html)
+        index_found = len(urls)
+        pairs.extend((u, "ويبو ليكس") for u in urls)
+        log.info(f"فهرس ويبو (عضوية سوريا): {index_found} صكاً")
+    else:
+        log.warning(f"فهرس ويبو غير متاح ({st}) — المثبتات فقط")
 
     added = skipped = 0
-    for url, section in WIPO_SEED_LAWS:
+    for url, section in pairs:
         if dry_run:
             log.info(f"[dry] {section} ← {url[:70]}")
             continue
@@ -79,9 +97,10 @@ def seed_wipo(conn, dry_run: bool = False) -> dict:
             added += 1
         else:
             skipped += 1
-    stats = {"found": len(WIPO_SEED_LAWS), "added": added,
-             "skipped": skipped}
-    log.info(f"بذر ويبو: {stats}")
+    stats = {"pins": len(WIPO_SEED_LAWS), "index_found": index_found,
+             "added": added, "skipped": skipped}
+    log.info(f"بذر ويبو: فهرس {index_found} + مثبتات {len(WIPO_SEED_LAWS)} — "
+             f"أُضيف {added}، موجود سابقاً {skipped}")
     return stats
 
 

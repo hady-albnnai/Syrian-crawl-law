@@ -496,7 +496,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_migrate)
 
     sp = sub.add_parser("seed-official",
-                        help="ف١: بذر روابط moj.gov.sy من sitemap بالطابور")
+                        help="بذر المصادر الرسمية: moj (sitemap) + ويبو "
+                             "(فهرس عضوية سوريا الحي)")
     sp.add_argument("--dry", action="store_true",
                     help="عرض ما سيُبذر دون إدراجه")
     sp.set_defaults(fn=cmd_seed_official)

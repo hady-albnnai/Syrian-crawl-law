@@ -301,3 +301,105 @@ def test_recrawl_worse_content_keeps_existing(tmp_path, monkeypatch):
     assert conn.execute(
         "SELECT COUNT(*) c FROM document_versions").fetchone()["c"] == 0
     conn.close()
+
+
+# ────────────────── فهرس عضوية سوريا: مستخرج روابط التفاصيل ──────────────────
+
+def test_extract_index_links_syria_profile_shape():
+    """النمط المقيس من صفحة عضوية سوريا الحية: روابط نسبية /ar/ فقط،
+    النسخ الأخرى (en/zh) وقوائم التصفح تُهمل، بلا تكرار، مطلقة."""
+    fake = '''
+    <a href="/wipolex/ar/legislation/details/10918">القانون الجنائي</a>
+    <a href="/wipolex/en/legislation/details/10918">Penal Code</a>
+    <a href="/wipolex/zh/legislation/details/10918">刑法</a>
+    <a href="/wipolex/ar/main/legislation">تصفح التشريعات</a>
+    <a href="/wipolex/ar/members">الدول</a>
+    <a href="/wipolex/ar/legislation/details/10917">القانون المدني</a>
+    <a href="/wipolex/ar/legislation/details/10918">مكرر</a>
+    <a href="https://www.wipo.int/wipolex/ar/legislation/details/16572">
+       دستور الجمهورية</a>
+    '''
+    # النسخة المطلقة الأخيرة بنمط مختلف لا يلتقطها النمط النسبي —
+    # النمط المقيس بالصفحة الحية نسبي حصراً؛ هنا نثبت الانتقاء لا الشمول
+    links = ws.extract_index_links(fake)
+    assert links == [
+        "https://www.wipo.int/wipolex/ar/legislation/details/10918",
+        "https://www.wipo.int/wipolex/ar/legislation/details/10917",
+    ]
+    assert ws.extract_index_links("") == []
+    assert ws.extract_index_links(None) == []
+
+
+# ────────── المصدران المرشحان: بديل الصفحة عند رداءة الإيداع جوهرياً ──────────
+
+def _details_with_body(body_html, title="قانون التجربة رقم 1 لعام 2000"):
+    """صفحة تفاصيل اصطناعية بنفس بنية الحقيقية: عنوان + iframe موقّع + متن."""
+    return (f'<html><head><title>{title}</title></head><body>'
+            f'<article><div class="entry-content">{body_html}</div>'
+            f'</article>'
+            f'<iframe src="https://wipolex-res.wipo.int/edocs/lexdocs/'
+            f'laws/ar/sy/fake.pdf?last-modified=123"></iframe></body></html>')
+
+
+def test_junk_pdf_falls_back_to_page_text(monkeypatch):
+    """إيداع بخردة ترميز (مدني) ومتن صفحة صالح ← الصفحة تفوز.
+    البديل لا يعمل لأعطال الجلب (تُعاد المهمة) بل لرداءة الإيداع جوهرياً."""
+    monkeypatch.setattr(ws, "pdf_to_text",
+                        lambda b: "\u0002\u0003" + "خ \u0005ردة" * 400)
+    filler = "الالتزامات التعاقدية تنشأ عن التراضي وتسري على طرفيها " \
+             "بحدود القانون والنظام العام والآداب في الجمهورية. "
+    body = "".join(f"<p>المادة {i} — {filler}نص تجريبي قانوني كامل "
+                   f"بمحتوى مدني مستوفى الشروط لاجتياز بوابات الجودة "
+                   f"والطول المطلوب للبوابات.</p>" for i in range(1, 8))
+    details = _details_with_body(body)
+    r = ws.as_pipeline_result(
+        DETAILS_URL, details,
+        get_bytes=lambda u, referer=None: (200, b"%PDF-1.4 fake"))
+    assert r["ok"] is True and r["html"] == details   # فاز متن الصفحة
+
+
+def test_english_only_deposit_and_page_fails_clearly(monkeypatch):
+    """إيداع إنجليزي ومتن إنجليزي (عمل/منافسة) ← wipo_no_arabic_text —
+    تشخيص صادق: ويبو أودع الترجمة لا الأصل العربي."""
+    monkeypatch.setattr(ws, "pdf_to_text",
+                        lambda b: "English text of the law. " * 200)
+    details = _details_with_body(
+        "<p>Law No. 7 of 2008 on Competition.</p>" * 60,
+        title="Law No. 7/2008")
+    r = ws.as_pipeline_result(
+        DETAILS_URL, details,
+        get_bytes=lambda u, referer=None: (200, b"%PDF-1.4 fake"))
+    assert r == {"ok": False, "error": "wipo_no_arabic_text"}
+
+
+def test_boilerplate_page_does_not_rescue_junk_pdf(monkeypatch):
+    """متن بويلربليت (مادتان — كصفحة المدني الحقيقية) لا ينقذ إيداعاً
+    خردة: فشل صريح برمز الخردة، لا حفظ وثيقة هزيلة."""
+    monkeypatch.setattr(ws, "pdf_to_text",
+                        lambda b: "\u0002\u0004" + "خ \u0006ردة" * 400)
+    body = ("<p>عن الملكية الفكرية التدريب في مجال الملكية الفكرية "
+            "إذكاء الاحترام للتوعية.</p>" * 40
+            + "<p>المادة 1 — نص.</p><p>المادة 2 — نص.</p>")
+    details = _details_with_body(body)
+    r = ws.as_pipeline_result(
+        DETAILS_URL, details,
+        get_bytes=lambda u, referer=None: (200, b"%PDF-1.4 fake"))
+    assert r == {"ok": False, "error": "wipo_pdf_junk_text"}
+
+
+def test_arabic_page_beats_reversed_arabic_pdf(monkeypatch):
+    """إيداع بنص عربي معكوس بصرياً (دستور): بوابات الصلاحية لا تميزه
+    (عربي وسليم المحارف) لكن المواد لا تُستخرج منه ← الصفحة تفوز."""
+    reversed_text = "\n".join(
+        f"ة داملا{i} — ناضبلا لع يف تامولعم مله" for i in range(1, 60))
+    monkeypatch.setattr(ws, "pdf_to_text", lambda b: reversed_text)
+    filler = ("السيادة للشعب يمارسها على الوجه المبين في الدستور "
+              "وتكفل الدولة حرية الرأي والمعتقد واحترام الكرامة. ")
+    body = "".join(f"<p>المادة {i} — {filler}نص دستوري تجريبي كامل "
+                   f"الشروط للبيانات القانونية المستوفاة وطولا.</p>"
+                   for i in range(1, 10))
+    details = _details_with_body(body, title="دستور الجمهورية التجريبي")
+    r = ws.as_pipeline_result(
+        DETAILS_URL, details,
+        get_bytes=lambda u, referer=None: (200, b"%PDF-1.4 fake"))
+    assert r["ok"] is True and r["html"] == details

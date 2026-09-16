@@ -85,3 +85,57 @@ def test_seed_moj_dry_run_does_not_enqueue(tmp_path, monkeypatch):
     assert stats["found"] == 3 and stats["added"] == 0
     n = conn.execute("SELECT COUNT(*) FROM crawl_tasks").fetchone()[0]
     assert n == 0
+
+
+# ── بذر ويبو: فهرس عضوية سوريا الحي + مثبتات الاحتياط (ف٢) ──
+_WIPO_PROFILE_HTML = """
+<a href="/wipolex/ar/legislation/details/10918">القانون الجنائي</a>
+<a href="/wipolex/ar/legislation/details/10917">القانون المدني</a>
+<a href="/wipolex/ar/main/legislation">تصفح</a>
+"""
+
+
+def _wipo_db(tmp_path, monkeypatch):
+    import database
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "w.db"))
+    database.create_tables()
+    return database.get_connection()
+
+
+def test_seed_wipo_index_enqueues_pins_and_links(tmp_path, monkeypatch):
+    """الفهرس الحي يُقرأ وروابطه تُبذر topic — المثبت أولاً ثم الفهرس،
+    والتكرار (10918 بالمثبت وبالفهرس) يُتخطى."""
+    import crawl_queue as taskqueue
+    from official_seed import seed_wipo
+    conn = _wipo_db(tmp_path, monkeypatch)
+    stats = seed_wipo(conn, http_get=lambda u: (200, _WIPO_PROFILE_HTML))
+    assert stats["pins"] == 1 and stats["index_found"] == 2
+    assert stats["added"] == 2 and stats["skipped"] == 1  # 10918 مكررة
+    rows = conn.execute(
+        "SELECT url, kind, status FROM crawl_tasks ORDER BY id").fetchall()
+    assert len(rows) == 2 and all(r["kind"] == "topic" for r in rows)
+    # idempotent: بذر ثانٍ لا يضيف شيئاً
+    stats2 = seed_wipo(conn, http_get=lambda u: (200, _WIPO_PROFILE_HTML))
+    assert stats2["added"] == 0 and stats2["skipped"] == 3
+    conn.close()
+
+
+def test_seed_wipo_index_unreachable_falls_back_to_pins(tmp_path,
+                                                          monkeypatch):
+    """تعذّر الفهرس ← المثبتات وحدها — البذر لا يفشل كلياً."""
+    from official_seed import seed_wipo
+    conn = _wipo_db(tmp_path, monkeypatch)
+    stats = seed_wipo(conn, http_get=lambda u: (503, ""))
+    assert stats["index_found"] == 0
+    assert stats["added"] == 1  # مثبت العقوبات وحده
+    conn.close()
+
+
+def test_seed_wipo_dry_run_does_not_enqueue(tmp_path, monkeypatch):
+    from official_seed import seed_wipo
+    conn = _wipo_db(tmp_path, monkeypatch)
+    stats = seed_wipo(conn, http_get=lambda u: (200, _WIPO_PROFILE_HTML),
+                      dry_run=True)
+    n = conn.execute("SELECT COUNT(*) c FROM crawl_tasks").fetchone()["c"]
+    assert n == 0 and stats["added"] == 0
+    conn.close()

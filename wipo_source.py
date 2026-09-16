@@ -21,7 +21,7 @@ import unicodedata
 import requests
 
 from config import USER_AGENT
-from extractor_v4 import to_western_digits
+from extractor_v4 import extract_main_content, to_western_digits
 from logging_setup import get_log
 
 log = get_log("wipo")
@@ -39,6 +39,25 @@ PDF_HTTP_TIMEOUT = 90  # ملفات تشريع كاملة — مهلة أطول 
 def is_wipo_details(url: str) -> bool:
     """هل المهمة صفحة تفاصيل تشريع بويبو ليكس؟"""
     return bool(url and _WIPO_DETAILS_RE.search(url))
+
+
+_INDEX_LINK_RE = re.compile(r'href="(/wipolex/ar/legislation/details/\d+)"')
+
+
+def extract_index_links(index_html: str) -> list:
+    """روابط تفاصيل التشريعات العربية من صفحة فهرس ويبو (عضوية الدولة).
+
+    المصدر المقيس: صفحة عضوية سوريا (WIPO_INDEX_URL) — الصكوك معروضة
+    بروابط نسبية /wipolex/ar/legislation/details/N. تُعاد مطلقة، مرتبة
+    بظهورها، بلا تكرار. النسخ الأخرى (en/zh/...) وقوائم التصفح تُهمل.
+    """
+    out, seen = [], set()
+    for m in _INDEX_LINK_RE.finditer(index_html or ""):
+        url = "https://www.wipo.int" + m.group(1)
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
 
 
 def extract_title(details_html: str) -> str:
@@ -189,6 +208,15 @@ def as_pipeline_result(details_url: str, details_html: str,
 
     يعيد {ok, html, status, final_url} للنجاح أو {ok: False, error} —
     والفاشل يعامَل بدورة الزحف كأي فشل جلب (تصنيف خطأ وتمييز مهمة).
+
+    مصدران مرشحان ويفوز الأفضل بالقياس (ف٢): الإيداع الرسمي (الـPDF)
+    يُفضَّل عند التكافؤ، لكن قياس دفعة سوريا كشف أن بعض الإيداعات مسح
+    ضوئي بلا طبقة نص (جمارك: 78 حرفاً من 2.4MB) أو بخطوط بترميز مخصص
+    يخرج خردة محارف تحكم (مدني) أو بنص معكوس بصرياً (دستور) — بينما متن
+    صفحة التفاصيل نفسها نظيف وكامل لديها (149/368 مادة). والعكس عند
+    العقوبات: متن هزيل (11 مادة) مقابل PDF كامل (775). فبوابات الصلاحية
+    (طول، عربية، جودة، مواد) تطبَّق على المرشحَين ويفوز صاحب المواد
+    الأكثر — بلا افتراض أن الإيداع دائماً الأفضل.
     """
     get_bytes = get_bytes or _real_get_bytes
     title = extract_title(details_html)
@@ -197,20 +225,96 @@ def as_pipeline_result(details_url: str, details_html: str,
     signed = extract_signed_pdf_url(details_html)
     if not signed:
         return {"ok": False, "error": "wipo_no_pdf"}
+
+    # ── المرشح 1: الـPDF الموقّع (الإيداع الرسمي) ──
+    pdf_html, n_pdf, pdf_error = None, -1, None
+    text = ""
     status, content = get_bytes(signed, referer=details_url)
     if status is None:
-        return {"ok": False, "error": "wipo_blocked_robots"}
-    if status != 200 or not content.startswith(b"%PDF"):
-        return {"ok": False, "error": f"wipo_pdf_fetch_{status}"}
-    # احتواء بالمهمة: أي عطل تحويل (غياب مكتبة، PDF معطوب) يُرجَع كفشل
-    # نتيجة — لا استثناء يفلت فيقتل الدورة كلها ويترك المهمة عالقة.
-    try:
-        text = clean_pdf_text(pdf_to_text(content), title)
-    except Exception as exc:
-        return {"ok": False, "error": f"wipo_pdf_transform_failed: {exc}"}
-    if len(text) < 1000:
-        return {"ok": False, "error": "wipo_text_too_short"}
-    html = to_pipeline_html(title, text)
-    log.info(f"   [wipo] {title[:60]} — نص {len(text)//1000}k حرف")
-    return {"ok": True, "status": 200, "html": html,
-            "final_url": details_url, "encoding": "utf-8"}
+        pdf_error = "wipo_blocked_robots"
+    elif status != 200 or not content.startswith(b"%PDF"):
+        pdf_error = f"wipo_pdf_fetch_{status}"
+    else:
+        try:
+            text = clean_pdf_text(pdf_to_text(content), title)
+        except Exception as exc:  # غياب مكتبة، PDF معطوب — فشل مرشح لا دورة
+            pdf_error = f"wipo_pdf_transform_failed: {exc}"
+        if not pdf_error and len(text) < 1000:
+            pdf_error = "wipo_text_too_short"
+        if not pdf_error and _junk_ratio(text) >= 0.05:
+            pdf_error = "wipo_pdf_junk_text"
+        if not pdf_error and _arabic_ratio(text) < 0.25:
+            pdf_error = "wipo_no_arabic_text"
+        if not pdf_error:
+            pdf_html = to_pipeline_html(title, text)
+            n_pdf = _real_article_count(pdf_html, details_url)
+            if n_pdf < 1:
+                pdf_html, pdf_error = None, "wipo_text_quality"
+
+    # ── عطل جلب/بنية بالـPDF: فشل المهمة نفسها — يُعاد لاحقاً فيُجلب
+    # الإيداع كاملاً؛ بديل الصفحة يقتصر على الإيداعات الرديئة جوهرياً
+    # (مسح ضوئي/خردة ترميز/معكوس/أجنبي) حيث لا PDF صالح يُنتظر. ──
+    if pdf_error and not pdf_error.startswith(
+            ("wipo_text_too_short", "wipo_pdf_junk_text",
+             "wipo_no_arabic_text", "wipo_text_quality")):
+        return {"ok": False, "error": pdf_error}
+
+    # ── المرشح 2: متن صفحة التفاصيل نفسها (كما هي — أصالة مثبتة) ──
+    # بوابته أشد قليلاً (مواد ≥5): صفحات التفاصيل تحمل دائماً نصاً
+    # عربياً تمهيدياً (بويلربليت ويبو) قد يجتاز بوابات القلة الصغرى.
+    page_html, n_page = None, -1
+    ext = extract_main_content(details_html, details_url)
+    page_arabic = (ext["success"]
+                   and _arabic_ratio(ext["clean_text"]) >= 0.25)
+    if page_arabic and len(ext["clean_text"]) >= 1000:
+        n_page = len([a for a in ext["articles"]
+                      if not a.get("is_preamble")])
+        if n_page >= 5:
+            page_html = details_html
+
+    # ── الحكم: الأكثر مواداً يفوز؛ التعادل للـPDF (الإيداع الرسمي) ──
+    if pdf_html is not None or page_html is not None:
+        if page_html is not None and (pdf_html is None or n_page > n_pdf):
+            log.info(f"   [wipo] {title[:55]} — فاز متن صفحة التفاصيل "
+                     f"({n_page} مادة؛ إيداع الـPDF غير صالح أو أفقر)")
+            return {"ok": True, "status": 200, "html": page_html,
+                    "final_url": details_url, "encoding": "utf-8"}
+        log.info(f"   [wipo] {title[:55]} — نص الـPDF "
+                 f"({len(text)//1000}k حرف، {n_pdf} مادة)")
+        return {"ok": True, "status": 200, "html": pdf_html,
+                "final_url": details_url, "encoding": "utf-8"}
+
+    # ── لا صالح: تشخيص صادق يميز الحالات ──
+    if pdf_error and not (pdf_error == "wipo_no_arabic_text"
+                          and page_arabic):
+        return {"ok": False, "error": pdf_error}
+    return {"ok": False, "error": "wipo_text_quality"}
+
+
+# نسبة الحروف العربية من مجموع الحروف — يميز الإيداعات الإنجليزية فقط
+_ARABIC_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
+
+
+def _arabic_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for c in letters if _ARABIC_RE.match(c)) / len(letters)
+
+
+def _junk_ratio(text: str) -> float:
+    """محارف التحكم (عدا الأسطر) من الطول — بصمة ترميز الخطوط المخصصة
+    التي تخرج خردة (قِيس مدني: \\u0002\\u0003 بأعلى النص)."""
+    if not text:
+        return 0.0
+    junk = sum(1 for c in text if ord(c) < 32 and c not in "\t\n\r")
+    return junk / len(text)
+
+
+def _real_article_count(html_str: str, url: str) -> int:
+    ext = extract_main_content(html_str, url)
+    if not ext["success"]:
+        return 0
+    return len([a for a in ext["articles"] if not a.get("is_preamble")])
