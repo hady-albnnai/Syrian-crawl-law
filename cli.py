@@ -10,6 +10,7 @@
     python -m cli discover "القانون المدني السوري" --via ddg
     python -m cli seeds                     # قائمة دليل البذور
     python -m cli hf-import                 # ف٢: تبنٍّ مجموعة HF المجتمعية
+    python -m cli seed-community            # ف٢-ج: بذر قوانين syria-law
     python -m cli tasks --contains wipo     # فحص حالة مهام الطابور
     python -m cli requeue --contains wipo   # إعادة مهمة فاشلة إلى الطابور
     python -m cli sources list|approve ID|reject ID
@@ -357,6 +358,18 @@ def cmd_gaps(_args):
     return 0
 
 
+def cmd_seed_community(args):
+    """بذر الطبقة المجتمعية (ف٢-ج): syria-law.com عبر خرائط sitemap."""
+    from community_seed import seed_syria_law
+    from database import create_tables, get_connection
+    create_tables()
+    conn = get_connection()
+    rep = seed_syria_law(conn, dry_run=args.dry)
+    log.info(f"خلاصة بذر المجتمع: {rep}")
+    conn.close()
+    return 0
+
+
 def cmd_hf_import(args):
     """التبني المرحلي لمجموعة HF ipfs_syria_laws عبر بوابات الأنبوب."""
     from database import create_tables, get_connection
@@ -525,6 +538,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry", action="store_true",
                     help="عرض ما سيُستورد دون حفظ")
     sp.set_defaults(fn=cmd_hf_import)
+
+    sp = sub.add_parser("seed-community",
+                        help="ف٢-ج: بذر قوانين syria-law.com من خرائط "
+                             "sitemap (طبقة مجتمعية)")
+    sp.add_argument("--dry", action="store_true",
+                    help="عرض ما سيُبذر دون إدراجه")
+    sp.set_defaults(fn=cmd_seed_community)
 
     sp = sub.add_parser("law-status",
                         help="ف١: حساب الحالة القانونية (ساري/معدَّل/ملغى)")
