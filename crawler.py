@@ -248,6 +248,12 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
     last_doc_id_before_run = (
         conn.execute("SELECT MAX(id) FROM documents").fetchone()[0] or 0)
 
+    # إنقاذ مهام الدورات المنكسرة: أي running عالقة أقدم من المهلة تعود
+    # للطابور (انقطاع/Ctrl+C/استثناء غير محتوى — بلا هذه تبقى ميتة أبداً).
+    revived = taskqueue.requeue_stale_running(conn)
+    if revived:
+        log.info(f"♻️ أُنقذت {revived} مهمة عالقة من دورة منكسرة")
+
     # بذر الطابور إن كان فارغاً تماماً (أول تشغيل)
     if taskqueue.pending_count(conn) == 0 and not conn.execute(
             "SELECT 1 FROM crawl_tasks WHERE status='success' LIMIT 1").fetchone():

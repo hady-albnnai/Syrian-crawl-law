@@ -195,3 +195,26 @@ def test_signed_url_fully_unescaped():
     url = ws.extract_signed_pdf_url(_details_html())
     assert "&#x3D;" not in url and "&amp;" not in url and "&quot;" not in url
     assert "last-modified=" in url and "Signature=" in url
+
+
+# ───────────────── غياب pymupdf: فشل مهمة لا انفجار دورة ─────────────────
+
+def test_pdf_to_text_module_missing_is_task_error(monkeypatch):
+    """غياب المكتبة RuntimeError (تُحتوى بالمهمة) — لا SystemExit الذي
+    كان يقتل الدورة كلها ويترك المهمة عالقة running بلا إنقاذ."""
+    import sys
+    monkeypatch.setitem(sys.modules, "pymupdf", None)
+    with pytest.raises(RuntimeError) as excinfo:
+        ws.pdf_to_text(b"%PDF-1.4 junk")
+    assert "wipo_pdf_module_missing" in str(excinfo.value)
+
+
+def test_as_pipeline_result_contains_transform_failure(monkeypatch):
+    """عطل التحويل يعود {ok: False, error} — لا استثناء يفلت للدورة."""
+    import sys
+    monkeypatch.setitem(sys.modules, "pymupdf", None)
+    r = ws.as_pipeline_result(
+        DETAILS_URL, _details_html(),
+        get_bytes=lambda u, referer=None: (200, _pdf_bytes()))
+    assert r["ok"] is False
+    assert "wipo_pdf_module_missing" in r["error"]

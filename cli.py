@@ -9,6 +9,7 @@
     python -m cli crawl --pages 500 --mode full --yes
     python -m cli discover "القانون المدني السوري" --via ddg
     python -m cli seeds                     # قائمة دليل البذور
+    python -m cli tasks --contains wipo     # فحص حالة مهام الطابور
     python -m cli requeue --contains wipo   # إعادة مهمة فاشلة إلى الطابور
     python -m cli sources list|approve ID|reject ID
     python -m cli gaps                      # فجوات فروع القانون + استعلامات مقترحة
@@ -255,6 +256,28 @@ def cmd_runs(args):
     return 0
 
 
+def cmd_tasks(args):
+    """فحص مهام الطابور: الحالة والمحاولات وآخر عطل — عين التشغيل."""
+    from database import create_tables, get_connection
+    from crawl_queue import list_tasks
+    create_tables()
+    conn = get_connection()
+    statuses = ([s.strip() for s in args.status.split(",") if s.strip()]
+                if args.status else None)
+    rows = list_tasks(conn, statuses=statuses, contains=args.contains,
+                      limit=args.limit)
+    if not rows:
+        log.info("لا مهام بهذه الشروط")
+    for t in rows:
+        err = f" — آخر عطل: {t['last_error']}" if t["last_error"] else ""
+        log.info(f"#{t['id']} [{t['status']}] محاولات {t['attempts']}{err}")
+        log.info(f"   {t['kind']} | {t['section']} | {t['url'][:75]}")
+    if rows:
+        log.info(f"{len(rows)} مهمة (الحد {args.limit})")
+    conn.close()
+    return 0
+
+
 def cmd_requeue(args):
     """إعادة مهام فاشلة/محجوبة إلى الطابور (تصفير عدّاد المحاولات)."""
     from database import create_tables, get_connection
@@ -451,6 +474,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--report", type=int, metavar="RUN_ID",
                     help="طباعة تقرير دورة معينة")
     sp.set_defaults(fn=cmd_runs)
+
+    sp = sub.add_parser("tasks",
+                        help="فحص مهام الطابور (حالة/محاولات/آخر عطل)")
+    sp.add_argument("--status",
+                    help="تصفية بالحالات مفصولة بفواصل (مثل failed,blocked)")
+    sp.add_argument("--contains", metavar="TEXT",
+                    help="حصر المهام التي يحوي رابطها هذا النص")
+    sp.add_argument("--limit", type=int, default=50)
+    sp.set_defaults(fn=cmd_tasks)
 
     sp = sub.add_parser("requeue",
                         help="إعادة مهام فاشلة/محجوبة إلى الطابور")

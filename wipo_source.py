@@ -82,11 +82,14 @@ def _real_get_bytes(url: str, referer: str = None):
 
 def pdf_to_text(pdf_bytes: bytes) -> str:
     """نص الـPDF: PyMuPDF + تطبيع NFKC (أشكال العرض ← حروف قياسية) +
-    توحيد الأرقام غربية. استيراد مؤجل برسالة عربية واضحة إن غاب."""
+    توحيد الأرقام غربية. غياب المكتبة خطأ مهمة (RuntimeError) لا
+    SystemExit — ذاك كان يقتل الدورة كلها فوراً ويترك المهمة عالقة
+    running بلا سبيل للعودة (أرض زُرعت بف١-ب؛ نُزعت بعد قياس المالك)."""
     try:
         import pymupdf
     except ImportError:
-        raise SystemExit("مطلوب تثبيت مكتبة PDF أولاً: pip install pymupdf")
+        raise RuntimeError(
+            "wipo_pdf_module_missing — ثبّت المكتبة: pip install pymupdf")
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     raw = "\n".join(page.get_text() for page in doc)
     doc.close()
@@ -199,7 +202,12 @@ def as_pipeline_result(details_url: str, details_html: str,
         return {"ok": False, "error": "wipo_blocked_robots"}
     if status != 200 or not content.startswith(b"%PDF"):
         return {"ok": False, "error": f"wipo_pdf_fetch_{status}"}
-    text = clean_pdf_text(pdf_to_text(content), title)
+    # احتواء بالمهمة: أي عطل تحويل (غياب مكتبة، PDF معطوب) يُرجَع كفشل
+    # نتيجة — لا استثناء يفلت فيقتل الدورة كلها ويترك المهمة عالقة.
+    try:
+        text = clean_pdf_text(pdf_to_text(content), title)
+    except Exception as exc:
+        return {"ok": False, "error": f"wipo_pdf_transform_failed: {exc}"}
     if len(text) < 1000:
         return {"ok": False, "error": "wipo_text_too_short"}
     html = to_pipeline_html(title, text)

@@ -5,7 +5,7 @@
 الطابور في SQLite لا في الذاكرة: إيقاف الأداة أو انقطاعها لا يضيع العمل،
 وإعادة التشغيل تكمل من حيث توقفت بلا تكرار (url UNIQUE + حالات صريحة).
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from urls import canonicalize_url
 
@@ -86,6 +86,46 @@ def requeue_by(conn, statuses, contains=None):
 def pending_count(conn) -> int:
     return conn.execute("SELECT COUNT(*) c FROM crawl_tasks "
                         "WHERE status IN ('queued','running')").fetchone()["c"]
+
+
+def requeue_stale_running(conn, stale_minutes: int = 10) -> int:
+    """إعادة مهام running العالقة إلى الطابور — يعيد عدد المهام المنقذة.
+
+    المهمة تُعلَّم running لحظة التقاطها؛ إن انكسرت الدورة أثناءها
+    (انقطاع كهرباء، Ctrl+C، استثناء غير محتوى) تبقى running إلى الأبد
+    ولا يلتقطها claim_next ثانية — هذا هو الإنقاذ الوحيد لها. المهلة
+    تحمي دورية حية متوازيتين (الواجهة) من سرقة مهمتها النشطة.
+    """
+    cutoff = (datetime.now() - timedelta(minutes=stale_minutes)).isoformat()
+    cur = conn.execute(
+        "UPDATE crawl_tasks SET status='queued', updated_at=? "
+        "WHERE status='running' AND updated_at < ?",
+        (datetime.now().isoformat(), cutoff))
+    conn.commit()
+    return cur.rowcount
+
+
+def list_tasks(conn, statuses=None, contains=None, limit: int = 100):
+    """قائمة مهام للفحص التشغيلي (read-only) — الأحدث أولاً.
+
+    رؤية الطابور شرط تشخيصه: أعمدة الحالة والمحاولات وآخر عطل هي
+    ما يحسم أين انتهت مهمة ولماذا (قِيس جولة تصحيح ويبو عند المالك).
+    """
+    sql = ("SELECT id, url, section, kind, status, attempts, last_error, "
+           "updated_at FROM crawl_tasks")
+    where, params = [], []
+    statuses = [s for s in (statuses or []) if s]
+    if statuses:
+        where.append(f"status IN ({','.join('?' * len(statuses))})")
+        params.extend(statuses)
+    if contains:
+        where.append("url LIKE ?")
+        params.append(f"%{contains}%")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
 def counts_by_status(conn) -> dict:

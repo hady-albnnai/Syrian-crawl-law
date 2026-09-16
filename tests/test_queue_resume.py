@@ -169,3 +169,60 @@ def test_cli_requeue_wiring(tmp_path, monkeypatch):
     row = conn.execute("SELECT status FROM crawl_tasks").fetchone()
     assert row["status"] == "queued"
     conn.close()
+
+
+# ── إنقاذ المهام العالقة + فحص الطابور (requeue_stale_running / tasks) ──
+def test_requeue_stale_running_revives_only_old(tmp_path, monkeypatch):
+    """المهمة العالقة running من دورة منكسرة تعود للطابور؛ النشطة
+    حديثاً (دورية حية موازية) لا تُلمس."""
+    from datetime import datetime, timedelta
+    conn = _tmp_db(tmp_path, monkeypatch)
+    taskqueue.enqueue(conn, "https://x.org/old", "س", "topic")
+    taskqueue.enqueue(conn, "https://x.org/fresh", "س", "topic")
+    t_old = taskqueue.claim_next(conn)
+    t_fresh = taskqueue.claim_next(conn)
+    stale = (datetime.now() - timedelta(minutes=30)).isoformat()
+    conn.execute("UPDATE crawl_tasks SET updated_at=? WHERE id=?",
+                 (stale, t_old["id"]))
+    conn.commit()
+
+    assert taskqueue.requeue_stale_running(conn) == 1
+    rows = {r["url"]: r["status"] for r in
+            conn.execute("SELECT url, status FROM crawl_tasks")}
+    assert rows["https://x.org/old"] == "queued"      # العالقة أُنقذت
+    assert rows["https://x.org/fresh"] == "running"   # الحية لم تُلمس
+    conn.close()
+
+
+def test_list_tasks_filters_and_limit(tmp_path, monkeypatch):
+    """عين التشغيل: تصفية بالحالة وبالرابط وسقف عدد — بلا كتابة أبداً."""
+    conn = _tmp_db(tmp_path, monkeypatch)
+    taskqueue.enqueue(conn, "https://wipo.int/details/1", "ويبو", "topic")
+    taskqueue.enqueue(conn, "https://moj.gov.sy/a", "وزارة", "topic")
+    taskqueue.enqueue(conn, "https://moj.gov.sy/b", "وزارة", "topic")
+    t = taskqueue.claim_next(conn)                     # wipo → running
+    assert taskqueue.list_tasks(conn, contains="wipo")[0]["id"] == t["id"]
+    t = taskqueue.claim_next(conn)                     # moj/a → running
+    taskqueue.mark(conn, t["id"], "failed", "boom")    # → failed
+    failed = taskqueue.list_tasks(conn, statuses=["failed"])
+    assert [r["url"] for r in failed] == ["https://moj.gov.sy/a"]
+    assert failed[0]["last_error"] == "boom"
+    assert len(taskqueue.list_tasks(conn, limit=2)) == 2
+    conn.close()
+
+
+def test_cli_tasks_wiring(tmp_path, monkeypatch):
+    from cli import cmd_tasks
+
+    class _Args:
+        status = None
+        contains = "wipo"
+        limit = 50
+
+    conn = _tmp_db(tmp_path, monkeypatch)
+    assert cmd_tasks(_Args()) == 0  # لا مهام — تقرير نظيف
+    taskqueue.enqueue(conn, "https://wipo.int/details/9", "ويبو", "topic")
+    assert cmd_tasks(_Args()) == 0
+    rows = taskqueue.list_tasks(conn, contains="wipo")
+    assert len(rows) == 1 and rows[0]["status"] == "queued"
+    conn.close()
