@@ -143,3 +143,65 @@ def find_existing_by_identity(cursor, identity_key: str):
         ORDER BY id LIMIT 1
     ''', (identity_key,))
     return cursor.fetchone()
+
+
+def _active_doc_row(cursor, doc_id: int):
+    """صف documents بالأعمدة التي يحتاجها build_existing_candidate."""
+    return cursor.execute(
+        "SELECT id, doc_id, title, source_url, clean_content, "
+        "quality_score, is_complete_text, source_domain_tier "
+        "FROM documents WHERE id = ?", (doc_id,)).fetchone()
+
+
+def dedupe_active_by_identity(conn) -> dict:
+    """دمج الوثائق النشطة المتصادمة بالهوية — الخاسر يُؤرشف نسخاً لا حذفاً.
+
+    تصادمات ما قبل الهوية (ف٢): وثائق حُفظت بلا هوية (عناوين بصيغ لم
+    يكن المستخرج يلتقطها) ثم كسبتها لاحقاً بـlaw-status --reidentify —
+    هذه لم تمر بميزان وقت الحفظ قط. هذا هو الميزان المؤجل: لكل هوية
+    بأكثر من صف نشط، المنافسة بالترتيب بنفس compare_candidates،
+    والخاسر superseded + نسخة بdocument_versions + قرار مدوَّن.
+    المواد لا تُحذف — تاريخ الوثيقة محفوظ بالنسخة المؤرشفة.
+    """
+    rows = conn.execute(
+        "SELECT id, identity_key FROM documents "
+        "WHERE identity_key IS NOT NULL AND status = 'active' "
+        "ORDER BY identity_key, id").fetchall()
+    by_ident = {}
+    for r in rows:
+        by_ident.setdefault(r["identity_key"], []).append(r["id"])
+    collisions = {k: ids for k, ids in by_ident.items() if len(ids) > 1}
+
+    cursor = conn.cursor()
+    archived = 0
+    for key, ids in collisions.items():
+        survivor = ids[0]                     # الأقدم إدراجاً يبدأ صاحباً
+        for challenger in ids[1:]:
+            s_row = _active_doc_row(cursor, survivor)
+            c_row = _active_doc_row(cursor, challenger)
+            if s_row is None or c_row is None:
+                continue
+            decision = compare_candidates(
+                build_existing_candidate(cursor, c_row),   # الوافد لاحقاً
+                build_existing_candidate(cursor, s_row))
+            if decision["winner"] == "new":
+                winner, loser = challenger, survivor
+                l_row = s_row
+            else:                             # existing أو تعادل: الأقدم تبقى
+                winner, loser = survivor, challenger
+                l_row = c_row
+            reason = (f"دمج تصادم هوية — {decision['decisive_criterion']}"
+                      if decision["decisive_criterion"] is not None
+                      else "دمج تصادم هوية — تعادل (الأقدم تبقى)")
+            archive_document_version(cursor, original_doc_id=loser,
+                                     doc_row=dict(l_row), reason=reason)
+            cursor.execute("UPDATE documents SET status='superseded' "
+                           "WHERE id=?", (loser,))
+            record_dedup_decision(cursor, key, winner, loser,
+                                  decision["decisive_criterion"],
+                                  decision["new_value"],
+                                  decision["existing_value"])
+            survivor = winner
+            archived += 1
+    conn.commit()
+    return {"collisions": len(collisions), "archived": archived}

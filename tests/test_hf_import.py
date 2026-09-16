@@ -108,3 +108,64 @@ def test_download_verifies_sha256(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError) as e:
         hf.download_dataset()
     assert "بصمة" in str(e.value)
+
+
+# ── دمج تصادمات ما قبل الهوية (dedup-existing) ──
+def test_dedupe_active_by_identity_merges_and_archives(tmp_path, monkeypatch):
+    """نسختان نشطتان بنفس الهوية (كسبتاها بعد الحفظ بreidentify):
+    الأفضل تبقى نشطة، الخاسرة superseded + نسخة مؤرشفة + قرار مدوَّن،
+    ومواد كلتيهما لا تُحذف."""
+    from dedup import dedupe_active_by_identity
+    conn = _db(tmp_path, monkeypatch)
+    for doc_id, tier, arts in (("wipo", 2, 5), ("forum", 4, 3)):
+        conn.execute(
+            "INSERT INTO documents (doc_id, title, source_url, clean_content, "
+            "identity_key, source_domain_tier, quality_score, is_complete_text, "
+            "status) VALUES (?, ?, ?, ?, 'القانون:9:2010', ?, 0.5, 1, 'active')",
+            (doc_id, f"قانون {doc_id}", f"https://{doc_id}/x",
+             "نص " + _FILLER * 5, tier))
+        d_id = conn.execute("SELECT id FROM documents WHERE doc_id=?",
+                            (doc_id,)).fetchone()["id"]
+        for i in range(arts):
+            conn.execute("INSERT INTO articles (doc_id, article_number, "
+                         "article_label, text) VALUES (?, ?, ?, ?)",
+                         (d_id, str(i + 1), f"المادة {i + 1}", _FILLER))
+    conn.commit()
+
+    rep = dedupe_active_by_identity(conn)
+    assert rep == {"collisions": 1, "archived": 1}
+    rows = {r["doc_id"]: r["status"] for r in
+            conn.execute("SELECT doc_id, status FROM documents")}
+    assert rows["wipo"] == "active"        # تير 2 يهزم تير 4
+    assert rows["forum"] == "superseded"
+    assert conn.execute("SELECT COUNT(*) c FROM document_versions"
+                        ).fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) c FROM dedup_decisions"
+                        ).fetchone()["c"] == 1
+    # مواد كلتيهما باقية — التاريخ لا يُحذف
+    assert conn.execute("SELECT COUNT(*) c FROM articles"
+                        ).fetchone()["c"] == 8
+    # إعادة التشغيل: لا تصادمات متبقية
+    assert dedupe_active_by_identity(conn)["collisions"] == 0
+    conn.close()
+
+
+def test_dedupe_ignores_superseded_and_alternate(tmp_path, monkeypatch):
+    """المؤرشفة والبديلة خارج المنافسة — إلا النشطة تُقارن."""
+    from dedup import dedupe_active_by_identity
+    conn = _db(tmp_path, monkeypatch)
+    for doc_id, status in (("a", "superseded"), ("b", "alternate_source"),
+                           ("c", "active"), ("d", "active")):
+        conn.execute(
+            "INSERT INTO documents (doc_id, title, source_url, clean_content, "
+            "identity_key, source_domain_tier, status) VALUES "
+            "(?, 'ق', ?, 'ن', 'القانون:5:2011', 3, ?)",
+            (doc_id, f"https://{doc_id}/x", status))
+    conn.commit()
+    rep = dedupe_active_by_identity(conn)
+    assert rep["collisions"] == 1 and rep["archived"] == 1
+    n_active = conn.execute(
+        "SELECT COUNT(*) c FROM documents WHERE status='active'"
+    ).fetchone()["c"]
+    assert n_active == 1  # ناجٍ واحد فقط من c/d؛ a وb خارج المنافسة أصلاً
+    conn.close()

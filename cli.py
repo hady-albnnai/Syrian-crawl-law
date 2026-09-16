@@ -358,6 +358,22 @@ def cmd_gaps(_args):
     return 0
 
 
+def cmd_dedup_existing(_args):
+    """دمج الوثائق النشطة المتصادمة بالهوية (تصادمات ما قبل الهوية)."""
+    from database import create_tables, get_connection
+    from dedup import dedupe_active_by_identity
+    create_tables()
+    conn = get_connection()
+    rep = dedupe_active_by_identity(conn)
+    if rep["collisions"]:
+        log.info(f"تصادمات هوية: {rep['collisions']} — أُرشف الخاسر "
+                 f"{rep['archived']} (نسخ لا حذف؛ المواد تبقى بالتاريخ)")
+    else:
+        log.info("لا تصادمات هوية بين الوثائق النشطة — المتن نظيف")
+    conn.close()
+    return 0
+
+
 def cmd_seed_community(args):
     """بذر الطبقة المجتمعية (ف٢-ج): syria-law.com عبر خرائط sitemap."""
     from community_seed import seed_syria_law
@@ -538,6 +554,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry", action="store_true",
                     help="عرض ما سيُستورد دون حفظ")
     sp.set_defaults(fn=cmd_hf_import)
+
+    sp = sub.add_parser("dedup-existing",
+                        help="ف٢: دمج الوثائق النشطة المتصادمة بالهوية "
+                             "(الخاسر يُؤرشف نسخاً لا حذفاً)")
+    sp.set_defaults(fn=cmd_dedup_existing)
 
     sp = sub.add_parser("seed-community",
                         help="ف٢-ج: بذر قوانين syria-law.com من خرائط "

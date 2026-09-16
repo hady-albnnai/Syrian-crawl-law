@@ -227,3 +227,29 @@ def test_slash_year_reference_extracted_from_body():
     refs = li.extract_law_references(
         "المادة 1- تعدل المواد 12 و45 من المرسوم التشريعي رقم 148/1949.")
     assert any(r["identity_key"] == "المرسوم التشريعي:148:1949" for r in refs)
+
+
+from law_identity import extract_law_identity  # ف٢: اختبارات الصيغ المقيسة
+
+
+# ── ف٢: صيغ أرشيف مجلس الشعب المقيسة (شرطة السنة / صيغة مائلة بلا رقم) ──
+def test_slash_before_year_full():
+    """«رقم/ 148/ لعام /1949/» — شرطة تسبق السنة (عنوان HF للعقوبات)."""
+    r = extract_law_identity("قانون العقوبات رقم/ 148/ لعام /1949/", "")
+    assert r["identity_key"] == "القانون:148:1949"
+
+
+def test_slash_form_without_raqm_title_fallback():
+    """«المرسوم 98/1961» بلا كلمة رقم — احتياط العنوان فقط."""
+    r = extract_law_identity("قانون السلطة القضائية ـ المرسوم 98/1961", "")
+    assert r["identity_key"] == "المرسوم:98:1961"
+    r2 = extract_law_identity("قانون مخالفات الأبنية 1/2003", "")
+    assert r2["identity_key"] == "القانون:1:2003"
+
+
+def test_slash_fallback_not_applied_to_text():
+    """النص لا يُفحص بصيغة بلا رقم — إحالة صليبية ليست هوية الوثيقة."""
+    r = extract_law_identity(
+        "نظام مزعوم بلا رقم",
+        "يستبدل النص المشار إليه في القانون 10/2014 بما يلي")
+    assert r["identity_key"] is None

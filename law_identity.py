@@ -58,13 +58,24 @@ _NUM = r"\d+|[٠-٩]+|[۰-۹]+"
 LAW_ID_RE = re.compile(
     rf"({_TYPE_ALT})"
     rf"[^\d]{{0,15}}رقم\s*[/\(]?\s*(?P<num>{_NUM})\s*[/\)]?"
-    rf"(?:[^\d]{{0,20}}لعام\s*(?P<year_full>{_NUM})|/\s*(?P<year_slash>{_NUM}))",
+    rf"(?:[^\d]{{0,20}}لعام\s*/?\s*(?P<year_full>{_NUM})|/\s*(?P<year_slash>{_NUM}))",
+)
+
+# صيغة مائلة بلا كلمة «رقم» — قِيس بعناوين أرشيف مجلس الشعب (ف٢):
+# «قانون السلطة القضائية ـ المرسوم 98/1961» و«قانون مخالفات الأبنية
+# 1/2003». تُجرَّب على العنوان فقط كاحتياط ثانٍ: النص قد يحمل إحالات
+# صليبية بلا «رقم» (مثال: «يشير للقانون 10/2014») فتكون هوية زائفة.
+LAW_ID_SLASH_RE = re.compile(
+    rf"({_TYPE_ALT})"
+    rf"[^\d]{{0,20}}(?P<num>{_NUM})\s*/\s*(?P<year_slash>{_NUM})"
 )
 
 
 def _year_of(m) -> int:
-    """سنة الصك من المطابقة: صيغة «لعام» أو الصيغة المائلة."""
-    return int(to_western_digits(m.group("year_full") or m.group("year_slash")))
+    """سنة الصك من المطابقة: صيغة «لعام» أو الصيغة المائلة — مع أي من
+    تعبيري الهوية (الاحتياطي بلا مجموعة year_full)."""
+    d = m.groupdict()
+    return int(to_western_digits(d.get("year_full") or d.get("year_slash")))
 
 # نطاق سنوات معقول للتشريع السوري الحديث — يستبعد مطابقات زائفة (مثلاً
 # "رقم 5 لعام 12" من عبارة غير قانونية التقطها التعبير عرضاً).
@@ -107,8 +118,12 @@ def extract_law_identity(title: str, text: str) -> dict:
     if text:
         haystacks.append(text[:500])
 
-    for haystack in haystacks:
+    for idx, haystack in enumerate(haystacks):
         m = LAW_ID_RE.search(haystack)
+        if not m and idx == 0:
+            # احتياط الصيغة المائلة بلا «رقم» — العنوان حصراً (النص يحمل
+            # إحالات صليبية فتكون هوية زائفة)
+            m = LAW_ID_SLASH_RE.search(haystack)
         if not m:
             continue
         doc_type = _normalize_type(m.group(1))
