@@ -50,7 +50,15 @@ def mark(conn, task_id: int, status: str, error: str = None,
 
 
 def requeue(conn, task_id: int):
-    conn.execute("UPDATE crawl_tasks SET status='queued', updated_at=? WHERE id=?",
+    """إعادة مهمة واحدة إلى الطابور مع تصفير عدّاد المحاولات.
+
+    التصفير ليس تجميلاً: `requeue_by` يصفّر، وهذه كانت تُبقي attempts كما هي
+    (قِيس: مهمة أُعيدت بـattempts=3 بقيت مُدانَة بعدّادها في `app/core_data`
+    الذي يستدعيها صفاً صفاً) — فمسار «المحدد» كان أنقص جودة من مسار «الكل».
+    الآن النواتان فعل واحد.
+    """
+    conn.execute("UPDATE crawl_tasks SET status='queued', attempts=0, "
+                 "updated_at=? WHERE id=?",
                  (datetime.now().isoformat(), task_id))
     conn.commit()
 

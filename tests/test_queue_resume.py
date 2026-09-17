@@ -107,6 +107,26 @@ def test_snapshot_written_outside_git(tmp_path, monkeypatch):
 
 
 # ── إعادة المهام الفاشلة للطابور (requeue_by / cli requeue) ──
+def test_requeue_single_resets_attempts_like_requeue_by(tmp_path, monkeypatch):
+    """الإعادة بإدخال واحد تُصغّر المحاولات — وإلا بقيت المهمة مدانة.
+
+    هذا الفرق بين النواتين هو ما جعل «أعد المحاولة للمحدد» في الواجهة
+    أنقص جودة من «أعد محاولة كل الفاشل» (قيس في دفعة 6).
+    """
+    conn = _tmp_db(tmp_path, monkeypatch)
+    taskqueue.enqueue(conn, "https://x.org/retry-me", "س", "topic")
+    t = taskqueue.claim_next(conn)
+    taskqueue.mark(conn, t["id"], "failed", "timeout", bump_attempts=True)
+    taskqueue.mark(conn, t["id"], "failed", "timeout", bump_attempts=True)
+    assert conn.execute("SELECT attempts FROM crawl_tasks WHERE id=?",
+                        (t["id"],)).fetchone()[0] == 2
+    taskqueue.requeue(conn, t["id"])
+    row = conn.execute("SELECT status, attempts FROM crawl_tasks WHERE id=?",
+                       (t["id"],)).fetchone()
+    assert row["status"] == "queued" and row["attempts"] == 0
+    conn.close()
+
+
 def test_requeue_by_revives_failed_and_resets_attempts(tmp_path, monkeypatch):
     """المهمة الفاشلة خارج الطابور للأبد والبذر يتخطى رابطها — الإعادة
     هي سبيلها الوحيد (قِيس ف١-ب: مهمة ويبو فشلت قبل تثبيت pymupdf)."""

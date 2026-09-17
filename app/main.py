@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QStackedWidget,
                                QWidget, QVBoxLayout)
 
 from app import theme
+from app import core_data as md
 from app.pages import HomePage, PackagePage, ReviewPage, SourcesPage
 
 
@@ -150,6 +151,13 @@ def main() -> int:
                 f"فلترات المصادر 4، لا {win.sources.filter.count()}"
             assert win.home.dry_box.isCheckable(), "مفتاح «تجريبي» غير قابل للتحقق"
             assert win.review.requeue_btn.text().strip(), "زر إعادة المحاولة بلا تسمية"
+            assert win.review.queue_model.columnCount() == 6, \
+                (f"جدول الطابور 6 أعمدة، لا "
+                 f"{win.review.queue_model.columnCount()}")
+            assert win.review.queue_filter.count() == len(md.TASK_STATUSES), \
+                "فلتر حالة الطابور انفصل عن md.TASK_STATUSES"
+            print(f"SMOKE OK — المصادر: {win.sources.model.columnCount()} أعمدة؛ "
+                  f"جدول الطابور: {win.review.queue_model.columnCount()} أعمدة")
         return 0
     return app.exec()
 

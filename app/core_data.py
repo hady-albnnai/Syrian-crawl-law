@@ -614,6 +614,66 @@ def preview_requeue(statuses=("failed", "blocked"),
     return out
 
 
+TASK_STATUSES = {"الفاشلة": "failed", "المحجوبة": "blocked",
+                 "منتظرة": "queued", "قيد الجريان": "running",
+                 "تحتاج مراجعة": "needs_review", "الناجحة": "success",
+                 "الكل": ""}
+
+
+def task_rows(status: str = "", needle: str = "", limit: int = 400) -> list[dict]:
+    """صفور الطابور بأسبابها — عبر `crawl_queue.list_tasks` نفسها.
+
+    العلة: الشاشة كانت تعرض **توزيع** الأسباب (عدّ لكل عطل) بلا أي طريقة
+    للوصول إلى المهمة نفسها، فـ«لماذا فشلت هذه الـ8,501؟» كان سؤالاً بلا
+    جواب إلا من الطرفية. القراءة هنا لا تُضيف استنتاجاً: آخر عطل مسجل كما هو.
+    """
+    conn = _connect()
+    if conn is None or not _has_table(conn, "crawl_tasks"):
+        conn and conn.close()
+        return []
+    try:
+        from crawl_queue import list_tasks
+        statuses = [status] if status else None
+        rows = list_tasks(conn, statuses=statuses,
+                          contains=needle or None, limit=int(limit))
+    except Exception:  # noqa: BLE001 — اللائحة تعرض ولا تنهار
+        rows = []
+    conn.close()
+    return rows
+
+
+def requeue_ids(ids: list[int]) -> dict:
+    """إعادة مهام محددة بالـid — عبر `crawl_queue.requeue` (سطر سطر).
+
+    لماذا بالـid مع أن `requeue_failed` موجود؟ لأن الفعل الآمن بعد رؤية
+    الأسباب هو إعادة **هذه** الصفور لا كل الفاشل؛ وبقاؤه موجوداً للاحتياج
+    الآخر (إعادة جماعية بفلتر).
+    """
+    conn = _connect()
+    if conn is None or not _has_table(conn, "crawl_tasks"):
+        conn and conn.close()
+        return {"revived": 0, "error": "لا قاعدة/لا طابور"}
+    if not ids:
+        conn.close()
+        return {"revived": 0, "error": "لم تُحدَّد أي مهمة"}
+    revived, missing = 0, []
+    try:
+        from crawl_queue import requeue as _one
+        for i in ids:
+            row = conn.execute("SELECT id, status FROM crawl_tasks WHERE id = ?",
+                               (int(i),)).fetchone()
+            if row is None:
+                missing.append(int(i))
+                continue
+            _one(conn, row["id"])
+            revived += 1
+    except Exception as exc:  # noqa: BLE001 — الشاشة تعرض السبب
+        conn.close()
+        return {"revived": revived, "error": f"{type(exc).__name__}: {exc}"}
+    conn.close()
+    return {"revived": revived, "missing": missing}
+
+
 _LIVE = {
     "SOURCE_NAME": lambda: next(
         (f'{s["base_url"]} — {s["name"] or ""}'.strip(" —")
@@ -643,6 +703,7 @@ _LIVE = {
     "SOURCE_ROWS": lambda: source_rows(),
     "SOURCES_STATS": lambda: sources_stats(),
     "QUEUE_COUNTS": lambda: queue_counts(),
+    "TASK_ROWS": lambda: task_rows(),
 }
 
 

@@ -32,6 +32,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox,
                                QTableView, QTextEdit, QVBoxLayout, QWidget)
 
 from app import core_data as md
+
+# سقف أسطر الطابور المعروضة — معلن في البطاقة، لا صامت
+QUEUE_VIEW_LIMIT = 400
 from ._common import card, page_header
 
 # PySide6 الحديثة تنقل أزرار الحوار إلى QDialogButtonBox.StandardButton —
@@ -213,6 +216,54 @@ class RejectionReasonDialog(QDialog):
         return self.note.toPlainText().strip()
 
 
+class _QueueModel(QAbstractTableModel):
+    """صفور الطابور كما هي في `crawl_tasks` — بلا تفسير مُضاف للأسباب."""
+
+    COLS = [("#", "id"), ("الحالة", "status"), ("الرابط", "url"),
+            ("محاولات", "attempts"), ("آخر عطل", "last_error"),
+            ("آخر تحديث", "updated_at")]
+    STATUS_AR = {"failed": "فاشلة", "blocked": "محجوبة", "queued": "منتظرة",
+                 "running": "قيد الجريان", "needs_review": "تحتاج مراجعة",
+                 "success": "ناجحة"}
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rows: list[dict] = []
+
+    def set_rows(self, rows: list[dict]) -> None:
+        self.beginResetModel()
+        self._rows = rows
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()) -> int:
+        return len(self.COLS)
+
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
+        if not index.isValid() or role != Qt.DisplayRole:
+            return None
+        r = self._rows[index.row()]
+        key = self.COLS[index.column()][1]
+        if key == "status":
+            return self.STATUS_AR.get(r.get("status"), r.get("status") or "—")
+        if key == "last_error":
+            return r.get("last_error") or "لا سبب مسجل"
+        if key == "updated_at":
+            return (r.get("updated_at") or "")[:19].replace("T", " ") or "—"
+        v = r.get(key)
+        return "0" if v is None else str(v)
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+            return self.COLS[section][0]
+        return None
+
+    def task_id(self, row: int):
+        return self._rows[row].get("id") if 0 <= row < len(self._rows) else None
+
+
 class ReviewPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -344,16 +395,120 @@ class ReviewPage(QWidget):
         self.requeue_note.setWordWrap(True)
         row.addWidget(self.requeue_note, 1)
         self.requeue_filter = QLineEdit()
-        self.requeue_filter.setPlaceholderText("تصفية optionally برابط يحوي…")
+        self.requeue_filter.setPlaceholderText("تصفية اختيارية بكلمة في الرابط…")
         self.requeue_filter.setMaximumWidth(230)
         row.addWidget(self.requeue_filter)
-        self.requeue_btn = QPushButton("↻  أعد المحاولة")
+        self.requeue_btn = QPushButton("↻  أعد محاولة كل الفاشل/المحجوب")
         self.requeue_btn.setProperty("class", "ghost")
         self.requeue_btn.clicked.connect(self._requeue_failed)
         row.addWidget(self.requeue_btn)
         rvw.addLayout(row)
         v.addWidget(rq)
+
+        # توزيع الأسباب وحده لا يكفي: كان السؤال «ولماذا فشلت هذه تحديداً؟»
+        # بلا جواب في الشاشة — هذا الجدول يقرأ `crawl_tasks` كما هو.
+        tq, tvw = card("مهام الطابور — الرابط وآخر عطل مسجل (‏crawl_tasks)")
+        frow = QHBoxLayout(); frow.setSpacing(10)
+        frow.addWidget(QLabel("الحالة:"))
+        self.queue_filter = QComboBox()
+        self.queue_filter.addItems(list(md.TASK_STATUSES.keys()))
+        self.queue_filter.currentTextChanged.connect(self._refresh_queue)
+        frow.addWidget(self.queue_filter)
+        self.queue_search = QLineEdit()
+        self.queue_search.setPlaceholderText("بحث بالرابط…")
+        self.queue_search.textChanged.connect(self._refresh_queue)
+        frow.addWidget(self.queue_search, 1)
+        self.queue_reload = QPushButton("⟳  تحديث")
+        self.queue_reload.setProperty("class", "ghost")
+        self.queue_reload.clicked.connect(self._refresh_queue)
+        frow.addWidget(self.queue_reload)
+        self.requeue_sel_btn = QPushButton("↻  أعد المحاولة للمحدد")
+        self.requeue_sel_btn.setProperty("class", "primary")
+        self.requeue_sel_btn.clicked.connect(self._requeue_selected)
+        frow.addWidget(self.requeue_sel_btn)
+        tvw.addLayout(frow)
+
+        self.queue_model = _QueueModel(self)
+        self.queue_view = QTableView()
+        self.queue_view.setModel(self.queue_model)
+        self.queue_view.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.queue_view.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.queue_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.queue_view.setAlternatingRowColors(True)
+        self.queue_view.verticalHeader().setVisible(False)
+        self.queue_view.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.Stretch)
+        self.queue_view.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.Stretch)
+        self.queue_view.selectionModel().selectionChanged.connect(
+            self._sync_sel_count)
+        tvw.addWidget(self.queue_view)
+        self.queue_note = QLabel("—"); self.queue_note.setProperty("class", "hint")
+        self.queue_note.setWordWrap(True)
+        tvw.addWidget(self.queue_note)
+        v.addWidget(tq, 1)
+        self._refresh_queue()
         return w
+
+    def _refresh_queue(self) -> None:
+        """لائحة الطابور من `crawl_queue.list_tasks` — ولا اجتهاد في السبب."""
+        status = md.TASK_STATUSES.get(self.queue_filter.currentText(), "")
+        rows = md.task_rows(status=status,
+                            needle=self.queue_search.text().strip(),
+                            limit=QUEUE_VIEW_LIMIT)
+        self.queue_model.set_rows(rows)
+        q = md.queue_counts()
+        text = (
+            f"معروض {len(rows)} من أصل {q['total']} مهمة في الطابور "
+            f"(فاشلة {q['failed']} | محجوبة {q['blocked']} | منتظرة "
+            f"{q['queued']} | تحتاج مراجعة {q['needs_review']} | ناجحة "
+            f"{q['success']}). السقف {QUEUE_VIEW_LIMIT} سطر — ارفع التصفية "
+            "للوصول لغيره.")
+        if getattr(self, "_action_msg", ""):
+            # آخر فعل يبقى مقروءاً بعد التحديث الذي يُعقبه — إلا اختفت
+            # الحقيقة في نص الإحصاء.
+            text = f"{self._action_msg}  —  {text}"
+        self.queue_note.setText(text)
+        self._sync_sel_count()
+
+    def _sync_sel_count(self) -> None:
+        n = len(self.queue_view.selectionModel().selectedRows())
+        self.requeue_sel_btn.setText(f"↻  أعد المحاولة للمحدد ({n})" if n
+                                     else "↻  أعد المحاولة للمحدد")
+
+    def _set_action(self, msg: str) -> None:
+        """رسالة فعل، تُعرض أمام إحصاء الطابور حتى التحديث القادم."""
+        self._action_msg = msg
+        self._refresh_queue()
+
+    def _requeue_selected(self) -> None:
+        """إعادة المهام المحددة بالـid — معاينة العدد ثم تأكيد ثم `requeue`."""
+        ids = []
+        sm = self.queue_view.selectionModel()
+        for idx in sm.selectedRows():
+            tid = self.queue_model.task_id(idx.row())
+            if tid is not None:
+                ids.append(int(tid))
+        if not ids:
+            QMessageBox.information(self, "لا تحديد",
+                                    "ظلّل مهمة أو أكثر من جدول الطابور أولاً.")
+            return
+        if QMessageBox.question(
+                self, "تأكيد إعادة المحاولة",
+                f"ستعود {len(ids)} مهمة محددة إلى الطابور (‏status=queued، "
+                "attempts=0).\n"
+                "لا تُحذف بيانات — تتغير الحالة فقط."
+                ) != QMessageBox.Yes:
+            self.queue_note.setText("أُلغيت الإعادة — المهام المحددة كما هي")
+            return
+        res = md.requeue_ids(ids)
+        if res.get("error"):
+            QMessageBox.warning(self, "تعذّر جزء من الإعادة", str(res["error"]))
+        self._set_action(
+            f"✓ أُعيد {res.get('revived', 0)} مهمة إلى الطابور (بأصفار "
+            "المحاولات) — شغّل دورة زحف من «البداية» لتجريها"
+            + (f" (لم يوجد: {res['missing']})" if res.get("missing") else ""))
+        QTimer.singleShot(0, self.refresh)
 
     def _requeue_failed(self) -> None:
         """معاينة ← تأكيد صريح ← `crawl_queue.requeue_by` (نفس مسار CLI)."""

@@ -13,6 +13,9 @@ OUT = Path(__file__).parent.parent / "docs" / "screenshots"
 # هي ما يراه المالك قبل أن يرفع شيئاً إلى الميزان).
 # دفعة 5: المصادر صارت شاشة — ما لم يُصوَّر لا يُصدَّق أنه موجود.
 NAMES = ["01-home", "02-sources", "03-review", "04-package"]
+# لقطة إضافية داخل شاشة: (فهرس الشاشة، فهرس التبويب، الاسم). بدونها تبقى
+# شغل الدفعة السادسة (جدول الطابور في «تقريرat الدورات») غير مرئية في التوثيق.
+EXTRA: list[tuple[int, int, str]] = [(2, 2, "03b-review-reports")]
 
 
 def main() -> int:
@@ -28,6 +31,18 @@ def main() -> int:
         pix = win.grab()
         path = OUT / f"{name}.png"
         pix.save(str(path))
+        print(f"saved {path}")
+    for page_i, tab_i, name in EXTRA:
+        win.goto(page_i)
+        tabs = getattr(win.stack.currentWidget(), "tabs", None)
+        if tabs is None or tab_i >= tabs.count():
+            print(f"⊘ تخطيت {name}: لا تبويب برقم {tab_i}")
+            continue
+        tabs.setCurrentIndex(tab_i)
+        for _ in range(4):
+            app.processEvents()
+        path = OUT / f"{name}.png"
+        win.grab().save(str(path))
         print(f"saved {path}")
     return 0
 
