@@ -43,7 +43,7 @@ pytest tests/ -q  ⇒ 311 passed          (295 قبل هذه الدفعة + 16 �
 ```
 
 لقطات فعلية مولَّدة offscreen (بأمر `python -m app.render_screens`، وأُضيف لها
-`03-package`): `docs/screenshots/01-home.png` و`02-review.png` و`03-package.png`.
+`03-package`): `docs/screenshots/01-home.png` و`02-review.png` و`03-package.png` (أُعيد ترقيمها في دفعة 5 لتصبح `01-home/02-sources/03-review/04-package` مع إضافة شاشة المصادر).
 
 `tests/test_ui_v3.py` (16 اختباراً) يغطي: الأعمدة/الهوية، الترشيح والبحث، سقف
 المعاينة، الاعتماد الجماعي (كتابة `review_status` فقط — لا `status`)، حوار الرفض

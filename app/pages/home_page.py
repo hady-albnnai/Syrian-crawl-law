@@ -55,7 +55,8 @@ class _AutopilotWorker(QThread):
     finished_run = Signal(dict)
 
     def __init__(self, max_pages, stop_event, parent=None, *,
-                 auto_approve: bool = False, use_search: bool = True):
+                 auto_approve: bool = False, use_search: bool = True,
+                 dry_run: bool = False):
         super().__init__(parent)
         self.max_pages = max_pages
         self.stop_event = stop_event
@@ -64,24 +65,19 @@ class _AutopilotWorker(QThread):
         # السياسة الموثقة أن اعتماد المصدر قرار المالك. الآن الزر في الشاشة.
         self.auto_approve = auto_approve
         self.use_search = use_search
+        self.dry_run = dry_run
 
     def run(self):
         stats = {}
         try:
-            from database import create_tables, get_connection
-            from autopilot import run_discovery
-            create_tables()
-            conn = get_connection()
-            try:
-                stats = run_discovery(conn, auto_approve=self.auto_approve,
-                                      use_search=self.use_search,
-                                      max_evaluate=12)
-            finally:
-                conn.close()
-            if not self.stop_event.is_set():
-                from crawler import start_crawling
-                start_crawling(max_pages=self.max_pages,
-                               stop_event=self.stop_event)
+            # دفعة 5: لا تكرار لترتيب الخطوات هنا — `run_autopilot` صار يقبل
+            # مفتاح الإيقاف والوضع التجريبي، فمسار الواجهة ومسار CLI واحد.
+            from autopilot import run_autopilot
+            stats = run_autopilot(pages=self.max_pages,
+                                  use_search=self.use_search,
+                                  auto_approve=self.auto_approve,
+                                  stop_event=self.stop_event,
+                                  dry_run=self.dry_run)
         except Exception as exc:  # noqa: BLE001 — الواجهة تعرض ولا تنهار
             stats["error"] = str(exc)
         finally:
@@ -94,6 +90,7 @@ class HomePage(QWidget):
         self.worker = None
         self.stop_event = threading.Event()
         self.on_open_results = None  # MainWindow يربطها بالانتقال لشاشة المراجعة
+        self.on_open_sources = None  # شاشة المصادر (اعتماد/رفض)
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(16)
@@ -126,14 +123,27 @@ class HomePage(QWidget):
         self.results_btn.setEnabled(False)
         self.results_btn.clicked.connect(self._open_results)
 
+        self.dry_box = QCheckBox("تجريبي — بلا حفظ في القاعدة")
+        self.dry_box.setToolTip(
+            "نفس مسار `cli crawl --mode dry`: يُقرأ ويُستخرج ويُعدّ، ولا "
+            "يُكتب أي سطر في documents/articles. معاينة آمنة قبل دورة حقيقية")
         btn_row.addWidget(self.start_btn)
         btn_row.addWidget(self.stop_btn)
         btn_row.addStretch()
+        self.sources_btn = QPushButton("المصادر  ◀")
+        self.sources_btn.setProperty("class", "ghost")
+        self.sources_btn.setMinimumHeight(52)
+        self.sources_btn.clicked.connect(self._open_sources)
+        btn_row.addWidget(self.sources_btn)
         btn_row.addWidget(self.results_btn)
         mv.addLayout(btn_row)
+        dry_row = QHBoxLayout()
+        dry_row.addWidget(self.dry_box)
+        dry_row.addStretch()
+        mv.addLayout(dry_row)
         root.addWidget(main_card)
 
-        adv = Collapsible("خيارات متقدّمة (حد الصفحات فقط)")
+        adv = Collapsible("خيارات متقدّمة (حدّ الصفحات)")
         limits_row = QHBoxLayout(); limits_row.setSpacing(12)
         limits_row.addWidget(QLabel("أقصى عدد صفحات بكل دورة زحف:"))
         from PySide6.QtWidgets import QSpinBox
@@ -222,6 +232,14 @@ class HomePage(QWidget):
             lab = self.stat_cards.get(key)
             if lab is not None:
                 lab.setText(f"{val:,}")
+        # حلقة الإدخال: كم مصدراً ينتظر قرار المالك — الزرّ يحمل العدد لا
+        # الاسم فقط، فـ«الزحف لا يجمع» يصبح مرئياً بدل أن يكون صامتاً.
+        try:
+            pend = md.sources_stats()["proposed"]
+        except Exception:  # noqa: BLE001 — البطاقة تكميلية، لا تُظلم اللائحة
+            pend = 0
+        self.sources_btn.setText(f"المصادر المعلّقة ({pend:,})  ◀" if pend
+                                 else "المصادر  ◀")
         pct = int(100 * done / total) if total else 0
         self.bar.setValue(pct)
         self.pct.setText(f"{pct}% نجاح من {total:,} مهمة"
@@ -274,9 +292,14 @@ class HomePage(QWidget):
         self.worker = _AutopilotWorker(self.spin.value(), self.stop_event,
                                        parent=self,
                                        auto_approve=self.auto_approve_box.isChecked(),
-                                       use_search=self.search_box.isChecked())
+                                       use_search=self.search_box.isChecked(),
+                                       dry_run=self.dry_box.isChecked())
         self.worker.finished_run.connect(self._run_finished)
         self.worker.start()
+
+    def _open_sources(self):
+        if self.on_open_sources:
+            self.on_open_sources()
 
     def _request_stop(self):
         self.stop_event.set()
@@ -292,6 +315,17 @@ class HomePage(QWidget):
             self.status_label.setText(
                 "✓ انتهت الدورة — اضغط «نتائج الزحف» لمراجعة ما جُمع")
         self.refresh()
+        if not stats.get("error"):
+            try:
+                pend = md.sources_stats()["proposed"]
+            except Exception:  # noqa: BLE001
+                pend = 0
+            if pend:
+                # اكتساب مصدر بلا اعتماد = لا زحف منه؛ هذا هو السبب الأشيع
+                # لـ«الدورة اشتغلت ولم يأتِ شيء».
+                self.status_label.setText(
+                    f"✓ انتهت الدورة — و{pend:,} مصدر معلّق بانتظار "
+                    "اعتمادك في شاشة المصادر (لا زحف قبل الاعتماد)")
 
     def _open_results(self):
         if self.on_open_results:

@@ -11,7 +11,8 @@ from app.main import MainWindow, build_app
 OUT = Path(__file__).parent.parent / "docs" / "screenshots"
 # دفعة 3: الحزمة شاشة قائمة بذاتها — يجب أن تُصوَّر هي أيضاً (البوابة والعدادات
 # هي ما يراه المالك قبل أن يرفع شيئاً إلى الميزان).
-NAMES = ["01-home", "02-review", "03-package"]
+# دفعة 5: المصادر صارت شاشة — ما لم يُصوَّر لا يُصدَّق أنه موجود.
+NAMES = ["01-home", "02-sources", "03-review", "04-package"]
 
 
 def main() -> int:

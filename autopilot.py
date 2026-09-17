@@ -349,8 +349,14 @@ def run_discovery(conn, auto_approve: bool = True, use_search: bool = True,
 
 def run_autopilot(pages: int = 20, use_search: bool = True,
                   auto_approve: bool = True, crawl: bool = True,
-                  max_evaluate: int = 12) -> dict:
-    """اكتشاف ذاتي كامل ثم زحف المعتمد — نقطة الدخول للأمر والواجهة."""
+                  max_evaluate: int = 12, stop_event=None,
+                  dry_run: bool = False) -> dict:
+    """اكتشاف ذاتي كامل ثم زحف المعتمد — نقطة الدخول للأمر **والواجهة**.
+
+    دفعة 5: الواجهة كانت تكرّر ترتيب الخطوات هنا (‏`run_discovery` ثم
+    `start_crawling`) لأن الدالة لم تكن تقبل `stop_event` — ازدواجية تنجرف.
+    صارت المعبر الوحيد: مفتاح الإيقاف والوضع التجريبي يمرّان من هنا.
+    """
     from database import create_tables, get_connection
     create_tables()
     conn = get_connection()
@@ -361,5 +367,6 @@ def run_autopilot(pages: int = 20, use_search: bool = True,
         conn.close()
     if crawl and pages > 0:
         from crawler import start_crawling
-        start_crawling(max_pages=pages)
+        start_crawling(max_pages=pages, dry_run=dry_run,
+                       stop_event=stop_event)
     return stats

@@ -26,7 +26,8 @@ from PySide6.QtCore import (QAbstractItemModel, QAbstractTableModel,
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox,
                                QDialog, QDialogButtonBox, QHBoxLayout,
-                               QHeaderView, QLabel, QLineEdit, QPlainTextEdit,
+                               QHeaderView, QLabel, QLineEdit, QMessageBox,
+                               QPlainTextEdit,
                                QPushButton, QRadioButton, QTabWidget,
                                QTableView, QTextEdit, QVBoxLayout, QWidget)
 
@@ -332,7 +333,50 @@ class ReviewPage(QWidget):
         fails, fv = card("توزيع أسباب الفشل (crawl_tasks.last_error) ورفضات المراجعة")
         fv.addWidget(self._mono_view("failures"))
         v.addWidget(fails, 1)
+
+        # سياسة الطابور الفاشل: قِيس أن 8,501 مهمة `failed` بلا أي إجراء —
+        # الأمر موجود (`cli requeue`) وزرّ غائب. المعاينة قبل الفعل، والتأكيد
+        # صريح، والمرجع نفسه: `crawl_queue.requeue_by`.
+        rq, rvw = card("إعادة المحاولة — مهام الطابور الفاشلة/المحجوبة")
+        row = QHBoxLayout(); row.setSpacing(10)
+        self.requeue_note = QLabel("—")
+        self.requeue_note.setProperty("class", "hint")
+        self.requeue_note.setWordWrap(True)
+        row.addWidget(self.requeue_note, 1)
+        self.requeue_filter = QLineEdit()
+        self.requeue_filter.setPlaceholderText("تصفية optionally برابط يحوي…")
+        self.requeue_filter.setMaximumWidth(230)
+        row.addWidget(self.requeue_filter)
+        self.requeue_btn = QPushButton("↻  أعد المحاولة")
+        self.requeue_btn.setProperty("class", "ghost")
+        self.requeue_btn.clicked.connect(self._requeue_failed)
+        row.addWidget(self.requeue_btn)
+        rvw.addLayout(row)
+        v.addWidget(rq)
         return w
+
+    def _requeue_failed(self) -> None:
+        """معاينة ← تأكيد صريح ← `crawl_queue.requeue_by` (نفس مسار CLI)."""
+        contains = self.requeue_filter.text().strip() or None
+        pre = md.preview_requeue(("failed", "blocked"), contains=contains)
+        if not pre["total"]:
+            QMessageBox.information(self, "لا شيء", "لا مهمة فاشلة/محجوبة "
+                                    + (f"تحوي «{contains}»" if contains else ""))
+            return
+        if QMessageBox.question(
+                self, "تأكيد إعادة المحاولة",
+                f"سيعاد {pre['total']} مهمة إلى الطابور (failed/blocked)"
+                + (f" المرشّحة بـ«{contains}»" if contains else "")
+                + ".\nلن تُحذف أي بيانات — تتغير الحالة إلى queued فقط.") \
+                != QMessageBox.Yes:
+            self.requeue_note.setText("أُلغيت الإعادة — الطابور كما هو")
+            return
+        res = md.requeue_failed(("failed", "blocked"), contains=contains)
+        self.requeue_note.setText(
+            f"✓ أُعيد {res.get('revived', 0)} مهمة إلى الطابور — شغّل دورة "
+            "زحف من «البداية» لتجريها"
+            + (f" (خطأ: {res['error']})" if res.get("error") else ""))
+        QTimer.singleShot(0, self.refresh)
 
     def _mono_view(self, name: str) -> QPlainTextEdit:
         """محرر عرض أحادي، مسجَّل على self باسمه — للاختبارات والاسترجاع."""
@@ -344,6 +388,17 @@ class ReviewPage(QWidget):
 
     # ──────────────────────────────────────────── التحديث
     def refresh(self) -> None:
+        try:
+            pre = md.preview_requeue(("failed", "blocked"),
+                                     contains=self.requeue_filter.text().strip() or None)
+            per = "، ".join(f"{k}: {n}" for k, n in
+                            sorted(pre["by_status"].items())) or "لا شيء"
+            self.requeue_note.setText(
+                f"القابل لإعادة المحاولة الآن — {pre['total']} مهمة ({per}). "
+                "الإعادة تصفّر عدّاد المحاولات وتعيدها للطابور؛ لا تشغّل "
+                "الزحف وحدك: تابع بـ«ابدأ الزحف».")
+        except Exception as exc:  # noqa: BLE001 — لا تُظلم اللائحة بسبب بطاقة
+            self.requeue_note.setText(f"تعذّر قياس الطابور: {type(exc).__name__}")
         docs = md.DOCUMENTS
         sig = (len(docs), getattr(docs[-1], "doc_id", 0) if docs else 0)
         if sig != getattr(self, "_sig", None):     # لا إعادة بناء بلا سبب

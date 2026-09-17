@@ -294,17 +294,22 @@ class TestHomePageMetrics:
 
 
 # ────────────────────────────────────────────── التنقل
-def test_window_goto_three_pages(app, ui_db, monkeypatch):
+def test_window_goto_all_pages(app, ui_db, monkeypatch):
     import config
     import database
     from config import DB_PATH  # noqa: F401  (لا إعادة تهيئة)
     from app import main as app_main
     win = app_main.MainWindow()
-    for i, cls in enumerate(("HomePage", "ReviewPage", "PackagePage")):
+    win.home._timer.stop(); win.sources._timer.stop()   # لا مؤقظات حية بعد الاختبار
+    # دفعة 5: المصادر شاشة ثانية في الترتيب — التسمية القديمة (three) كانت
+    # ستُخفي إدراج شاشة جديدة بدل أن تكشفه.
+    for i, cls in enumerate(("HomePage", "SourcesPage", "ReviewPage",
+                             "PackagePage")):
         win.goto(i)
         assert type(win.stack.currentWidget()).__name__ == cls, i
     win.goto(99)                 # لا انهيار عند فهرس خارج المدى
     assert type(win.stack.currentWidget()).__name__ == "HomePage"
+    win.deleteLater()
 
 
 class TestMizanInjectionUI:

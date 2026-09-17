@@ -452,6 +452,168 @@ def _package_tree():
     ]
 
 
+
+
+# ═════════════════════════ المصادر والسياسة (دفعة 5) ════════════════════════
+SOURCE_FILTERS = {"الكل": "", "معلّق للاعتماد": "proposed",
+                  "معتمد": "approved", "مرفوض": "rejected"}
+
+
+def source_rows(status: str = "", needle: str = "") -> list[dict]:
+    """صفوف سجل المصادر + عدد وثائق كل مصدر — للعرض والقرار معاً.
+
+    القراءة من `sources` مباشرة (الحالة والجدارة والتير) + عدّ وثائق من
+    `documents.source_url` تحت نطاق المصدر. القرار نفسه يُترك لدوال
+    `decide_sources` أدناه التي تندب `discovery.decide_source` — نفس ما
+    يستدعيه `cli sources`، لا نسخة ثانية منه.
+    """
+    conn = _connect()
+    if conn is None or not _has_table(conn, "sources"):
+        conn and conn.close()
+        return []
+    has_docs = _has_table(conn, "documents")
+    sql = ("SELECT id, source_key, base_url, name, engine, credibility, status,"
+           " domain_tier, discovered_via, decided_by, rejection_count"
+           " FROM sources")
+    cond, params = [], []
+    if status:
+        cond.append("status = ?"); params.append(status)
+    if needle:
+        cond.append("(name LIKE ? OR base_url LIKE ?)")
+        params += [f"%{needle}%", f"%{needle}%"]
+    if cond:
+        sql += " WHERE " + " AND ".join(cond)
+    sql += " ORDER BY CASE status WHEN 'proposed' THEN 0 ELSE 1 END, id"
+    rows = [dict(r) for r in conn.execute(sql, params)]
+    for r in rows:
+        r["docs"] = 0
+        if has_docs and r.get("base_url"):
+            r["docs"] = conn.execute(
+                "SELECT COUNT(*) FROM documents WHERE source_url LIKE ?",
+                (r["base_url"] + "%",)).fetchone()[0]
+    conn.close()
+    return rows
+
+
+def sources_stats() -> dict:
+    """عدّ لكل حالة — يدفّ «زرّ الاعتماد» على رقم، لا على إحساس."""
+    conn = _connect()
+    out = {"total": 0, "proposed": 0, "approved": 0, "rejected": 0}
+    if conn is None or not _has_table(conn, "sources"):
+        conn and conn.close()
+        return out
+    for r in conn.execute("SELECT status, COUNT(*) AS n FROM sources "
+                          "GROUP BY status"):
+        out[r["status"]] = r["n"]
+    out["total"] = sum(v for k, v in out.items() if k != "total")
+    conn.close()
+    return out
+
+
+def decide_sources(ids: list[int], approve: bool, *, decided_by: str = "ui") -> dict:
+    """اعتماد/رفض مصادر محددة — عبر `discovery.decide_source` نفسها (الـCLI).
+
+    قرار مصدر ليس تجميل حالة صف: هو ما يفتح الباب للزحف منه أو يغلقه، لذا
+    السطر الواحد المكتوب هنا هو سطر `cli sources approve 3` حرفياً.
+    """
+    if not ids:
+        return {"changed": 0, "error": "لم تُحدَّد أي مصدر"}
+    conn = _connect()
+    if conn is None:
+        return {"changed": 0, "error": "لا قاعدة بيانات"}
+    changed, missing = 0, []
+    try:
+        from discovery import decide_source
+        for i in ids:
+            row = conn.execute("SELECT source_key FROM sources WHERE id = ?",
+                               (int(i),)).fetchone()
+            if row is None:
+                missing.append(i)
+                continue
+            decide_source(conn, row["source_key"], approve, decided_by)
+            changed += 1
+    except Exception as exc:  # noqa: BLE001 — الشاشة تعرض، لا تنهار
+        conn.close()
+        return {"changed": changed, "error": f"{type(exc).__name__}: {exc}"}
+    conn.close()
+    return {"changed": changed, "missing": missing}
+
+
+def queue_counts() -> dict:
+    """حالة الطابور رقماً: كم فاشل/محجوب/بمراجعة/منتظر — للزرّ وللمعاينة."""
+    conn = _connect()
+    out = {"failed": 0, "blocked": 0, "needs_review": 0, "queued": 0,
+           "success": 0, "total": 0}
+    if conn is None or not _has_table(conn, "crawl_tasks"):
+        conn and conn.close()
+        return out
+    for r in conn.execute("SELECT status, COUNT(*) AS n FROM crawl_tasks "
+                          "GROUP BY status"):
+        out[r["status"]] = r["n"]
+        out["total"] += r["n"]
+    conn.close()
+    return out
+
+
+def requeue_failed(statuses=("failed", "blocked"), contains: str | None = None,
+                   limit: int | None = None) -> dict:
+    """إعادة مهام فاشلة إلى الطابور — عبر دوال `crawl_queue` نفسها (الـCLI).
+
+    بلا `limit` تُعاد كل المطابقة (سلوك `cli requeue`)؛ ومع `limit` تُعاد
+    الأولى فقط (id تصاعدياً) — لأن «8٬50١ مهمة فاشلة» بقاعدة المالك قرار
+    لا يُتخذ بخطأ إدخال. المعاينة أولاً: `preview_requeue` تعدّ ولا تكتب.
+    """
+    statuses = [x for x in statuses if x]
+    conn = _connect()
+    if conn is None or not _has_table(conn, "crawl_tasks") or not statuses:
+        conn and conn.close()
+        return {"revived": 0, "error": "لا قاعدة/لا طابور/لا حالة مختارة"}
+    where = "status IN (" + ",".join("?" * len(statuses)) + ")"
+    params: list = list(statuses)
+    if contains:
+        where += " AND url LIKE ?"
+        params.append(f"%{contains}%")
+    if limit is not None:
+        ids = [r["id"] for r in conn.execute(
+            f"SELECT id FROM crawl_tasks WHERE {where} ORDER BY id LIMIT ?",
+            [*params, int(limit)]).fetchall()]
+        from crawl_queue import requeue as _one
+        for tid in ids:
+            _one(conn, tid)
+        result = {"revived": len(ids), "limited_to": int(limit)}
+    else:
+        from crawl_queue import requeue_by
+        result = {"revived": len(requeue_by(conn, statuses, contains=contains))}
+    conn.close()
+    result.update({"statuses": statuses, "contains": contains or ""})
+    return result
+
+
+def preview_requeue(statuses=("failed", "blocked"),
+                    contains: str | None = None) -> dict:
+    """كم مهمة ستعود، لكل حالة — عدّ لا كتابة (لا ادعاء بلا قياس)."""
+    conn = _connect()
+    out = {"total": 0, "by_status": {}, "contains": contains or ""}
+    if conn is None or not _has_table(conn, "crawl_tasks"):
+        conn and conn.close()
+        return out
+    statuses = [x for x in statuses if x]
+    if not statuses:
+        conn.close()
+        return out
+    params: list = list(statuses)
+    sql = ("SELECT status, COUNT(*) AS n FROM crawl_tasks WHERE status IN ("
+           + ",".join("?" * len(statuses)) + ")")
+    if contains:
+        sql += " AND url LIKE ?"
+        params.append(f"%{contains}%")
+    for r in conn.execute(sql + " GROUP BY status", params):
+        out["by_status"][r["status"]] = r["n"]
+        out["total"] += r["n"]
+    conn.close()
+    return out
+
+
 _LIVE = {
     "SOURCE_NAME": lambda: next(
         (f'{s["base_url"]} — {s["name"] or ""}'.strip(" —")
@@ -478,6 +640,9 @@ _LIVE = {
     "FAILURE_BREAKDOWN": lambda: failure_breakdown(),
     "REJECTION_STATS": lambda: rejection_stats(),
     "CORPUS_PROFILE": lambda: identity_and_status_stats(),
+    "SOURCE_ROWS": lambda: source_rows(),
+    "SOURCES_STATS": lambda: sources_stats(),
+    "QUEUE_COUNTS": lambda: queue_counts(),
 }
 
 
