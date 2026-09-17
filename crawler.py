@@ -22,7 +22,8 @@ import law_identity
 import law_status
 import source_quality
 import wipo_source
-from config import BASE_URL, MAX_CLEAN_CONTENT_CHARS, SAVE_RAW_HTML
+from config import (BASE_URL, CIRCUIT_BREAKER_CONSECUTIVE_FAILURES,
+                    MAX_CLEAN_CONTENT_CHARS, SAVE_RAW_HTML)
 from database import get_connection
 from extractor import detect_branch, is_legal_content, legal_score
 from extractor_v4 import extract_main_content
@@ -342,6 +343,7 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
         log.info(f"تخطي بذر المصادر المعتمدة: {exc}")
 
     stats = {"pages": 0, "docs": 0, "articles": 0, "skipped": 0, "failures": 0}
+    consecutive_failures = 0
     while stats["pages"] < max_pages:
         if stop_event is not None and stop_event.is_set():
             log.info("⏹ إيقاف تعاوني طُلب — تُغلق الدورة بأمان (الطابور دائم)")
@@ -353,6 +355,11 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
         stats["pages"] += 1
         log.info(f"[{stats['pages']}/{max_pages}] {'📂' if task['kind']=='section' else '📄'} "
                  f"{task['section']} ← {task['url'][:70]}")
+
+        # التأخير المهذب قبل الجلب لا بعده: كان بمسار النجاح حصراً فكان
+        # الفاشل يقفز بـcontinue فوقه ويُطرَق المصدر بلا حد — حادثة ليلة
+        # syria-law (6778 إخفاقاً متتالياً بلا تأخير، 2026-09-17).
+        time.sleep(1.6)
 
         result = fetch(task["url"])
         if not result.get("ok"):
@@ -369,7 +376,14 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
                 taskqueue.mark(conn, task["id"], "failed", err)
                 stats["failures"] += 1
             log.info(f"   ❌ {err}")
+            consecutive_failures += 1
+            if consecutive_failures >= CIRCUIT_BREAKER_CONSECUTIVE_FAILURES:
+                log.error(f"⏸ قاطع الدورة: {consecutive_failures} إخفاقات "
+                          f"جلب متتالية — الدورة تتوقف رحمةً بالمصدر "
+                          f"والطابور محفوظ لاستئناف لاحق")
+                break
             continue
+        consecutive_failures = 0  # جلب سليم — يُصفَّر العداد
 
         # ف١-ب: صفحة تفاصيل ويبو ليكس — الـPDF الموقّع يُجلب ويحوَّل إلى
         # HTML مصنّع يمشي بنفس بوابات الأنبوب (لا مسار خاص يتجاوزها).
@@ -415,8 +429,6 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
                 taskqueue.mark(conn, task["id"], "success")
         else:
             _handle_topic(conn, task, result["html"], dry_run, stats)
-
-        time.sleep(1.6)
 
     by_status = taskqueue.counts_by_status(conn)
     report = (f"دورة #{run_id} — {datetime.now():%Y-%m-%d %H:%M}\n"

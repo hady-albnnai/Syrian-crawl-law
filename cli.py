@@ -291,10 +291,12 @@ def cmd_requeue(args):
     if not revived:
         log.info("لا مهام بهذه الحالة"
                  + (f" ورابطها يحوي «{args.contains}»" if args.contains else ""))
-    for t in revived:
+    for t in revived[:10]:
         err = f" — آخر عطل: {t['last_error']}" if t["last_error"] else ""
         log.info(f"↻ #{t['id']} {t['status']} → queued{err}")
         log.info(f"   {t['url'][:75]}")
+    if len(revived) > 10:
+        log.info(f"   … و{len(revived) - 10} مهمة أخرى")
     if revived:
         log.info(f"أعيد للطابور {len(revived)} مهمة — شغّل crawl لمعالجتها")
     conn.close()

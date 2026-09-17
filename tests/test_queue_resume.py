@@ -226,3 +226,37 @@ def test_cli_tasks_wiring(tmp_path, monkeypatch):
     rows = taskqueue.list_tasks(conn, contains="wipo")
     assert len(rows) == 1 and rows[0]["status"] == "queued"
     conn.close()
+
+
+# ── أدب الفشل + قاطع الدورة (حادثة ليلة syria-law 2026-09-17) ──
+def test_polite_sleep_applies_to_failed_fetches(tmp_path, monkeypatch):
+    """الفاشل ينتظر التأخير المهذب كالناجح — لا طرْق بلا حد بعد فشل."""
+    sleeps = []
+    monkeypatch.setattr(crawler.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(crawler, "fetch",
+                        lambda url: {"ok": False, "error": "http_404"})
+    conn = _tmp_db(tmp_path, monkeypatch)
+    taskqueue.enqueue(conn, "https://x.org/f1", "س", "topic")
+    taskqueue.enqueue(conn, "https://x.org/f2", "س", "topic")
+    crawler.start_crawling(max_pages=5)
+    rows = conn.execute("SELECT status FROM crawl_tasks").fetchall()
+    assert [r["status"] for r in rows] == ["failed", "failed"]
+    assert sleeps == [1.6, 1.6]      # كل صفحة انتظرت — حتى الفاشلة
+    conn.close()
+
+
+def test_circuit_breaker_stops_cycle_and_keeps_queue(tmp_path, monkeypatch):
+    """موجة إخفاقات متتالية توقف الدورة (الطابور محفوظ لاستئناف لاحق)
+    بدل استهلاك آلاف الصفحات ضد مصدر يحجب."""
+    monkeypatch.setattr(crawler.time, "sleep", lambda s: None)
+    monkeypatch.setattr(crawler, "fetch",
+                        lambda url: {"ok": False, "error": "http_404"})
+    conn = _tmp_db(tmp_path, monkeypatch)
+    for i in range(15):
+        taskqueue.enqueue(conn, f"https://x.org/p{i}", "س", "topic")
+    crawler.start_crawling(max_pages=50)
+    by = {r["status"]: r["c"] for r in conn.execute(
+        "SELECT status, COUNT(*) c FROM crawl_tasks GROUP BY status")}
+    assert by.get("failed") == 12    # قاطع الدورة عند 12
+    assert by.get("queued") == 3     # الباقي محفوظ بالطابور
+    conn.close()
