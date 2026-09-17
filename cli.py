@@ -139,14 +139,43 @@ def cmd_eval_search(args):
 
 
 def cmd_export(args):
+    from config import DB_PATH
     from exporter import build_package
-    rep = build_package(out_dir=args.out, prefix=args.prefix,
-                        min_articles=args.min_articles)
+    rep = build_package(db_path=args.db or DB_PATH, out_dir=args.out,
+                        prefix=args.prefix,
+                        min_articles=args.min_articles,
+                        with_manifest=not args.no_manifest)
     print(f"حزمة المحتوى: {rep['docs']} وثيقة → {rep['out_dir']}")
     print(f"  الفهرس: {rep['csv']}")
     if rep["skipped"]:
         print(f"  تخطي (مواد < {args.min_articles}): {rep['skipped']}")
-    return 0
+    if rep.get("manifest"):
+        m = rep["manifest"]
+        print(f"  المانيفست: schema v{m['schema_version']} — {m['files']} حزمة ملفات "
+              f"| {m['articles']} مادة")
+    if rep.get("enrich_error"):
+        print(f"  ⚠︎ توسيع عقد المواد لم يعمل: {rep['enrich_error']}")
+    if "gate_ok" in rep:
+        print(f"  بوابة ميزان: {'✓ ستُستورد كل الصفوف' if rep['gate_ok'] else '✗ ستُتخطى صفوف'}")
+        for msg in rep.get("gate_failed", []):
+            print(f"     ✗ {msg}")
+        n = rep.get("articles_in_package")
+        if n is not None:
+            print(f"  مواد داخل الحزمة (معدودة من القرص): {n}")
+    return 0 if rep.get("gate_ok", True) else 1
+
+
+def cmd_verify_package(args):
+    """بوابة مستقلة: افحص حزمة جاهزة بنفس منطق ميزان (بلا إعادة توليد)."""
+    from pathlib import Path as _P
+    import verify_package
+    checks = verify_package.check_package(args.pkg)
+    for msg, ok in checks:
+        print(f"  [{'✓' if ok else '✗'}] {msg}")
+    counts = verify_package.article_counts(args.pkg)
+    print(f"  صفوف: {counts['rows']} | ملفات JSON: {counts['docs_with_json']} "
+          f"| مواد: {counts['articles']}")
+    return 0 if all(bool(ok) for _m, ok in checks) else 1
 
 
 def cmd_stats(_args):
@@ -667,7 +696,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--out", default="export/content_package")
     sp.add_argument("--prefix", default="content/legal_library/laws_decrees/")
     sp.add_argument("--min-articles", type=int, default=0)
+    sp.add_argument("--db", default=None,
+                    help="مسار قاعدة بديلة (افتراضياً data/syrian_law.db)")
+    sp.add_argument("--no-manifest", action="store_true",
+                    help="اكتفِ بالفهرس+md+JSON دون توسيع عقد المواد والمانيفست")
     sp.set_defaults(fn=cmd_export)
+
+    sp = sub.add_parser("verify",
+                        help="افحص حزمة جاهزة بنفس منطق ميزان (planCsvImport) بلا إعادة توليد")
+    sp.add_argument("pkg", nargs="?", default="export/content_package",
+                    help="مجلد الحزمة (يحتوي laws_decrees_index.csv وmarkdown/)")
+    sp.set_defaults(fn=cmd_verify_package)
 
     sp = sub.add_parser("seeds", help="عرض دليل البذور المرفق")
     sp.set_defaults(fn=cmd_seeds)

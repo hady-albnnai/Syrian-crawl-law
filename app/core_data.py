@@ -38,6 +38,10 @@ class DocumentRow:
     year: int
     doc_id: int = 0
     source_url: str = ""
+    # ف٢ — ما تحتاجه شاشة المراجعة فعلاً (لا تُخمَّن: None عند غياب العمود)
+    identity_key: str = ""
+    legal_status: str = ""
+    domain_tier: int = 0
 
 
 @dataclass
@@ -84,6 +88,18 @@ def _has_table(conn, name: str) -> bool:
         (name,)).fetchone() is not None
 
 
+def _count(conn, table: str, where: str = "") -> int:
+    """عدّ لا ينهار على جدول غير موجود — قاعدة جديدة أو نصف مهجرة حالة
+    عادية للشاشة (قِيس: أول إقلاع على صندوق بلا قاعدة كان يستثني
+    OperationalError: no such table: documents من refresh())."""
+    if not _has_table(conn, table):
+        return 0
+    try:
+        return conn.execute(f"SELECT COUNT(*) FROM {table} {where}").fetchone()[0]
+    except sqlite3.OperationalError:
+        return 0
+
+
 def _sources():
     conn = _connect()
     if conn is None or not _has_table(conn, "sources"):
@@ -96,13 +112,18 @@ def _sources():
 
 def _documents():
     conn = _connect()
-    if conn is None:
+    if conn is None or not _has_table(conn, "documents"):
+        conn and conn.close()
         return []
-    rows = conn.execute("""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)")}
+    extra = "".join(f", d.{c}" for c in
+                    ("identity_key", "legal_status", "source_domain_tier")
+                    if c in cols)
+    rows = conn.execute(f"""
         SELECT d.id, d.title, d.doc_type, d.branch, d.year, d.legal_score,
                d.review_status, d.status, d.source_url,
                (SELECT COUNT(*) FROM articles a WHERE a.doc_id = d.id)
-                   AS n_articles
+                   AS n_articles{extra}
         FROM documents d ORDER BY d.id""").fetchall()
     conn.close()
     out = []
@@ -114,6 +135,11 @@ def _documents():
             status = "needs_review"
         from config import BRANCH_AR  # مصدر حقيقة واحد — 14 فرعاً
         out.append(DocumentRow(
+            identity_key=(r["identity_key"] if "identity_key" in r.keys() else "") or "",
+            legal_status=(r["legal_status"] if "legal_status" in r.keys() else "") or "",
+            domain_tier=(r["source_domain_tier"]
+                         if "source_domain_tier" in r.keys() and r["source_domain_tier"]
+                         else 0),
             doc_id=r["id"],
             title=r["title"] or "بدون عنوان",
             kind=_DOC_TYPE_AR.get(r["doc_type"], r["doc_type"] or "نص"),
@@ -126,16 +152,26 @@ def _documents():
     return out
 
 
-def document_text(doc_id: int) -> str:
-    """نص وثيقة كاملاً (clean_content) لمعاينة المراجعة — قراءة مباشرة
-    بمعرّف الوثيقة، لا كل الأعمدة الثقيلة ضمن _documents() الافتراضية."""
+def document_text(doc_id: int, cap: int = 20_000) -> tuple[str, int]:
+    """نص وثيقة لمعاينة المراجعة، مع سقف عرض صريح.
+
+    قِيس على الشاشة القديمة: clean_content يُحمَّل كاملاً (حتى
+    MAX_CLEAN_CONTENT_CHARS = 2,000,000) في QPlainTextEdit عند كل نقرة —
+    تجميد فعلي للواجهة مع متن قانوني كامل (قانون العقوبات 775 مادة).
+    يعيد (النص المقصوص، الطول الحقيقي) ليُقال للمستخدم كم يُخفى ولا يُوهَم.
+    """
     conn = _connect()
     if conn is None:
-        return ""
+        return "", 0
     row = conn.execute(
-        "SELECT clean_content FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        "SELECT LENGTH(clean_content) AS n, clean_content FROM documents "
+        "WHERE id = ?", (doc_id,)).fetchone()
     conn.close()
-    return (row["clean_content"] if row else "") or ""
+    if row is None:
+        return "", 0
+    text = row["clean_content"] or ""
+    total = row["n"] or len(text)
+    return (text[:cap] if cap and len(text) > cap else text), total
 
 
 def _log_events(limit=200):
@@ -159,8 +195,8 @@ def _run_stats():
     if conn is None:
         return None
     out = {"queue": {}, "last_run": None,
-           "docs": conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
-           "articles": conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]}
+           "docs": _count(conn, "documents"),
+           "articles": _count(conn, "articles")}
     if _has_table(conn, "crawl_tasks"):
         for r in conn.execute(
                 "SELECT status, COUNT(*) n FROM crawl_tasks GROUP BY status"):
@@ -208,32 +244,114 @@ def _sections():
 
 
 def validate_package(pkg_dir=None) -> list:
-    """بوابة تحقق حقيقية على الحزمة المصدَّرة (لا قيم ثابتة)."""
+    """بوابة التحقق من الحزمة — **منفّذة في مكان واحد** (verify_package).
+
+    كانت هذه الدالة تحمل نسختها الخاصة من منطق الفحص (تحمّص ملف md بشدة
+    أخفّ من بوابة ميزان)، فمرّ كسر دلالة sha256 في الفهرس دون أن تراه
+    الواجهة (قِيس 2026-09-17). الآن تستدعي verify_package.check_package
+    التي تطابق سلوك csv_legal_library_importer.dart سطرًا بسطر — أي أن
+    «أخضر الواجهة» يعني حرفياً «ميزان سيستورد كل الصفوف».
+    """
     # القراءة وقت النداء لا وقت التعريف — حتى يعمل الاختبار مع PACKAGE_DIR مُبدَّل
     pkg_dir = Path(pkg_dir) if pkg_dir else PACKAGE_DIR
-    checks = []
-    index = pkg_dir / "laws_decrees_index.csv"
-    if not index.exists():
-        return [("الحزمة غير مولَّدة بعد — اضغط «توليد الحزمة»", False)]
-    rows = list(csv.DictReader(open(index, encoding="utf-8-sig")))
-    ids = [r["id"] for r in rows]
-    sha_ok = size_ok = True
-    for r in rows:
-        f = Path(pkg_dir) / "markdown" / r["local_path"].split("/")[-1]
-        if not f.exists():
-            sha_ok = size_ok = False
-            continue
-        b = f.read_bytes()
-        sha_ok &= hashlib.sha256(b).hexdigest() == r["sha256"]
-        size_ok &= str(len(b)) == r["size_bytes"]
-    checks.append((f"sha256 مطابقة لكل ملفات الحزمة ({len(rows)})", sha_ok))
-    checks.append(("size_bytes مطابقة لكل ملف", size_ok))
-    checks.append(("لا id مكرر ولا عنوان فارغ",
-                   len(ids) == len(set(ids))
-                   and all(r["title"].strip() for r in rows)))
-    checks.append(("الفهرس يُقرأ بأعمدة ميزان (UTF-8+BOM)",
-                   open(index, "rb").read(3) == b"\xef\xbb\xbf"))
-    return checks
+    import verify_package
+    return verify_package.check_package(pkg_dir)
+
+
+def package_counts(pkg_dir=None) -> dict:
+    """عدادات الحزمة من القرص (لا من القاعدة): صفوف/ملفات md/مواد."""
+    pkg_dir = Path(pkg_dir) if pkg_dir else PACKAGE_DIR
+    import verify_package
+    c = verify_package.article_counts(pkg_dir)
+    manifest = pkg_dir / "mizan_package_manifest.json"
+    c["manifest"] = manifest.exists()
+    if manifest.exists():
+        import json
+        try:
+            m = json.loads(manifest.read_text(encoding="utf-8"))
+            c["schema_version"] = m.get("schema_version")
+            c["generated_at"] = m.get("generated_at")
+            c["corpus"] = m.get("corpus", {})
+        except (ValueError, OSError):
+            pass
+    return c
+
+
+def run_history(limit: int = 10) -> list:
+    """سجل دورات الزحف الحقيقي (crawl_runs) — لقسم التقارير (طلب المالك
+    2026-09-17): الأرقام المقيسة لكل دورة، لا نص عام."""
+    conn = _connect()
+    if conn is None or not _has_table(conn, "crawl_runs"):
+        conn and conn.close()
+        return []
+    rows = conn.execute(
+        "SELECT id, started_at, finished_at, mode, pages, docs, articles,"
+        " skipped, failures, branch_breakdown_json FROM crawl_runs "
+        "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def failure_breakdown(limit: int = 400) -> list:
+    """توزيع أسباب الفشل من crawl_tasks.last_error — رقمياً لا سرداً."""
+    conn = _connect()
+    if conn is None or not _has_table(conn, "crawl_tasks"):
+        conn and conn.close()
+        return []
+    rows = conn.execute(
+        "SELECT COALESCE(NULLIF(last_error,''),'(بلا سبب مسجل)') AS reason,"
+        " status, COUNT(*) AS n FROM crawl_tasks "
+        "WHERE status IN ('failed','blocked','needs_review') "
+        "GROUP BY reason, status ORDER BY n DESC LIMIT ?", (limit,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def rejection_stats() -> dict:
+    """توزيع أسباب الرفض البشري (rejection_reasons) — ما تعلّمه الزاحف."""
+    conn = _connect()
+    if conn is None or not _has_table(conn, "rejection_reasons"):
+        conn and conn.close()
+        return {"total": 0, "by_category": []}
+    total = conn.execute("SELECT COUNT(*) FROM rejection_reasons").fetchone()[0]
+    rows = conn.execute(
+        "SELECT category, COUNT(*) AS n FROM rejection_reasons "
+        "GROUP BY category ORDER BY n DESC").fetchall()
+    conn.close()
+    return {"total": total, "by_category": [dict(r) for r in rows]}
+
+
+def identity_and_status_stats() -> dict:
+    """الهوية والحالة القانونية على مستوى القاعدة — الأرقام التي تهمّ
+    المحامي قبل أن يفتح أي ملف: كم صكّاً له هوية؟ وكم منها سارٍ؟"""
+    conn = _connect()
+    if conn is None or not _has_table(conn, "documents"):
+        conn and conn.close()
+        return {}
+    out = {}
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)")}
+    out["documents"] = conn.execute(
+        "SELECT COUNT(*) FROM documents WHERE status='active'").fetchone()[0]
+    out["with_identity"] = conn.execute(
+        "SELECT COUNT(*) FROM documents WHERE status='active' "
+        "AND identity_key IS NOT NULL AND identity_key != ''").fetchone()[0] if "identity_key" in cols else 0
+    if "legal_status" in cols:
+        for r in conn.execute(
+                "SELECT COALESCE(legal_status,'(بلا حالة)') s, COUNT(*) n "
+                "FROM documents WHERE status='active' GROUP BY s ORDER BY n DESC"):
+            out.setdefault("legal_status", {})[r["s"]] = r["n"]
+    if "source_domain_tier" in cols:
+        for r in conn.execute(
+                "SELECT COALESCE(source_domain_tier,4) t, COUNT(*) n "
+                "FROM documents WHERE status='active' GROUP BY t ORDER BY t"):
+            out.setdefault("domain_tier", {})[str(r["t"])] = r["n"]
+    if "review_status" in cols:
+        for r in conn.execute(
+                "SELECT COALESCE(review_status,'auto_accepted') rs, COUNT(*) n "
+                "FROM documents WHERE status='active' GROUP BY rs ORDER BY n DESC"):
+            out.setdefault("review_status", {})[r["rs"]] = r["n"]
+    conn.close()
+    return out
 
 
 def _gap_report():
@@ -241,7 +359,8 @@ def _gap_report():
     لا جدول مُخمَّن. تعيد قائمة مرتبة: الفجوات أولاً (الأكثر نقصاً أعلى)."""
     from config import BRANCH_AR
     conn = _connect()
-    if conn is None:
+    if conn is None or not _has_table(conn, "documents"):
+        conn and conn.close()
         return []
     import gap_analysis
     report = gap_analysis.analyze_gaps(conn)
@@ -257,7 +376,8 @@ def _gap_queries(limit_branches: int = 5):
     """أمثلة استعلامات بحث موجَّهة للفروع الناقصة — نفس ما يستخدمه
     autopilot.generate_candidates فعلياً بالدورة القادمة (لا نص توضيحي)."""
     conn = _connect()
-    if conn is None:
+    if conn is None or not _has_table(conn, "documents"):
+        conn and conn.close()
         return []
     import gap_analysis
     report = gap_analysis.analyze_gaps(conn)
@@ -353,6 +473,11 @@ _LIVE = {
     "SOURCE_PERFORMANCE": _source_performance,
     "DEDUP_STATS": _dedup_stats,
     "DB_INFO": _db_info,
+    "PACKAGE_COUNTS": lambda: package_counts(),
+    "RUN_HISTORY": lambda: run_history(),
+    "FAILURE_BREAKDOWN": lambda: failure_breakdown(),
+    "REJECTION_STATS": lambda: rejection_stats(),
+    "CORPUS_PROFILE": lambda: identity_and_status_stats(),
 }
 
 

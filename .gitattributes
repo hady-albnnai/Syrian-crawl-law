@@ -1,0 +1,17 @@
+# خطوط الأسطر — الحزمة التي يوقّعها المانيفست حساسة للبايت: CRLF في
+# laws_decrees_index.csv تُبطل كل بصمة فتُسقِط كل صَفْر في بوابة ميزان
+# («بصمة غير مطابقة») بصمت؛ ونفس العلة على ملفات md sidecar. لذلك تُثبَّت LF
+# على سطح التصدير/التوثيق على أي نظام تشغيل وأي `core.autocrlf`.
+*.md text eol=lf
+*.csv text eol=lf
+*.json text eol=lf
+*.py text eol=lf
+
+# لكن لا تُطوََع أدلة البايت: اللقطات الخام وملفات tests/fixtures — قياس 2026-09-17:
+# tests/fixtures/tss/labor_law_17_2010.html مخزَّن CRLF في index، وقاعدة `*.html
+# text eol=lf` جعلت كل `git status`/`checkout` يعرضه «معدَّلاً» (طَمْطَمة دائمة،
+# ولو بُني التطبيع لكان عيّنة اختبار تغيّرت باياتها). `-text` = بلا تحويل ولا
+# diff نصّي: البايتات تبقى كما حُصدت.
+*.html -text
+tests/fixtures/** -text
+data/snapshots/** -text

@@ -1,9 +1,0 @@
-app
-cli
-config
-crawler
-database
-discovery
-extractor
-fetcher
-logging_setup

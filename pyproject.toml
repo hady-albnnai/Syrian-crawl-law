@@ -32,7 +32,7 @@ py-modules = ["answer", "autopilot", "chunker", "cli", "config",
               "logging_setup", "migrations", "official_seed", "recon",
               "search", "source_matrix", "source_quality", "urls",
               "community_seed", "hf_syria_laws", "wayback_source",
-              "wipo_source"]
+              "wipo_source", "verify_package", "package_manifest"]
 packages = ["app", "app.pages"]
 
 [tool.pytest.ini_options]

@@ -32,3 +32,9 @@ Thumbs.db
 # Editors
 .vscode/
 .idea/
+
+# artifacts البناء والتثبيت — كانت mizan_harvester.egg-info متتبَّعة في Git
+# فتتغيّر مع كل `pip install -e .` وتلوّث git status بمحتوى مولَّد (فُصلت هنا).
+mizan_harvester.egg-info/
+*.egg-info/
+.pytest_cache/

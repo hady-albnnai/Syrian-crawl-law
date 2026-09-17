@@ -43,10 +43,18 @@ python -m cli discover "القانون المدني السوري" --via ddg --ev
 python -m cli seeds
 python -m cli sources list|approve 1|reject 1
 
-# الواجهة النموذجية والاختبارات
-python -m app.main
-pytest -q                        # محلي فقط — اختبارات الشبكة مستبعدة افتراضياً
+# حزمة ميزان: توليد + بوابة واحدة تُطابق planCsvImport في ميزان
+python -m cli export --out export/content_package     # يكتب المانيفست ويطبع البوابة
+python -m cli verify export/content_package            # فحص حزمة جاهزة بلا إعادة توليد
+
+pytest -q                              # محلي فقط — اختبارات الشبكة مستبعدة افتراضياً
 ```
+
+بوابة `export` **خروجها 1** إن أخفقت أي فحص (لا يُبنى على مقياس صحيحي)، وكل رقم في
+`mizan_package_manifest.json` مقروء من الحزمة على القرص لا من القاعدة. تفصيل العقد:
+`DELIVERY/PACKAGE-MANIFEST-V2.md`؛ ومواصفة جدول المواد في ميزان (لا تُنفَّذ هنا):
+`DELIVERY/MIZAN-LAW-ARTICLES-SPEC.md`.
+
 
 السجلات: طرفية + `logs/harvester.log`. لا أسرار في Git (`.env.example`).
 

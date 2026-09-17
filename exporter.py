@@ -126,8 +126,16 @@ def doc_json(doc, articles) -> dict:
 
 
 def build_package(db_path=DB_PATH, out_dir="export/content_package",
-                  prefix=DEFAULT_PREFIX, min_articles=0) -> dict:
-    """يبني الحزمة كاملة ويعيد إحصاءات للتقرير."""
+                  prefix=DEFAULT_PREFIX, min_articles=0,
+                  with_manifest: bool = True) -> dict:
+    """يبني الحزمة كاملة ويعيد إحصاءات للتقرير.
+
+    with_manifest=True (الافتراضي) يوسّع كل JSON جانبي بعقد المواد الغني
+    (الحالة القانونية، سلسلة التعديل، طبقة الرسمية، بصمة كل مادة) ويكتب
+    mizan_package_manifest.json، ثم يجتاز بوابة التحقق ذاتها التي يجتازها
+    ميزان (verify_package). الإخفاق في التوسيع لا يُفشل التصدير: الحزمة
+    تبقى صالحة للفهرس القديم، ويُبلَّغ السبب في إحصاءات التقرير.
+    """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     docs = conn.execute(
@@ -199,5 +207,38 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
         w.writeheader()
         w.writerows(rows)
     log.info(f"حزمة المحتوى: {len(rows)} وثيقة في {out} ({skipped} تخطي)")
-    return {"docs": len(rows), "skipped": skipped,
-            "csv": str(csv_path), "out_dir": str(out)}
+    rep = {"docs": len(rows), "skipped": skipped,
+           "csv": str(csv_path), "out_dir": str(out)}
+    if with_manifest:
+        rep.update(_finalize(out, db_path, rows))
+    return rep
+
+
+def _finalize(out: Path, db_path, rows: list) -> dict:
+    """توسيع عقد المواد + المانيفست + بوابة التحقق المشتركة.
+
+    لا يفشل التصدير بأي حال — المانيفست طبقة فوق الحزمة، وغيابه لا يجب أن
+    يهدم ما يعمل (درس «SystemExit بـ pdf_to_text كان يقتل الدورة»).
+    """
+    extra: dict = {}
+    try:
+        import package_manifest
+        extra["enrich"] = package_manifest.enrich_doc_json(out, db_path, rows)
+        manifest = package_manifest.build_manifest(db_path, out)
+        extra["manifest"] = {"articles": manifest["corpus"]["articles"],
+                             "files": len(manifest["files"]),
+                             "schema_version": manifest["schema_version"]}
+    except Exception as exc:  # noqa: BLE001 — طبقة إضافية، لا تُسقط الحزمة
+        log.warning(f"توسيع عقد المواد مؤجل: {type(exc).__name__}: {exc}")
+        extra["enrich_error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        import verify_package
+        checks = verify_package.check_package(out)
+        extra["gate_ok"] = all(bool(ok) for _m, ok in checks)
+        extra["gate_failed"] = [m for m, ok in checks if not ok]
+        counts = verify_package.article_counts(out)
+        extra["articles_in_package"] = counts["articles"]
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"بوابة التحقق لم تعمل: {type(exc).__name__}: {exc}")
+        extra["gate_error"] = f"{type(exc).__name__}: {exc}"
+    return extra
