@@ -107,5 +107,10 @@ def as_pipeline_result(original_url: str, http_get=None) -> dict:
         return {"ok": False, "error": "wayback_blocked_robots"}
     if status != 200 or not html or len(html) < 500:
         return {"ok": False, "error": f"wayback_fetch_{status}"}
+    # صفحة انقطاع الأرشيف نفسها تعود 200 (قِيس 2026-09-17: لقطات
+    # "Temporarily Offline" جُلبت كأنها أصل ثم فشل الاستخراج) — تُميَّز
+    # برمزها الصادق بدل تشخيص مضلل.
+    if "Temporarily Offline" in html:
+        return {"ok": False, "error": "wayback_temporarily_offline"}
     return {"ok": True, "html": html, "final_url": original_url,
             "status": 200, "encoding": "utf-8"}

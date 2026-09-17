@@ -144,3 +144,16 @@ def test_wayback_crawl_skips_pdf_and_counts(tmp_path, monkeypatch):
     assert cmd_wayback_crawl(_Args()) == 0
     assert calls == [ORIG]                  # الـPDF لم يُطلب أصلاً
     conn.close()
+
+
+def test_archive_offline_page_detected_honestly():
+    """صفحة انقطاع الأرشيف (تعود 200!) تُميَّز برمزها — لا تُجلب
+    كأنها أصل ثم تفشل استخراجاً بتشخيص مضلل (قِيس 2026-09-17)."""
+    def _offline(url):
+        if wb.CDX_BASE in url:
+            return 200, json.dumps([["t", "s"], ["20230101000000", "200"]])
+        return 200, ("<html><head><title>Internet Archive: Temporarily "
+                     "Offline</title></head><body>Temporarily Offline "
+                     + "padding " * 100 + "</body></html>")
+    r = wb.as_pipeline_result(ORIG, http_get=_offline)
+    assert r == {"ok": False, "error": "wayback_temporarily_offline"}
