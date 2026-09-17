@@ -3,8 +3,12 @@
 العقد مُثبت من `lawyer-office2/content/legal_library/laws_decrees/laws_decrees_index.csv`:
 - 14 عموداً بترتيب ثابت، الملف بترميز UTF-8 مع BOM.
 - ملفات النصوص markdown/ باسم `{year}_{title}_{number}.md`.
-- sha256 = بصمة **الملف المصدري** (bytes) كما في حزمة ميزان — عندنا هو
-  لقطة HTML الخام إن وُجدت، وإلا بصمة ملف md نفسه (موثق في التقرير).
+- sha256 = بصمة **الملف المُصدَّر** (bytes) — أي ملف md المشار إليه في
+  local_path، لأنه الملف الذي يفتحه المستورد في ميزان ويحمّصه
+  (csv_legal_library_importer → planCsvImport). الدلالة القديمة كانت بصمة
+  لقطة HTML الخام عند وجودها، فرفضت بوابةُ السلامة كل وثيقة مزحوفة
+  «بصمة غير مطابقة» (قِيس 2026-09-17). بصمة اللقطة تبقى في JSON الجانبي
+  (snapshot_sha256) لمن يريد الإسناد إلى الأصل الخام.
 
 قرار المالك 2026-09-05: md + JSON — لذا يُكتب بجانب كل md ملف JSON
 بالعقد الغني للمواد (رقم/لفظية/نص/فقرات/مسار هرمي) للاستهلاك الآلي.
@@ -45,55 +49,78 @@ def _priority_for(credibility) -> int:
 
 
 def doc_markdown(doc, articles) -> str:
-    lines = [f"# {doc['title'] or 'بدون عنوان'}", ""]
+    lines = [f"# {_get(doc, 'title') or 'بدون عنوان'}", ""]
     meta = []
-    if doc["number"]:
+    if _get(doc, "number"):
         meta.append(f"الرقم: {doc['number']}")
-    if doc["year"]:
+    if _get(doc, "year"):
         meta.append(f"السنة: {doc['year']}")
-    if doc["branch"]:
+    if _get(doc, "branch"):
         meta.append(f"الفرع: {BRANCH_AR.get(doc['branch'], doc['branch'])}")
-    meta.append(f"المصدر: {doc['source_url']}")
+    if _get(doc, "legal_status"):
+        meta.append(f"الحالة القانونية: {doc['legal_status']}")
+    meta.append(f"المصدر: {_get(doc, 'source_url') or ''}")
     lines.append("> " + " — ".join(meta))
     lines.append("")
     for a in articles:
-        label = a["article_label"] or ""
+        label = _get(a, "article_label") or ""
         if label.isdigit():  # لفظية رقمية فقط («1») — تُستكمل للعرض
             label = f"المادة {label}"
         if not label:
-            label = (f"المادة {a['article_number']}"
-                     if a["article_number"] else "مادة")
+            label = (f"المادة {_get(a, 'article_number')}"
+                     if _get(a, "article_number") else "مادة")
         lines.append(f"## {label}")
         lines.append("")
-        paras = json.loads(a["paragraphs_json"]) if a["paragraphs_json"] else None
+        pj = _get(a, "paragraphs_json")
+        paras = json.loads(pj) if pj else None
         if paras:
             for para in paras:
                 lines.append(para)
                 lines.append("")
         else:
-            lines.append(a["text"] or "")
+            lines.append(_get(a, "text") or "")
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _get(row, key, default=None):
+    """قيمة آمنة لعمود قد لا يوجد بمخطط قديم — sqlite3.Row لا يملك .get().
+
+    عطل مقاس 2026-09-17: قاعدة بمخطط ما قبل ف١ (بلا amended_by) كانت تُسقط
+    IndexError في منتصف التصدير وتموت الدورة كلها — نفس علة «SystemExit بـ
+    pdf_to_text كان يقتل الدورة» الموثقة في دفتر التشغيل، وهي ممنوعة
+    دستورياً (لا استثناء غير معالج في مسار حرج).
+    """
+    try:
+        v = row[key]
+    except (IndexError, KeyError):
+        return default
+    return default if v is None and default is not None else v
+
+
 def doc_json(doc, articles) -> dict:
     return {
-        "doc_id": doc["doc_id"],
-        "title": doc["title"],
-        "number": doc["number"],
-        "year": doc["year"],
-        "branch": doc["branch"],
-        "source_url": doc["source_url"],
-        "content_sha256": doc["content_sha256"],
-        "snapshot_sha256": doc["snapshot_sha256"],
+        "doc_id": _get(doc, "doc_id"),
+        "title": _get(doc, "title"),
+        "number": _get(doc, "number"),
+        "year": _get(doc, "year"),
+        "branch": _get(doc, "branch"),
+        "source_url": _get(doc, "source_url"),
+        "content_sha256": _get(doc, "content_sha256"),
+        "snapshot_sha256": _get(doc, "snapshot_sha256"),
+        "legal_status": _get(doc, "legal_status"),
+        "review_status": _get(doc, "review_status", "auto_accepted"),
+        "source_domain_tier": _get(doc, "source_domain_tier"),
+        "quality_score": _get(doc, "quality_score"),
+        "identity_key": _get(doc, "identity_key"),
         "articles": [{
-            "number": a["article_number"],
-            "label": a["article_label"],
-            "text": a["text"],
-            "hierarchy_path": a["hierarchy_path"],
+            "number": _get(a, "article_number"),
+            "label": _get(a, "article_label"),
+            "text": _get(a, "text"),
+            "hierarchy_path": _get(a, "hierarchy_path"),
             "paragraphs": json.loads(a["paragraphs_json"])
-                          if a["paragraphs_json"] else None,
-            "amended_by": a["amended_by"],
+                          if _get(a, "paragraphs_json") else None,
+            "amended_by": _get(a, "amended_by"),
         } for a in articles],
     }
 
@@ -128,17 +155,16 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
         js_path.write_text(json.dumps(doc_json(doc, articles),
                                       ensure_ascii=False, indent=2),
                            encoding="utf-8")
-        # sha256 = بصمة الملف المصدري: اللقطة الخام إن وُجدت، وإلا md نفسه
-        snap = doc["snapshot_sha256"]
-        snap_file = (SNAPSHOT_DIR / (snap.split(":")[-1] + ".html")
-                     if snap else None)
-        if snap_file and snap_file.exists():
-            sha = hashlib.sha256(snap_file.read_bytes()).hexdigest()
-        else:
-            sha = hashlib.sha256(md_bytes).hexdigest()
+        # sha256 = بصمة **الملف الذي سيحمّصه ميزان فعلياً** (= ملف md المذكور
+        # في local_path). الدلالة القديمة كانت «بصمة الملف المصدري» (لقطة
+        # HTML الخام إن وُجدت)، وبوابة السلامة في csv_legal_library_importer
+        # تتحقق من بايتات local_path ⇒ كل وثيقة مزحوفة كانت تُرفض «بصمة غير
+        # مطابقة» (قِيس 2026-09-17: لا صَفْر مُصدَّر من زحف حيّ يمرّ). بصمة
+        # اللقطة تبقى موثقة للاستهلاك الآلي في JSON الجانبي (snapshot_sha256).
+        sha = hashlib.sha256(md_bytes).hexdigest()
         doc_id = (f"law_{doc['year']}_{doc['number']}"
                   if doc["year"] and doc["number"]
-                  else "doc_" + (doc["content_sha256"] or
+                  else "doc_" + (_get(doc, "content_sha256") or
                                  hashlib.sha256(
                                      (doc["doc_id"] or stem).encode()
                                  ).hexdigest())[:8])
@@ -149,17 +175,17 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
         used_ids.add(doc_id)
         rows.append({
             "id": doc_id,
-            "title": doc["title"] or "",
-            "type": "قانون" if (doc["doc_type"] or "") == "law"
-                    else (doc["doc_type"] or ""),
-            "number": doc["number"] if doc["number"] is not None else "",
-            "year": doc["year"] if doc["year"] is not None else "",
+            "title": _get(doc, "title") or "",
+            "type": "قانون" if (_get(doc, "doc_type") or "") == "law"
+                    else (_get(doc, "doc_type") or ""),
+            "number": _get(doc, "number") if _get(doc, "number") is not None else "",
+            "year": _get(doc, "year") if _get(doc, "year") is not None else "",
             "date": "",  # تاريخ الإصدار غير معروف من المنتدى — لا يُختلق
-            "category": BRANCH_AR.get(doc["branch"],
-                                       doc["branch"] or "غير مصنف"),
-            "url": doc["source_url"] or "",
+            "category": BRANCH_AR.get(_get(doc, "branch"),
+                                      _get(doc, "branch") or "غير مصنف"),
+            "url": _get(doc, "source_url") or "",
             "format": "html",
-            "priority": _priority_for(doc["source_credibility"]),
+            "priority": _priority_for(_get(doc, "source_credibility")),
             "status": "crawled",
             "local_path": f"{prefix}markdown/{stem}.md",
             "size_bytes": len(md_bytes),

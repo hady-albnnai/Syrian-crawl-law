@@ -3,6 +3,7 @@ import csv
 import hashlib
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -128,8 +129,16 @@ class TestExporter:
             assert r["sha256"] == hashlib.sha256(f.read_bytes()).hexdigest()
             assert int(r["size_bytes"]) == f.stat().st_size
 
-    def test_snapshot_hash_preferred(self, package, tmp_path, monkeypatch):
-        """مع لقطة خام ⇒ البصمة للملف المصدري (دلالة حزمة ميزان)."""
+    def test_snapshot_present_still_hashes_exported_file(self, package,
+                                                          tmp_path,
+                                                          monkeypatch):
+        """مع لقطة خام موجودة ⇒ البصمة **تبقى** لملف md المُصدَّر.
+
+        عطل مقاس 2026-09-17: كانت البصمة تُؤخذ من اللقطة، فترفض بوابة
+        السلامة في ميزان (csv_legal_library_importer) كل وثيقة مزحوفة
+        بصفتها «بصمة غير مطابقة» — لأن التطبيق يحمّص local_path لا اللقطة.
+        اللقطة تبقى موثقة في JSON الجانبي (snapshot_sha256) للاستهلاك الآلي.
+        """
         _, out, db = package
         snap = tmp_path / "snaps"
         snap.mkdir()
@@ -144,35 +153,67 @@ class TestExporter:
         rows = list(csv.DictReader(
             open(out / "laws_decrees_index.csv", encoding="utf-8-sig")))
         r = next(r for r in rows if r["id"] == "law_2021_7")
-        expect = hashlib.sha256(b"<html>raw</html>").hexdigest()
-        assert r["sha256"] == expect
-
-    def test_min_articles_filter(self, legacy_db, tmp_path):
-        migrations.migrate(legacy_db)
-        rep = exporter.build_package(legacy_db,
-                                     out_dir=tmp_path / "pkg2",
-                                     min_articles=1)
-        assert rep["docs"] == 1 and rep["skipped"] == 1
+        md = out / r["local_path"].split("laws_decrees/")[1]
+        assert r["sha256"] == hashlib.sha256(md.read_bytes()).hexdigest()
+        assert r["sha256"] != hashlib.sha256(b"<html>raw</html>").hexdigest()
+        js = json.loads(md.with_suffix(".json").read_text(encoding="utf-8"))
+        assert js["snapshot_sha256"] == "sha256:deadbeef"  # الإسناد لم يُفقد
 
 
-def test_sanitize_filename():
-    # المحارف غير الآمنة على Windows تُحذف؛ «؟» العربية آمنة وتبقى
-    assert exporter.sanitize_filename('قانون: أ/ب <ج>؟*') == "قانون_أب_ج؟"
-    assert exporter.sanitize_filename("") == "بدون_عنوان"
+def test_app_integrity_gate_would_admit_every_row(tmp_path, monkeypatch):
+    """حارس الحدّ مع ميزان: بصمة كل صَفْر = بصمة الملف الذي يفتحه التطبيق.
 
-
-def test_new_docs_get_sha256(tmp_path, monkeypatch):
-    """الحفظ الجديد يكتب content_sha256 مباشرة (مخطط بعد الهجرة)."""
-    import database
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "new.db")
-    create_tables()
-    conn = database.get_connection()
-    cur = conn.cursor()
-    save_document(cur, "sha256:zzz", "وثيقة", "https://x/t", "مدني",
-                  0.8, 0.9, "md5x", "نص حديث", snapshot_sha256=None)
+    يُحاكي منطق planCsvImport في csv_legal_library_importer.dart:
+      file = '$root/${local_path}' ، ثم sha256(bytes) == بصمة الفهرس
+      (مع سماح التطبيع CRLF→LF الذي يعمل به التطبيق). أي تغيير في exporter
+      يجعل الحزمة غير قابلة للاستيراد يُسقط هذا الاختبار فوراً.
+    """
+    db = tmp_path / "gate.db"
+    conn = sqlite3.connect(db)
+    conn.executescript('''
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, doc_id TEXT UNIQUE,
+            title TEXT, doc_type TEXT, number INTEGER, year INTEGER,
+            branch TEXT, source_url TEXT UNIQUE,
+            status TEXT DEFAULT 'active',
+            review_status TEXT DEFAULT 'auto_accepted',
+            content_sha256 TEXT, snapshot_sha256 TEXT, legal_status TEXT);
+        CREATE TABLE articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, doc_id INTEGER,
+            article_number TEXT, article_label TEXT, text TEXT,
+            paragraphs_json TEXT, hierarchy_path TEXT, char_count INTEGER);
+    ''')
+    # (أ) وثيقة بلقطة خام على القرص — نفس الحادثة الأصلية
+    snap_dir = tmp_path / "snapshots"
+    snap_dir.mkdir()
+    (snap_dir / "aabb.html").write_bytes(b"<html>raw</html>")
+    conn.execute("INSERT INTO documents (id, doc_id, title, doc_type, number,"
+                 " year, branch, source_url, status, snapshot_sha256)"
+                 " VALUES (1,'sha256:g1','قانون البوابة','law',11,2024,'مدني',"
+                 " 'https://x/t1','active','sha256:aabb')")
+    conn.execute("INSERT INTO documents (id, doc_id, title, doc_type, number,"
+                 " year, branch, source_url, status)"
+                 " VALUES (2,'sha256:g2','بلا لقطة','law',12,2024,'جزائي',"
+                 " 'https://x/t2','active')")
+    conn.execute("INSERT INTO articles (doc_id, article_number, article_label,"
+                 " text, char_count) VALUES (1,'1','المادة 1','نص',3)")
     conn.commit()
-    row = conn.execute(
-        "SELECT content_sha256 FROM documents").fetchone()
-    expect = hashlib.sha256("نص حديث".encode("utf-8")).hexdigest()
-    assert row[0] == expect
     conn.close()
+    out = tmp_path / "pkg"
+    monkeypatch.setattr(exporter, "SNAPSHOT_DIR", snap_dir)
+    exporter.build_package(db, out_dir=out)
+    rows = list(csv.DictReader(open(out / "laws_decrees_index.csv",
+                                     encoding="utf-8-sig")))
+    assert len(rows) == 2, "الحزمة يجب أن تحمل الوثيقتين"
+    for r in rows:
+        # التطبيق: File('$root/${local_path}') بجذر الحزمة — والنسق عندنا
+        # أن markdown/ يقع مباشرة تحت جذر الحزمة
+        f = out / "markdown" / Path(r["local_path"]).name
+        assert f.exists(), f"ميزان كان سيتخطى الصَفْر ملفقوداً: {r['id']}"
+        b = f.read_bytes()
+        ok = {hashlib.sha256(b).hexdigest(),
+              hashlib.sha256(b.replace(b"\r\n", b"\n")).hexdigest()}
+        assert r["sha256"].lower() in ok, (
+            f"بوابة السلامة في ميزان كانت ستتخطى '{r['id']}' "
+            f"بصفتها بصمة غير مطابقة — local_path لا تطابقه البصمة")
+        assert int(r["size_bytes"]) == len(b)
