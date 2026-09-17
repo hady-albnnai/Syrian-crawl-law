@@ -79,3 +79,20 @@ def test_no_duplicate_entries_in_pyproject():
 def test_pyproject_names_exist_as_files():
     for mod in _pyproject_modules():
         assert (ROOT / f"{mod}.py").exists(), f"py-module وهمي: {mod}"
+
+
+def test_frozen_smoke_covers_every_screen_and_contract_modules():
+    """دخان النسخة المجمَّدة بـ --smoke-all وحده يكفي: --smoke يبني النافذة
+    فقط، فتبقى شاشة الحزمة (وبوابتها) بلا اختبار في dist — وهو مكان العطل."""
+    for f in ("packaging/build_linux.sh", "packaging/build_windows.bat"):
+        text = (ROOT / f).read_text(encoding="utf-8")
+        assert "--smoke-all" in text, f"{f} يدخّن بـ --smoke وحده"
+
+
+def test_smoke_probe_returns_nonzero_on_missing_contract_module():
+    """الفحص صريح: استيراد وحدات العقد داخل --smoke-all لا يُبتلع."""
+    src = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+    block = src[src.index('"--smoke-all" in sys.argv'):]
+    for mod in ("verify_package", "package_manifest", "mizan_injector"):
+        assert mod in block, mod
+    assert "return 3" in block[:block.index("return 0")], "لا فشل صريح عند الفقد"

@@ -398,3 +398,21 @@ class TestMizanInjectionUI:
         assert "أُلغي الحقن" in p.status.text()
         assert not (root / "content" / "legal_library" / "laws_decrees" /
                     "laws_decrees_index.csv").exists()
+
+
+def test_smoke_fails_loudly_when_a_contract_module_is_missing(app, ui_db,
+                                                               monkeypatch):
+    """إثبات أن الفحص ليس زينة: لو غابت وحدة عقد (كما في تغليف ناقص) يجب
+    أن يرجع الدخان برمز فشل، لا أن يمرّ والشاشة تعرض النص وحدها."""
+    import builtins
+    import sys
+    import app.main as m
+    monkeypatch.setattr(sys, "argv", ["app.main", "--smoke", "--smoke-all"])
+    real = builtins.__import__
+
+    def fake(name, *a, **k):
+        if name == "package_manifest":
+            raise ImportError("فجوة تغليف مُحاكاة")
+        return real(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", fake)
+    assert m.main() == 3, "الدخان مرّ رغم فقدان وحدة عقد — الفحص لا يعمل"

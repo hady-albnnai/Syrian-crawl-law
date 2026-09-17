@@ -13,5 +13,5 @@ python3 -m PyInstaller packaging/mizan-harvester.spec --noconfirm
 
 BIN=dist/mizan-harvester/mizan-harvester
 chmod +x "$BIN"
-"$BIN" --smoke
+"$BIN" --smoke --smoke-all
 echo "✔ build_linux: الحزمة في dist/mizan-harvester/ — دخّنت بنجاح"

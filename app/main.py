@@ -115,6 +115,17 @@ def main() -> int:
                 for _ in range(3):
                     app.processEvents()
                 print(f"  ✓ {name} — {type(w).__name__}")
+            # النسخة المجمَّدة تُخبئ هذا العطل: الشاشة تعرض نص الاستثناء
+            # بدل أن تسقط، فيمرّ بناءٌ ناقص على أنه ناجح. لذلك نفحصها هنا
+            # بفشل صريح — وهي العلة التي كشفها حارس التغليف.
+            for mod in ("verify_package", "package_manifest", "mizan_injector"):
+                try:
+                    __import__(mod)
+                except Exception as exc:  # noqa: BLE001 — نريد الرقمنة لا الاستثناء
+                    print(f"✗ وحدة عقد مفقودة في هذه النسخة: {mod} "
+                          f"({type(exc).__name__}: {exc})")
+                    return 3
+            print("SMOKE OK — وحدات العقد (بوابة + مانيفست + حقن) مستورَدة")
             tabs = win.review.tabs.count()
             assert tabs == 3, f"توقعنا 3 تبويبات في شاشة المراجعة، لا {tabs}"
             print(f"SMOKE OK — شاشة المراجعة: {tabs} تبويبات؛ "

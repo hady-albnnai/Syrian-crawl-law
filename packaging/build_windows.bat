@@ -8,7 +8,7 @@ python -m pip install --quiet pyinstaller || exit /b 1
 python -m PyInstaller packaging\mizan-harvester.spec --noconfirm || exit /b 1
 
 REM دخان المجمد قبل التغليف
-dist\mizan-harvester\mizan-harvester.exe --smoke || exit /b 1
+dist\mizan-harvester\mizan-harvester.exe --smoke --smoke-all || exit /b 1
 
 where iscc >nul 2>&1
 if %errorlevel%==0 (
