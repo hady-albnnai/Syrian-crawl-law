@@ -358,6 +358,53 @@ def cmd_gaps(_args):
     return 0
 
 
+def cmd_wayback_crawl(args):
+    """زحف الأصول المؤرشفة (طبقة 1) — يرقّي المتبنّى تلقائياً (قرار ج)."""
+    from database import create_tables, get_connection
+    from urls import canonicalize_url
+    import crawl_queue as taskqueue
+    import crawler
+    import wayback_source
+    from hf_syria_laws import load_laws_with_articles
+    create_tables()
+    conn = get_connection()
+    urls, seen = [], set()
+    for law, _arts in load_laws_with_articles():
+        u = law.get("source_url")
+        if not u or u in seen or u.lower().split("?")[0].endswith(".pdf"):
+            continue  # PDF مؤجل — يحتاج مسار PDF كاملاً
+        seen.add(u)
+        urls.append(u)
+    if args.limit:
+        urls = urls[:args.limit]
+    log.info(f"أهداف Wayback: {len(urls)} رابطاً أصلياً (روابط PDF مؤجلة)")
+
+    stats = {"fetched": 0, "no_snapshot": 0, "failed": 0,
+             "saved": 0, "skipped": 0}
+    for i, url in enumerate(urls, 1):
+        res = wayback_source.as_pipeline_result(url)
+        if not res.get("ok"):
+            err = res.get("error", "wayback_failed")
+            key = "no_snapshot" if err == "wayback_no_snapshot" else "failed"
+            stats[key] += 1
+            log.info(f"[{i}/{len(urls)}] ✗ {err} ← {url[:65]}")
+            continue
+        taskqueue.enqueue(conn, url, wayback_source.SECTION, "topic")
+        row = conn.execute("SELECT id FROM crawl_tasks WHERE url=?",
+                           (canonicalize_url(url),)).fetchone()
+        task = {"id": row["id"], "url": url,
+                "section": wayback_source.SECTION, "kind": "topic"}
+        cstats = {"pages": 1, "docs": 0, "articles": 0,
+                  "skipped": 0, "failures": 0}
+        crawler._handle_topic(conn, task, res["html"], args.dry, cstats)
+        stats["fetched"] += 1
+        stats["saved"] += cstats["docs"]
+        stats["skipped"] += cstats["skipped"]
+    log.info(f"خلاصة Wayback: {stats}")
+    conn.close()
+    return 0
+
+
 def cmd_dedup_existing(_args):
     """دمج الوثائق النشطة المتصادمة بالهوية (تصادمات ما قبل الهوية)."""
     from database import create_tables, get_connection
@@ -554,6 +601,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry", action="store_true",
                     help="عرض ما سيُستورد دون حفظ")
     sp.set_defaults(fn=cmd_hf_import)
+
+    sp = sub.add_parser("wayback-crawl",
+                        help="ف٢: زحف الأصول المؤرشفة عبر Wayback "
+                             "(طبقة 1 — يرقّي المتبنّى من HF تلقائياً)")
+    sp.add_argument("--limit", type=int, default=None,
+                    help="حصر العدد (تجربة أولى مثلاً 5)")
+    sp.add_argument("--dry", action="store_true",
+                    help="تشغيل تجريبي بلا حفظ")
+    sp.set_defaults(fn=cmd_wayback_crawl)
 
     sp = sub.add_parser("dedup-existing",
                         help="ف٢: دمج الوثائق النشطة المتصادمة بالهوية "
