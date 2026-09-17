@@ -12,9 +12,9 @@
 import threading
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPlainTextEdit,
-                               QProgressBar, QPushButton, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel,
+                               QPlainTextEdit, QProgressBar, QPushButton,
+                               QVBoxLayout, QWidget)
 
 from app import core_data as md
 from ._common import Collapsible, card, page_header
@@ -22,13 +22,31 @@ from ._common import Collapsible, card, page_header
 DEFAULT_MAX_PAGES = 60
 
 
-def _stat(value: str, label: str) -> QWidget:
+def _stat_card(label: str) -> QWidget:
     c, v = card()
-    val = QLabel(value); val.setProperty("class", "statValue")
+    val = QLabel("—"); val.setObjectName("value")
+    val.setProperty("class", "statValue")
     lab = QLabel(label); lab.setProperty("class", "statLabel")
     val.setAlignment(Qt.AlignCenter); lab.setAlignment(Qt.AlignCenter)
     v.addWidget(val); v.addWidget(lab)
     return c
+
+
+def _git_head() -> str:
+    """الفرع+الالتزام الحاليان — درس موثق في الدفتر: تشغيل نسخة قديمة
+    أرسل 7,000+ طلب زائد وثبّت حجبا كان قابلاً للتفادي. الشاشة تعرضه
+    الآن بدل أن يُنسى قبل كل جلسة."""
+    import subprocess
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    try:
+        out = subprocess.run(["git", "log", "--oneline", "-1"], cwd=root,
+                             capture_output=True, text=True, timeout=4)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()[:60]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
 
 
 class _AutopilotWorker(QThread):
@@ -36,10 +54,16 @@ class _AutopilotWorker(QThread):
     بأمر `cli autopilot`، خارج خيط الواجهة كي لا تتجمد النافذة."""
     finished_run = Signal(dict)
 
-    def __init__(self, max_pages, stop_event, parent=None):
+    def __init__(self, max_pages, stop_event, parent=None, *,
+                 auto_approve: bool = False, use_search: bool = True):
         super().__init__(parent)
         self.max_pages = max_pages
         self.stop_event = stop_event
+        # auto_approve=False افتراضياً: الاعتماد التلقائي للمصادر كان
+        # **مُمرَّراً True بلا خيار وبلا إعلام** (قِيس في التدقيق)، بينما
+        # السياسة الموثقة أن اعتماد المصدر قرار المالك. الآن الزر في الشاشة.
+        self.auto_approve = auto_approve
+        self.use_search = use_search
 
     def run(self):
         stats = {}
@@ -49,8 +73,9 @@ class _AutopilotWorker(QThread):
             create_tables()
             conn = get_connection()
             try:
-                stats = run_discovery(conn, auto_approve=True,
-                                      use_search=True, max_evaluate=12)
+                stats = run_discovery(conn, auto_approve=self.auto_approve,
+                                      use_search=self.use_search,
+                                      max_evaluate=12)
             finally:
                 conn.close()
             if not self.stop_event.is_set():
@@ -120,7 +145,32 @@ class HomePage(QWidget):
         root.addWidget(adv)
 
         self.stats_row = QHBoxLayout(); self.stats_row.setSpacing(16)
+        self.stat_cards = {}
+        for key, label in (("done", "منجزة"), ("review", "تحتاج مراجعة"),
+                           ("queued", "منتظرة"), ("failed", "فاشلة"),
+                           ("docs", "وثائق"), ("articles", "مواد")):
+            c = _stat_card(label)
+            self.stat_cards[key] = c.findChild(QLabel, "value")
+            self.stats_row.addWidget(c)
         root.addLayout(self.stats_row)
+
+        policy_card, pol = card()
+        prow = QHBoxLayout(); prow.setSpacing(18)
+        self.auto_approve_box = QCheckBox(
+            "اعتماد المصادر المكتشفة تلقائياً (بوابة ≥70 و≥3 مواد)")
+        self.auto_approve_box.setToolTip(
+            "إبقُه مطفأً إن أردت أن تعتمد كل مصدر بيدك: sources approve <id> — "
+            "القرار أصلاً لك حسب السياسة الموثقة")
+        self.search_box = QCheckBox("توليد مرشحين بالبحث (DuckDuckGo/Bing)")
+        self.search_box.setChecked(True)
+        prow.addWidget(self.auto_approve_box)
+        prow.addWidget(self.search_box)
+        prow.addStretch()
+        pol.addLayout(prow)
+        self.meta_label = QLabel(""); self.meta_label.setProperty("class", "hint")
+        self.meta_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        pol.addWidget(self.meta_label)
+        root.addWidget(policy_card)
 
         prog_card, pv = card()
         top = QHBoxLayout()
@@ -139,8 +189,10 @@ class HomePage(QWidget):
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(200)
         log_section.addWidget(self.log)
-        root.addWidget(log_section, 1)
-        root.addStretch()
+        # الشدّ داخل جسم القابلية للطي: عند الطي يبقى الفارغ تحت البطاقات
+        # (لا فجوة وسط الصفحة)، وعند التوسّع يملأ السجل المتاح.
+        log_section.body_layout.addStretch()
+        root.addWidget(log_section)
 
         self.refresh()
         self._timer = QTimer(self)
@@ -148,29 +200,55 @@ class HomePage(QWidget):
         self._timer.start(4000)
 
     def refresh(self):
+        try:
+            self._refresh_inner()
+        except Exception as exc:  # noqa: BLE001 — الواجهة تُبلِّغ ولا تنهار
+            self.status_label.setText(f"⚠︎ تعذّر قراءة الحالة: "
+                                      f"{type(exc).__name__}: {exc}")
+
+    def _refresh_inner(self):
         s = md.RUN_STATS or {}
         q = s.get("queue", {})
-        done = q.get("success", 0) + q.get("blocked", 0) + q.get("failed", 0)
-        total = done + q.get("queued", 0) + q.get("running", 0)
-        while self.stats_row.count():
-            it = self.stats_row.takeAt(0)
-            if it.widget():
-                it.widget().deleteLater()
-        for val, lab in [(str(done), "مهام منجزة"),
-                         (str(q.get("queued", 0)), "في الطابور"),
-                         (str(s.get("docs", 0)), "وثائق محفوظة"),
-                         (str(s.get("articles", 0)), "مواد مستخرجة"),
-                         (str(q.get("needs_review", 0)), "تحتاج مراجعة")]:
-            self.stats_row.addWidget(_stat(val, lab))
+        # لا دمج فشل مع نجاح: النسخة القديمة كانت تحسب failed داخل
+        # «مهام منجزة» فتصل النسبة 100٪ حتى لو انهار المصدر كله
+        # (قياس قاعدة المالك: 542 نجاح + 8,501 فشل = «9,044 منجزة»).
+        done = q.get("success", 0)
+        failed = q.get("failed", 0)
+        total = sum(q.values())
+        for key, val in (("done", done), ("review", q.get("needs_review", 0)),
+                         ("queued", q.get("queued", 0) + q.get("running", 0)),
+                         ("failed", failed), ("docs", s.get("docs", 0)),
+                         ("articles", s.get("articles", 0))):
+            lab = self.stat_cards.get(key)
+            if lab is not None:
+                lab.setText(f"{val:,}")
         pct = int(100 * done / total) if total else 0
         self.bar.setValue(pct)
-        self.pct.setText(f"{pct}% من {total} مهمة")
+        self.pct.setText(f"{pct}% نجاح من {total:,} مهمة"
+                         + (f" — {failed:,} فاشلة" if failed else ""))
+        run = s.get("last_run") or {}
+        meta = []
+        try:
+            import config
+            meta.append(f"الإصدار v{config.VERSION}")
+        except Exception:  # noqa: BLE001
+            pass
+        commit = _git_head()
+        if commit:
+            meta.append(commit)
+        if run:
+            meta.append(f"آخر دورة #{run.get('id')} [{run.get('mode')}] — "
+                        f"{run.get('pages', 0)} صفحة | "
+                        f"{run.get('docs', 0)} وثيقة | "
+                        f"{run.get('failures', 0)} إخفاق")
+            meta.append("قاطع الدورة: 12 إخفاق جلب متتالٍ يوقفها (config)")
+        self.meta_label.setText("  ·  ".join(meta))
         self._reload_log()
         needs_review = q.get("needs_review", 0)
         if not (self.worker and self.worker.isRunning()):
             self.results_btn.setEnabled(bool(done or s.get("docs", 0)))
             if needs_review:
-                self.results_btn.setText(f"نتائج الزحف ({needs_review} تحتاج مراجعة)  ◀")
+                self.results_btn.setText(f"نتائج الزحف ({needs_review:,} تحتاج مراجعة)  ◀")
             else:
                 self.results_btn.setText("نتائج الزحف  ◀")
 
@@ -194,7 +272,9 @@ class HomePage(QWidget):
         self.status_label.setText(
             "🤖 جارٍ اكتشاف المصادر والزحف تلقائياً — قد يستغرق دقائق…")
         self.worker = _AutopilotWorker(self.spin.value(), self.stop_event,
-                                       parent=self)
+                                       parent=self,
+                                       auto_approve=self.auto_approve_box.isChecked(),
+                                       use_search=self.search_box.isChecked())
         self.worker.finished_run.connect(self._run_finished)
         self.worker.start()
 

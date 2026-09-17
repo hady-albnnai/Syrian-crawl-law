@@ -9,12 +9,15 @@ from pathlib import Path
 from app.main import MainWindow, build_app
 
 OUT = Path(__file__).parent.parent / "docs" / "screenshots"
-NAMES = ["01-home", "02-review"]
+# دفعة 3: الحزمة شاشة قائمة بذاتها — يجب أن تُصوَّر هي أيضاً (البوابة والعدادات
+# هي ما يراه المالك قبل أن يرفع شيئاً إلى الميزان).
+NAMES = ["01-home", "02-review", "03-package"]
 
 
 def main() -> int:
     app = build_app()
     win = MainWindow()
+    win.resize(1360, 860)
     win.show()
     OUT.mkdir(parents=True, exist_ok=True)
     for i, name in enumerate(NAMES):

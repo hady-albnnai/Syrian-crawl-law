@@ -30,7 +30,7 @@ jobs:
           python -m cli stats
 
       - name: GUI smoke (offscreen)
-        run: QT_QPA_PLATFORM=offscreen python -m app.main --smoke
+        run: QT_QPA_PLATFORM=offscreen python -m app.main --smoke --smoke-all
 
   package-linux:
     runs-on: ubuntu-latest
