@@ -305,3 +305,96 @@ def test_window_goto_three_pages(app, ui_db, monkeypatch):
         assert type(win.stack.currentWidget()).__name__ == cls, i
     win.goto(99)                 # لا انهيار عند فهرس خارج المدى
     assert type(win.stack.currentWidget()).__name__ == "HomePage"
+
+
+class TestMizanInjectionUI:
+    """شاشة الحزمة: حقن بمعاينة وتأكيد — لا نسخة عمياء فوق فهرس ميزان."""
+
+    def _built(self, app, ui_db, monkeypatch):
+        from config import DB_PATH
+        from exporter import build_package
+        from app import core_data
+        from app.pages.package_page import PackagePage
+        pkg = ui_db.parent / "pkg"
+        monkeypatch.setattr(core_data, "PACKAGE_DIR", pkg)
+        build_package(db_path=DB_PATH, out_dir=pkg)
+        p = PackagePage()
+        p.out_dir.setText(str(pkg))
+        return p, pkg
+
+    def test_inject_button_and_root_field_exist(self, app, ui_db, monkeypatch):
+        p, _pkg = self._built(app, ui_db, monkeypatch)
+        assert "حقن في ميزان" in p.copy_btn.text()
+        assert "دمج" in p.copy_btn.text()
+        # «النسخ» الذي كان يغطّي فهرس ميزان لم يعد فعلاً في الشاشة
+        assert "نسخ الحزمة إلى مجلد" not in p.copy_btn.text()
+        assert hasattr(p, "mizan_root") and hasattr(p, "pick_root_btn")
+
+    def test_root_field_follows_config_not_an_invented_path(self, app, ui_db,
+                                                              monkeypatch):
+        import config
+        p, _pkg = self._built(app, ui_db, monkeypatch)
+        monkeypatch.setattr(config, "MIZAN_ROOT", "/nonexistent/mizan")
+        assert p._default_mizan_root() == "/nonexistent/mizan"
+        monkeypatch.setattr(config, "MIZAN_ROOT", "")
+        assert p._default_mizan_root() == "", "مسار افتراضي مخبّأ ممنوع"
+
+    def test_inject_refuses_red_gate_without_writing(self, app, ui_db,
+                                                       monkeypatch, tmp_path):
+        from app.pages import package_page as pp
+        from PySide6.QtWidgets import QMessageBox
+        p, pkg = self._built(app, ui_db, monkeypatch)
+        root = tmp_path / "mizan"
+        (root / "content" / "legal_library" / "laws_decrees").mkdir(
+            parents=True)
+        # بوابة حمراء عمداً: تلاعب بملف بعد التوليد
+        victim = next((pkg / "markdown").glob("*.md"))
+        victim.write_bytes(victim.read_bytes() + b"\nx")
+        asked = []
+        monkeypatch.setattr(QMessageBox, "warning",
+                            staticmethod(lambda *a, **k: asked.append(a) or 0))
+        p.mizan_root.setText(str(root))
+        p._inject_into_mizan()
+        assert asked, "لم تُعرض رسالة الرفض"
+        assert "البوابة حمراء" in str(asked[0]) or "حمراء" in p.status.text()
+        assert not (root / "content" / "legal_library" / "laws_decrees" /
+                    "laws_decrees_index.csv").exists(), "كتب رغم الرفض!"
+
+    def test_inject_green_path_confirms_then_reports(self, app, ui_db,
+                                                      monkeypatch, tmp_path):
+        from PySide6.QtWidgets import QMessageBox
+        p, pkg = self._built(app, ui_db, monkeypatch)
+        root = tmp_path / "mizan"
+        (root / "content" / "legal_library" / "laws_decrees").mkdir(
+            parents=True)
+        seen = {}
+
+        def fake_question(*a, **k):
+            seen["text"] = a[2] if len(a) > 2 else ""
+            return QMessageBox.Yes
+        monkeypatch.setattr(QMessageBox, "question", staticmethod(fake_question))
+        monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: 0))
+        p.mizan_root.setText(str(root))
+        p._inject_into_mizan()
+        assert "بوابة الحزمة: ✓" in seen.get("text", ""), seen.get("text")
+        assert "حُقن" in p.status.text(), p.status.text()
+        dest = root / "content" / "legal_library" / "laws_decrees"
+        assert (dest / "laws_decrees_index.csv").exists()
+        assert (dest / "mizan_injection_receipt.json").exists()
+
+    def test_cancel_at_confirmation_writes_nothing(self, app, ui_db,
+                                                    monkeypatch, tmp_path):
+        from PySide6.QtWidgets import QMessageBox
+        p, pkg = self._built(app, ui_db, monkeypatch)
+        root = tmp_path / "mizan"
+        (root / "content" / "legal_library" / "laws_decrees").mkdir(
+            parents=True)
+        monkeypatch.setattr(QMessageBox, "question",
+                            staticmethod(lambda *a, **k: QMessageBox.No))
+        monkeypatch.setattr(QMessageBox, "information",
+                            staticmethod(lambda *a, **k: 0))
+        p.mizan_root.setText(str(root))
+        p._inject_into_mizan()
+        assert "أُلغي الحقن" in p.status.text()
+        assert not (root / "content" / "legal_library" / "laws_decrees" /
+                    "laws_decrees_index.csv").exists()

@@ -46,6 +46,8 @@ python -m cli sources list|approve 1|reject 1
 # حزمة ميزان: توليد + بوابة واحدة تُطابق planCsvImport في ميزان
 python -m cli export --out export/content_package     # يكتب المانيفست ويطبع البوابة
 python -m cli verify export/content_package            # فحص حزمة جاهزة بلا إعادة توليد
+python -m cli inject --mizan-root <جذر ميزان> --preview # ماذا سيُحقن (دمج، بلا كتابة)
+python -m cli inject --mizan-root <جذر ميزان>           # الحقن الفعلي: دمج فهرس + ملفات + إيصالية
 
 pytest -q                              # محلي فقط — اختبارات الشبكة مستبعدة افتراضياً
 ```
@@ -53,7 +55,12 @@ pytest -q                              # محلي فقط — اختبارات ا
 بوابة `export` **خروجها 1** إن أخفقت أي فحص (لا يُبنى على مقياس صحيحي)، وكل رقم في
 `mizan_package_manifest.json` مقروء من الحزمة على القرص لا من القاعدة. تفصيل العقد:
 `DELIVERY/PACKAGE-MANIFEST-V2.md`؛ ومواصفة جدول المواد في ميزان (لا تُنفَّذ هنا):
-`DELIVERY/MIZAN-LAW-ARTICLES-SPEC.md`.
+`DELIVERY/MIZAN-LAW-ARTICLES-SPEC.md`. و«الحقن في ميزان» (‏`mizan_injector.py`، وزرّه
+في شاشة الحزمة): **دمج** لا تغطية — يبقي صفوف ميزان التي لا يولّدها الزاحف، يرفض
+بوابة حمراء، يحفظ نسخة مما يبدّله، يقيس الوجهة بعد الكتابة، ويكتب
+`mizan_injection_receipt.json`؛ ولا يلمس قاعدة بيانات ميزان. ما تبقى عند ميزان
+(خطّاف جذر + زرّ استيراد + استبدال `filePath`) موثّق في
+`DELIVERY/MIZAN-INJECTION-HOOKS.md`.
 
 
 السجلات: طرفية + `logs/harvester.log`. لا أسرار في Git (`.env.example`).

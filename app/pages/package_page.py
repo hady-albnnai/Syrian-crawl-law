@@ -65,6 +65,24 @@ class PackagePage(QWidget):
         row.addWidget(self.out_dir, 1)
         av.addLayout(row)
 
+        # جذر ميزان: يُسأل المستخدم ولا يُخترع مسار افتراضي — الكتابة على مستودع
+        # آخر فعل صريح. config.MIZAN_ROOT أو MIZAN_ROOT بالمحيط يملآنه مسبقاً.
+        row2 = QHBoxLayout(); row2.setSpacing(10)
+        row2.addWidget(QLabel("جذر ميزان:"))
+        self.mizan_root = QLineEdit(self._default_mizan_root())
+        self.mizan_root.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.mizan_root.setPlaceholderText(
+            "جذر مستودع lawyer-office2 — المجلد الذي يحوي content/ "
+            "(أو اضبط MIZAN_ROOT في config.py)")
+        row2.addWidget(self.mizan_root, 1)
+        self.pick_root_btn = QPushButton("اختيار المجلد")
+        self.pick_root_btn.setProperty("class", "ghost")
+        self.pick_root_btn.setMinimumWidth(112)
+        self.pick_root_btn.setToolTip("اختر مجلد مستودع ميزان")
+        self.pick_root_btn.clicked.connect(self._pick_mizan_root)
+        row2.addWidget(self.pick_root_btn)
+        av.addLayout(row2)
+
         btns = QHBoxLayout(); btns.setSpacing(10)
         self.build_btn = QPushButton("⟳  توليد الحزمة وقياس بوابتها")
         self.build_btn.setProperty("class", "primary")
@@ -72,9 +90,12 @@ class PackagePage(QWidget):
         self.open_btn = QPushButton("فتح مجلد الحزمة")
         self.open_btn.setProperty("class", "ghost")
         self.open_btn.clicked.connect(self._open_folder)
-        self.copy_btn = QPushButton("نسخ الحزمة إلى مجلد ميزان…")
+        self.copy_btn = QPushButton("⇩  حقن في ميزان (فحص ثم دمج)")
         self.copy_btn.setProperty("class", "ghost")
-        self.copy_btn.clicked.connect(self._copy_to_mizan)
+        self.copy_btn.setToolTip(
+            "لا ينسخ فوق فهرسهم: يدمج صفوفه مع صفوفك، ويطلب بوابة خضراء، "
+            "ويكتب إيصالية بما جرى")
+        self.copy_btn.clicked.connect(self._inject_into_mizan)
         btns.addWidget(self.build_btn); btns.addWidget(self.open_btn)
         btns.addWidget(self.copy_btn); btns.addStretch()
         av.addLayout(btns)
@@ -199,52 +220,88 @@ class PackagePage(QWidget):
         except OSError as exc:
             self.status.setText(f"✗ تعذّر فتح المجلد: {exc} — المسار: {p}")
 
-    def _copy_to_mizan(self) -> None:
-        """نسخ الحزمة إلى نسخة محلية من ميزان بعد تأكيد صريح.
+    @staticmethod
+    def _default_mizan_root() -> str:
+        try:
+            from config import MIZAN_ROOT
+            return MIZAN_ROOT or ""
+        except Exception:  # noqa: BLE001 — الإعداد اختياري
+            return ""
 
-        لا مسار افتراضي مخبّأ ولا كتابة صامتة على مستودع آخر: المستخدم يدخل
-        الجذر بنفسه، والنسخ لا يلمس شيئاً خارج
-        `content/legal_library/laws_decrees/`.
+    def _pick_mizan_root(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        d = QFileDialog.getExistingDirectory(
+            self, "اختر جذر مستودع ميزان (المجلد الذي يحوي content/)",
+            self.mizan_root.text().strip() or ".")
+        if d:
+            self.mizan_root.setText(d)
+
+    def _inject_into_mizan(self) -> None:
+        """معاينة → تأكيد صريح → تنفيذ. يرفض بوابة حمراء (بلا خيار صامت).
+
+        الفرق عن «النسخ» الذي حلّ محله: النسخ كان يكتب فهرسنا فوق فهرسهم
+        فيُيتّم صفوفهم (قِيست: 29 صفاً عندهم، منها 12 pdf لا يولّدها الزاحف).
+        الحقن يدمج، ويحدّث ملفاتنا فقط، ويقيس الوجهة بعد الكتابة.
         """
-        import shutil
-        from pathlib import Path
-        from PySide6.QtWidgets import QFileDialog, QMessageBox
-        import verify_package
-
-        src = Path(self.out_dir.text().strip() or "export/content_package")
-        if not (src / "laws_decrees_index.csv").exists():
-            self.status.setText("✗ لا حزمة في المصدر — ولِّدها أولاً")
-            return
-        root = QFileDialog.getExistingDirectory(
-            self, "اختر جذر مستودع lawyer-office2")
+        import mizan_injector as inj
+        from PySide6.QtWidgets import QMessageBox
+        src = self.out_dir.text().strip() or "export/content_package"
+        root = self.mizan_root.text().strip()
         if not root:
+            QMessageBox.information(
+                self, "جذر ميزان", "اختر مجلد مستودع ميزان أولاً — لا مسار "
+                "افتراضي مخبّأ ولا كتابة على مكان مجهول.")
             return
-        if not verify_package.gate_ok(src):
-            n_bad = sum(1 for _m, ok in verify_package.check_package(src) if not ok)
-            if QMessageBox.question(
-                    self, "البوابة حمراء",
-                    f"الحزمة لا تجتاز بوابة ميزان ({n_bad} فحص راسب) — "
-                    "ستتخطى صفوفًا عند الاستيراد.\n\nهل تنسخها رغم ذلك؟") \
-                    != QMessageBox.Yes:
-                self.status.setText("أُلغيت النسخة — صَحِّح البوابة أولاً "
-                                    "(`python -m cli verify`)")
+        try:
+            plan = inj.plan(src, root)
+        except (FileNotFoundError, OSError) as exc:
+            self.status.setText(f"✗ {exc}")
+            QMessageBox.warning(self, "تعذّرت المعاينة", str(exc))
+            return
+        self.copy_btn.setEnabled(False)
+        try:
+            if not plan["gate_green"]:
+                self.status.setText(
+                    "✗ البوابة حمراء — الحقن مرفوض. صحّح الحزمة أولًا "
+                    "(`python -m cli verify`) أو استخدم `cli inject --force`.")
+                QMessageBox.warning(self, "البوابة حمراء",
+                                    "فحوص راسبة:\n• " + "\n• ".join(
+                                        plan["gate_failed"]) +
+                                    "\n\nالحقن بهذا الحالة يعني أن ميزان سيتخطى "
+                                    "صفوفًا بصمت — منعتُه.")
                 return
-        dst = Path(root) / "content" / "legal_library" / "laws_decrees"
-        dst.mkdir(parents=True, exist_ok=True)
-        n = 0
-        for item in ("laws_decrees_index.csv", "mizan_package_manifest.json"):
-            f = src / item
-            if f.exists():
-                shutil.copy2(f, dst / item)
-                n += 1
-        s = src / "markdown"
-        if s.exists():
-            shutil.copytree(s, dst / "markdown", dirs_exist_ok=True)
-            n += sum(1 for _p in s.iterdir())
-        self.status.setText(
-            f"✓ نُسخ {n} عنصراً إلى {dst} — شغّل ميزان (استيراد الفهرس) وراجع "
-            f"تقرير lastImportReport في التطبيق: يجب أن يكون «استُورد "
-            f"{self.cards['rows'].text()}» بلا تخطيات")
+            answer = QMessageBox.question(
+                self, "تأكيد الحقن في ميزان",
+                inj.summarize(plan, for_write=True) +
+                "\n\nيُكتب في الوجهة: ملفات markdown + فهرس مدموج + "
+                "إيصالية. قاعدة بيانات ميزان لا تُمَسّ.")
+            if answer != QMessageBox.Yes:
+                self.status.setText("أُلغي الحقن — لم تُكتب أي بايتات")
+                return
+            rec = inj.apply(src, root, prefetch=plan)
+            v = rec["verify_our_rows"]
+            head = (f"✓ حُقن: {rec['rows']['added']} صفاً جديداً | "
+                    f"{rec['files_written']} ملف | فهرس بعد الحقن "
+                    f"{rec['rows']['index_rows_after']} صفاً")
+            tail = (" | ⚠︎ قياس الوجهة: " + str(v["missing"][:3]) + str(
+                v["sha_mismatch"][:3])) if not v["ok"] else ""
+            note = ""
+            if rec["rows"]["updated_same_path"]:
+                note = (f" — {rec['rows']['updated_same_path']} وثيقة معدَّلة "
+                        f"بنفس filePath ستُتخطى عند استيراد ميزان؛ انظر "
+                        f"{inj.UPDATE_PLAN_NAME}")
+            extra = ("\n\nما على ميزان أن يفعله: "
+                     + rec["next_step_in_mizan"]) if rec.get(
+                         "next_step_in_mizan") else ""
+            self.status.setText(head + tail + note + extra)
+            QMessageBox.information(self, "تمّ الحقن",
+                                    head.replace(" | ", "\n") + note
+                                    .replace(" — ", "\n") + extra)
+        except Exception as exc:  # noqa: BLE001 — الشاشة تعرض العطل ولا تنهار
+            self.status.setText(f"✗ تعذّر الحقن: {type(exc).__name__}: {exc}")
+        finally:
+            self.copy_btn.setEnabled(True)
+            self.refresh()
 
     def _back(self) -> None:
         if self.on_back:

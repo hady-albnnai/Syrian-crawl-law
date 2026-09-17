@@ -310,6 +310,13 @@ def create_directories():
         os.makedirs(d, exist_ok=True)
     log.info(f"[{datetime.now().strftime('%H:%M:%S')}] تم إنشاء/التأكد من وجود مجلدات المشروع")
 
+# ====================== حقن الحزمة في ميزان (دفعة 4) ======================
+# جذر مستودع lawyer-office2 على هذا الجهاز — المجلد الذي يحوي content/ مباشرة،
+# لأن ميزان يحلّل `File('$root/$local_path')` بجذر تشغيل البرنامج
+# (legal_library_repository.dart:61 → root='.'). لا مسار افتراضي مخبّأ: القيمة
+# الفارغة تعني «اسأل المستخدم»، وتُمرَّر من الـCLI بـ--mizan-root أو بالمحيط.
+MIZAN_ROOT = os.environ.get("MIZAN_ROOT", "").strip()
+
 # ====================== تشغيل الإعدادات ======================
 if __name__ == "__main__":
     create_directories()

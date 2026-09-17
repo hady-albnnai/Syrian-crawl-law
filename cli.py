@@ -178,6 +178,46 @@ def cmd_verify_package(args):
     return 0 if all(bool(ok) for _m, ok in checks) else 1
 
 
+def cmd_inject(args):
+    """حقن الحزمة في جذر ميزان: دمج فهرس، نسخ ملفات، إيصالية — بلا لمس DBهم."""
+    import mizan_injector as inj
+    from config import MIZAN_ROOT
+    args.mizan_root = args.mizan_root or MIZAN_ROOT
+    if not args.mizan_root:
+        log.error("يلزم --mizan-root <جذر مستودع lawyer-office2> (المجلد الذي "
+                  "يحتوي content/)، أو اضبط MIZAN_ROOT في config.py/المحيط")
+        return 2
+    try:
+        plan = inj.plan(args.pkg, args.mizan_root,
+                        replace_index=args.replace_index)
+    except FileNotFoundError as exc:
+        log.error(str(exc))
+        return 2
+    print(inj.summarize(plan, for_write=not args.preview))
+    if args.preview:
+        return 0
+    try:
+        rec = inj.apply(args.pkg, args.mizan_root,
+                        replace_index=args.replace_index,
+                        allow_red_gate=args.force, prefetch=plan)
+    except inj.GateError as exc:
+        log.error(str(exc))
+        return 1
+    v = rec["verify_our_rows"]
+    log.info(f"حُقن: +{rec['rows']['added']} صفاً | {rec['files_written']} ملف "
+             f"| فهرس بعد الحقن {rec['rows']['index_rows_after']} صفًّا "
+             f"| الإيصالية: {rec['dest']}/{inj.RECEIPT_NAME}")
+    if not v["ok"]:
+        log.error(f"✗ قياس الوجهة لم يطابق: مفقود {v['missing'][:5]} "
+                  f"وبصمة مختلفة {v['sha_mismatch'][:5]}")
+        return 1
+    if rec["rows"]["updated_same_path"]:
+        log.warning(f"⚠︎ {rec['rows']['updated_same_path']} وثيقة معدَّلة بنفس "
+                    f"filePath: ميزان سيتخطاها — نفّذ «استبدال» عنده "
+                    f"({inj.UPDATE_PLAN_NAME})")
+    return 0
+
+
 def cmd_stats(_args):
     from database import get_connection
     conn = get_connection()
@@ -707,6 +747,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("pkg", nargs="?", default="export/content_package",
                     help="مجلد الحزمة (يحتوي laws_decrees_index.csv وmarkdown/)")
     sp.set_defaults(fn=cmd_verify_package)
+
+    sp = sub.add_parser("inject",
+                        help="حقن حزمة جاهزة في جذر ميزان (دمج فهرس + ملفات + إيصالية)")
+    sp.add_argument("pkg", nargs="?", default="export/content_package",
+                    help="مجلد الحزمة المولَّد بـ`cli export`")
+    sp.add_argument("--mizan-root", default=None,
+                    help="جذر مستودع lawyer-office2 (يحتوي content/)؛ افتراضياً config.MIZAN_ROOT")
+    sp.add_argument("--preview", action="store_true",
+                    help="احسب واطبع ما سيحدث، بلا كتابة أي بايت")
+    sp.add_argument("--replace-index", action="store_true",
+                    help="استبدل فهرسهم بالكامل بدل الدمج (متلف: يتخلى عن صفوفهم)")
+    sp.add_argument("--force", action="store_true",
+                    help="اسمح بالحقن ولو كانت بوابة الحزمة حمراء (يُسجَّل في الإيصالية)")
+    sp.set_defaults(fn=cmd_inject)
 
     sp = sub.add_parser("seeds", help="عرض دليل البذور المرفق")
     sp.set_defaults(fn=cmd_seeds)

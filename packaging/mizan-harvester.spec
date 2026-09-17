@@ -28,6 +28,14 @@ hiddenimports = collect_submodules("app") + [
     # خطة الاكتشاف الذاتي (self-discovery) — تُستورد كسولاً من core_data
     # وشاشة «الفجوات والتعلّم» — كانت غائبة فتفشل بالنسخة المجمَّدة فقط.
     "law_identity", "dedup", "source_quality", "learning", "gap_analysis",
+    # عقد الحزمة وبوابتها والحقن في ميزان — كلها تُستورد داخل دوال (كسولاً)،
+    # فPyInstaller لا يراها. غيابها كان يجعل البوابة والحقن يفشلان في النسخة
+    # المجمَّدة فقط، والشاشة تبتلع الخطأ وتعرض نصّه بدل أن تسقط.
+    "verify_package", "package_manifest", "mizan_injector", "official_seed",
+    "community_seed", "law_status", "chunker", "source_matrix",
+    # أوامر CLI تُستورد داخل دوالها — كانت غائبة فـ`hf-import` و`wayback-crawl`
+    # يفشلان في النسخة المجمَّدة وحدها (كشفها حارس tests/test_packaging_drift.py)
+    "hf_syria_laws", "wayback_source", "wipo_source", "answer", "search",
     # اعتمادات غير بايثونية التتبع
     "bs4", "lxml", "requests",
 ]
