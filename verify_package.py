@@ -75,6 +75,12 @@ def check_package(package_dir) -> list[tuple[str, bool]]:
     header = [h.strip() for h in raw.decode("utf-8-sig").splitlines()[0].split(",")]
     out.append((f"أعمدة ميزان الأربعة عشر بترتيبها ({len(header)})",
                 header == REQUIRED_COLUMNS))
+    # «بوابة خضراء على حزمة فاضية» كانت كذباً بصمت: قِيس 2026-09-17 أن
+    # `cli export` على قاعدة بلا وثائق طبع «✓ ستُستورد كل الصفوف» وخرج 0،
+    # لأن كل فحوص ما فوق تجري على قائمة صفوف فارغة فتنجح كلها. الحزمة
+    # الفارغة لا تُصدِّر شيئاً، واستيراد ميزان أصلاً يسقط تحت 8 صفوف
+    # (‏`bootstrap()` في csv_legal_library_importer.dart) — فلنجعلها حمراء.
+    out.append((f"الفهرس فيه صفوف تُصدَّر ({len(rows)})", bool(rows)))
     missing, bad_size, bad_sha = [], [], []
     for r in rows:
         f, sha = exported_file_sha256(pkg, r.get("local_path", ""))

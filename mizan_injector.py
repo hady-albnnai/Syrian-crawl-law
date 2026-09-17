@@ -151,6 +151,10 @@ def plan(package_dir, mizan_root, *, replace_index: bool = False) -> dict:
                 files += 1
 
     warnings = []
+    if not ours:
+        warnings.append(
+            "الحزمة بلا صفوف — لا شيء يُحقن: فهرس الحزمة فارغ، وأي كتابة هنا "
+            "ستكون إعادة كتابة لفهرس ميزان بلا مقابل")
     if updated:
         warnings.append(
             f"{len(updated)} وثيقة تغيّر نصّها ومسارها مسجّل عند ميزان: الملفات "
