@@ -122,8 +122,18 @@ class TestPlan:
 
     def test_missing_package_index_raises(self, tmp_path):
         import mizan_injector as inj
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError) as e:
             inj.plan(tmp_path / "nowhere", tmp_path)
+        # مسار مكتوب غلط ≠ حزمة غير مولّدة: التشخيص لازم يفرّق (قيس على ويندوز)
+        assert "غير موجود" in str(e.value)
+
+    def test_existing_folder_without_index_says_so(self, tmp_path):
+        import mizan_injector as inj
+        empty = tmp_path / "pkg_typo"
+        empty.mkdir()
+        with pytest.raises(FileNotFoundError) as e:
+            inj.plan(empty, tmp_path)
+        assert "المجلد موجود لكنه بلا" in str(e.value)
 
     def test_missing_mizan_root_raises(self, pkg, tmp_path):
         import mizan_injector as inj

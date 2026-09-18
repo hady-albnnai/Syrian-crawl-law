@@ -108,9 +108,17 @@ def plan(package_dir, mizan_root, *, replace_index: bool = False) -> dict:
     import verify_package
 
     src = Path(package_dir)
+    # قيس على ميدان ويندوز: خطأ طباعة بمسار الحزمة كان يردّ «ولِّد الحزمة أولاً»
+    # وهو محقّق منها — فتضيع الدقيقة التالية على تشخيص غلط. المجلد المفقود
+    # والمجلد الفاضي حالتان مختلفتان، وكل وحدة إلها سبب مختلف.
+    if not src.exists():
+        raise FileNotFoundError(
+            f"مسار الحزمة غير موجود: {src} — راجع حروف المسار، أو ولِّد الحزمة "
+            f"أولاً (زر «توليد الحزمة» / python -m cli export)")
     if not (src / INDEX_NAME).exists():
         raise FileNotFoundError(
-            f"لا فهرس في {src} — ولِّد الحزمة أولاً (زر «توليد الحزمة»)")
+            f"لا فهرس في {src} — المجلد موجود لكنه بلا {INDEX_NAME}؛ ولِّد "
+            f"الحزمة أولاً (زر «توليد الحزمة»)")
     root = Path(mizan_root)
     if not root.exists():
         raise FileNotFoundError(
