@@ -327,3 +327,55 @@ def test_reidentify_partial_never_overwrites_stored_number(tmp_path,
     row = conn.execute("SELECT number, year FROM documents WHERE id=?",
                        (cur.lastrowid,)).fetchone()
     assert (row["number"], row["year"]) == (99, 2001)  # المحفوظ لا يُمس
+
+
+# ─── تدقيق الـ39 صفاً عند المالك (2026-09-18): الديباجة لا تبدّل محفوظة ───
+
+def test_provenance_marks_where_the_identity_came_from():
+    r = li.extract_law_identity("القانون رقم 17 لعام 2010", "نص.")
+    assert r["provenance"] == "title"
+    r2 = li.extract_law_identity("قانون بلا رقم بالعنوان",
+                                "صدر بالمرسوم التشريعي رقم 148 لعام 1949.")
+    assert r2["provenance"] == "preamble"
+    assert li.extract_law_identity("قانون بلا هوية", "نص بلا هوية")[
+        "provenance"] is None
+
+
+def test_reidentify_does_not_overwrite_saved_identity_from_preamble(
+        tmp_path, monkeypatch):
+    """ regression مقيس على قاعدة المالك: «قانون أصول تسريح العمال الصادر
+    بالمرسوم…» و«المادة 1 ـ قانون السجل العقاري…» بدّلتا هويتهما المحفوظة
+    بمطابقة من الديباجة — لا يُقبل ذلك ما دامت هوية موجودة.
+    """
+    conn = _tmp_db(tmp_path, monkeypatch)
+    _insert(conn, "قانون أصول تسريح العمال الصادر بالمرسوم التشريعي",
+            "القانون رقم 91 لعام 1959، المعدَّل بالمرسوم التشريعي رقم 49 "
+            "لعام 1962.", identity="المرسوم التشريعي:49:1962")
+    stats = li.reidentify_documents(conn)
+    assert stats["kept_existing"] == 1 and stats["updated"] == 0
+    row = conn.execute("SELECT identity_key FROM documents").fetchone()
+    assert row["identity_key"] == "المرسوم التشريعي:49:1962"
+
+
+def test_reidentify_title_correction_still_applies(tmp_path, monkeypatch):
+    """العنوان يصحّح ما أفسدته الديباجة: «قانون الأحداث الجانحين رقم 18 لعام
+    1974» كانت موسومة بمرسوم لاحق ورد في متنّها."""
+    conn = _tmp_db(tmp_path, monkeypatch)
+    _insert(conn, "قانون الأحداث الجانحين رقم 18 لعام 1974",
+            "الملغى بالمرسوم التشريعي رقم 52 لعام 2003.",
+            identity="المرسوم التشريعي:52:2003")
+    stats = li.reidentify_documents(conn)
+    assert stats["updated"] == 1
+    row = conn.execute("SELECT identity_key, number, year FROM documents").fetchone()
+    assert row["identity_key"] == "القانون:18:1974"
+    assert (row["number"], row["year"]) == (18, 1974)
+
+
+def test_reidentify_still_fills_null_identity_from_preamble(tmp_path,
+                                                            monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    _insert(conn, "قانون العقوبات السوري",
+            "صدر بالمرسوم التشريعي رقم 148 لعام 1949 وتعديلاته.",
+            identity=None)
+    stats = li.reidentify_documents(conn)
+    assert stats["gained"] == 1 and stats["kept_existing"] == 0

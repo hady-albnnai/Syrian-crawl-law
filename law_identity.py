@@ -243,6 +243,7 @@ def _accept(m, gap_guard: bool = False) -> dict | None:
 _NO_IDENTITY = {
     "doc_type": None, "law_number": None, "law_year": None,
     "identity_key": None, "identity_confidence": None,
+    "provenance": None,
 }
 
 
@@ -257,12 +258,14 @@ def extract_law_identity(title: str, text: str) -> dict:
     haystacks = [h for h in (title, text[:500] if text else "") if h]
 
     for idx, haystack in enumerate(haystacks):
+        where = "title" if idx == 0 else "preamble"
         lead = _leading_type(haystack) if idx == 0 else None
         for m in LAW_ID_RE.finditer(haystack):
             if idx == 0 and lead and lead != _normalize_type(m.group(1)):
                 continue  # اسم الصك في الصدر غير المطابقة ⇒ المطابقة إحالة
             got = _accept(m, gap_guard=True)
             if got:
+                got["provenance"] = where
                 return got
         if idx == 0:
             # احتياط الصيغة المائلة بلا «رقم» — العنوان حصراً (النص يحمل
@@ -271,6 +274,7 @@ def extract_law_identity(title: str, text: str) -> dict:
             if m:
                 got = _accept(m)
                 if got:
+                    got["provenance"] = where
                     return got
 
     return dict(_NO_IDENTITY)
@@ -297,7 +301,7 @@ def reidentify_documents(conn) -> dict:
         " FROM documents"
     ).fetchall()
     stats = {"gained": 0, "updated": 0, "unchanged": 0, "no_match": 0,
-             "partial": 0}
+             "partial": 0, "kept_existing": 0}
     for r in rows:
         ident = extract_law_identity(r["title"] or "",
                                      r["clean_content"] or "")
@@ -320,6 +324,13 @@ def reidentify_documents(conn) -> dict:
             continue
         if r["identity_key"] == ident["identity_key"]:
             stats["unchanged"] += 1
+            continue
+        if r["identity_key"] and ident.get("provenance") == "preamble":
+            # هوية محفوظة لا تُبدَّل بمطابقة من أول 500 حرف: الديباجة قد
+            # تذكر صكاً مجاوراً (قِيس على قاعدة المالك: «قانون أصول تسريح
+            # العمال الصادر بالمرسوم…» بدّلت «المرسوم التشريعي:49:1962»
+            # إلى «القانون:91:1959» لمرسومٍ ورد في ديباجتها).
+            stats["kept_existing"] += 1
             continue
         if r["identity_key"] is None:
             stats["gained"] += 1
