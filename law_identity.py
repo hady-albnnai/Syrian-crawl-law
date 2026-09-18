@@ -13,8 +13,20 @@
 المستخدم في الجريدة الرسمية والنصوص السورية نفسها، لا اختراع تقني.
 """
 import re
+import unicodedata
 
 from extractor_v4 import to_western_digits
+
+
+def _nfkc(s: str) -> str:
+    """يفكّ الحروف العربية الإبداعية (presentation forms) إلى حروفها العادية.
+
+    قِيس على قاعدة المالك (2026-09-18): عنوان حيّ «ﻗﺎﻧﻮﻥ أﺻﻮﻝ ﺍﻟﻤﺤﺎﻛﻤﺎﺕ
+    ﺍﻟﺴﻮﺭﻱ 2016» مكتوب بحروف U+FEFB… فلا «قانون» تُطابَق ولا «رقم» —
+    الوثيقة تسقط بلا هوية وهي سليمة العنوان. التطبيع يردّها حروفاً عادية
+    قبل أي نمط، ولا يمسّ الأرقام (to_western_digits يتكفّل بالمشرقية).
+    """
+    return unicodedata.normalize("NFKC", s or "")
 
 # أنواع الصكوك القانونية السورية بترتيب الأكثر تحديداً أولاً — «المرسوم
 # التشريعي» يجب أن يُطابَق قبل «المرسوم» و«القانون» وإلا يُقتطع جزئياً.
@@ -55,9 +67,29 @@ _TYPE_ALT = "|".join(_type_pattern(t) for t in DOC_TYPES)
 # صيغة الإسناد المائلة الشائعة بعناوين ويبو ليكس الرسمية.
 _NUM = r"\d+|[٠-٩]+|[۰-۹]+"
 
+# الفجوة بين اسم الصك وكلمة «رقم»: كانت 15 حرفاً فقط، وهي تُسقط عناوين
+# حقيقية طويلة. قِيس على قاعدة المالك (2026-09-18): «قانون منع التعامل مع
+# اسرائيل رقم 286 لعام1956» فجوتها 24 حرفاً ⇒ هوية مسقطة رغم أن الرقم
+# مكتوب صراحة. صارت 30، والحارس _gap_crosses_other_instrument يمنع أن
+# يلتقط الرقم العائد لصكٍ آخر مذكور في الفجوة.
+_TYPE_HEADS = tuple(dict.fromkeys(
+    (w[2:] if w.startswith("ال") else w) for w in
+    (t.split()[0] for t in DOC_TYPES)))
+
+
+def _gap_crosses_other_instrument(gap: str) -> bool:
+    """True إذا كانت الفجوة بين «القانون» و«رقم» تحمل اسم صكٍّ آخر.
+
+    «قانون العقوبات المعدَّل بالمرسوم رقم 12 لعام 2001»: الرقم 12 للمرسوم
+    لا للقانون — أخذُه سرقة هوية تُفقد المنقّح ثقةً لا تُستعاد، فيُرفض.
+    """
+    g = gap or ""
+    return any(head in g for head in _TYPE_HEADS)
+
+
 LAW_ID_RE = re.compile(
     rf"({_TYPE_ALT})"
-    rf"[^\d]{{0,15}}رقم\s*[/\(]?\s*(?P<num>{_NUM})\s*[/\)]?"
+    rf"(?P<gap>[^\d]{{0,30}})رقم\s*[/\(]?\s*(?P<num>{_NUM})\s*[/\)]?"
     rf"(?:[^\d]{{0,20}}لعام\s*/?\s*(?P<year_full>{_NUM})|/\s*(?P<year_slash>{_NUM}))",
 )
 
@@ -105,6 +137,115 @@ def _normalize_type(raw: str) -> str:
     return t
 
 
+_TITLE_YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d\d)(?!\d)")
+_TITLE_NUM_RE = re.compile(rf"رقم\s*[\u200f/(\[]?\s*(?P<n>{_NUM})")
+
+
+_LEAD_RES = [(re.compile(_type_pattern(t).lstrip()), t) for t in DOC_TYPES]
+
+
+def _leading_type(title: str) -> str | None:
+    """اسم الصك الوارد في صدر العنوان (أول 20 حرفاً)، مطبَّعاً.
+
+    العنوان السوري يذكر صكّه أولاً: «قانون العقوبات…»، «المرسوم التشريعي
+    رقم 6». والاختيار للأطول عند تساوي الموضع — «المرسوم التشريعي» تسبق
+    «المرسوم»، وإلا قُرئت كل تشريعية بصفتها مرسوماً عادياً. أما اسم صك وارداً
+    لاحقاً في العنوان فهو إحالة لا هوية: «قانون العقوبات المعدَّل بالمرسوم
+    رقم 12 لعام 2001» رقمُها لمرسوم التعديل، ومنحه للقانون يبدّل هوية قانون
+    كامل بنصف صفحة.
+    """
+    head = (title or "")[:20]
+    best = None
+    for rx, t in _LEAD_RES:
+        m = rx.search(head)
+        if not m:
+            continue
+        key = (m.start(), -len(m.group(0)))
+        if best is None or key < best[0]:
+            best = (key, _normalize_type(t))
+    return best[1] if best else None
+
+
+def _number_belongs_to_other_instrument(title: str, num_start: int,
+                                        leading: str | None) -> bool:
+    """True إذا سبق «رقم» اسمُ صكٍ غير صكّ العنوان — فالرقم لغيرنا.
+
+    المقارنة على الكلمة الأولى المجردة لا على التسمية كاملة: «المرسوم
+    التشريعي رقم 6» ليست إحالة — «مرسوم» رأس «المرسوم التشريعي» نفسه.
+    """
+    before = (title or "")[max(0, num_start - 22):num_start]
+    lead_head = (leading or "").split()[0] if leading else None
+    lead_head = lead_head[2:] if lead_head and lead_head.startswith("ال") \
+        else lead_head
+    for head in _TYPE_HEADS:
+        if head in before and head != lead_head:
+            return True
+    return False
+
+
+def title_only_identity(title: str) -> dict:
+    """احتياط أضعف: رقم مذكور بلفظ «رقم N» و/أو سنة رباعية — من العنوان وحده.
+
+    لا يبني `identity_key`: التطابق بين نسخ القانون الواحدة يبقى مشروطاً
+    بالرقم والسنة معاً، فلا تُنسَخ هوية ناقصة فوق هوية كاملة. يُستعمل لملء
+    العمودين الفارغين فقط (الصيانة)، والعنوان لا يحمل إحالات لغيره — وهذا
+    ما يفرّقه عن المتن، الذي رُفض توسيعه في ف١ لأنه سرق هوية قانون المحاماة
+    من إحالة إلى قانون الشركات.
+    """
+    t = _nfkc(title)
+    number = None
+    # حيث انتهى حقّنا بالعنوان: ما بعد «رقم» العائد لصكٍّ مذكور فيه ليس
+    # رقمنا ولا سنتنا — «قانون العقوبات المعدَّل بالمرسوم رقم 12 لعام 2001»
+    # سنةُ 2001 للمرسوم.
+    limit = len(t)
+    m = _TITLE_NUM_RE.search(t)
+    if m:
+        if _number_belongs_to_other_instrument(t, m.start(), _leading_type(t)):
+            limit = m.start()
+        else:
+            try:
+                n = int(to_western_digits(m.group("n")))
+                number = n if 0 < n < 10000 else None
+            except ValueError:
+                number = None
+    year = None
+    ym = _TITLE_YEAR_RE.search(t[:limit])
+    if ym:
+        y = int(ym.group(1))
+        year = y if _MIN_YEAR <= y <= _MAX_YEAR else None
+    return {"law_number": number, "law_year": year,
+            "identity_confidence": "title_only" if (number or year) else None}
+
+
+def _accept(m, gap_guard: bool = False) -> dict | None:
+    """يتحقق من مطابقة واحدة ويردّ عقدها، أو None إذا كانت مغلوطة."""
+    if gap_guard and m.groupdict().get("gap") is not None:
+        if _gap_crosses_other_instrument(m.group("gap")):
+            return None
+    d = m.groupdict()
+    doc_type = _normalize_type(m.group(1))
+    try:
+        number = int(to_western_digits(d["num"]))
+        year = _year_of(m)
+    except (ValueError, KeyError):
+        return None
+    if number <= 0 or not (_MIN_YEAR <= year <= _MAX_YEAR):
+        return None
+    return {
+        "doc_type": doc_type,
+        "law_number": number,
+        "law_year": year,
+        "identity_key": build_identity_key(doc_type, number, year),
+        "identity_confidence": "number_year",
+    }
+
+
+_NO_IDENTITY = {
+    "doc_type": None, "law_number": None, "law_year": None,
+    "identity_key": None, "identity_confidence": None,
+}
+
+
 def extract_law_identity(title: str, text: str) -> dict:
     """يستخرج هوية القانون من العنوان أولاً ثم من أول 500 حرف من النص
     (حيث تُذكر الديباجة عادة). يعيد عقداً صريحاً لا يدّعي يقيناً غائباً:
@@ -112,45 +253,27 @@ def extract_law_identity(title: str, text: str) -> dict:
     - وُجد رقم وسنة صالحان → identity_confidence='number_year'
     - لم يُعثر على شيء → identity_key=None, identity_confidence=None
     """
-    haystacks = []
-    if title:
-        haystacks.append(title)
-    if text:
-        haystacks.append(text[:500])
+    title, text = _nfkc(title), _nfkc(text)
+    haystacks = [h for h in (title, text[:500] if text else "") if h]
 
     for idx, haystack in enumerate(haystacks):
-        m = LAW_ID_RE.search(haystack)
-        if not m and idx == 0:
+        lead = _leading_type(haystack) if idx == 0 else None
+        for m in LAW_ID_RE.finditer(haystack):
+            if idx == 0 and lead and lead != _normalize_type(m.group(1)):
+                continue  # اسم الصك في الصدر غير المطابقة ⇒ المطابقة إحالة
+            got = _accept(m, gap_guard=True)
+            if got:
+                return got
+        if idx == 0:
             # احتياط الصيغة المائلة بلا «رقم» — العنوان حصراً (النص يحمل
             # إحالات صليبية فتكون هوية زائفة)
             m = LAW_ID_SLASH_RE.search(haystack)
-        if not m:
-            continue
-        doc_type = _normalize_type(m.group(1))
-        try:
-            number = int(to_western_digits(m.group("num")))
-            year = _year_of(m)
-        except ValueError:
-            continue
-        if number <= 0:
-            continue
-        if not (_MIN_YEAR <= year <= _MAX_YEAR):
-            continue
-        return {
-            "doc_type": doc_type,
-            "law_number": number,
-            "law_year": year,
-            "identity_key": build_identity_key(doc_type, number, year),
-            "identity_confidence": "number_year",
-        }
+            if m:
+                got = _accept(m)
+                if got:
+                    return got
 
-    return {
-        "doc_type": None,
-        "law_number": None,
-        "law_year": None,
-        "identity_key": None,
-        "identity_confidence": None,
-    }
+    return dict(_NO_IDENTITY)
 
 
 def reidentify_documents(conn) -> dict:
@@ -170,14 +293,30 @@ def reidentify_documents(conn) -> dict:
     الشركات 3/2008) فيكون التوسيع اختطافاً للهوية وإفساداً للمنقّح.
     """
     rows = conn.execute(
-        "SELECT id, title, clean_content, identity_key FROM documents"
+        "SELECT id, title, clean_content, identity_key, number, year"
+        " FROM documents"
     ).fetchall()
-    stats = {"gained": 0, "updated": 0, "unchanged": 0, "no_match": 0}
+    stats = {"gained": 0, "updated": 0, "unchanged": 0, "no_match": 0,
+             "partial": 0}
     for r in rows:
         ident = extract_law_identity(r["title"] or "",
                                      r["clean_content"] or "")
         if ident["identity_key"] is None:
-            stats["no_match"] += 1
+            # لا هوية كاملة: يُجرَّب احتياط العنوان لملء العمود الفارغ فقط.
+            # هوية قائمة لا تُمسّ، وidentity_key لا يُمسّ إطلاقاً هنا.
+            fb = title_only_identity(r["title"] or "")
+            set_num = fb["law_number"] if r["number"] is None else None
+            set_year = fb["law_year"] if r["year"] is None else None
+            if set_num is None and set_year is None:
+                stats["no_match"] += 1
+                continue
+            conn.execute(
+                "UPDATE documents SET number=COALESCE(number,?),"
+                " year=COALESCE(year,?),"
+                " identity_confidence=COALESCE(identity_confidence,?)"
+                " WHERE id=?",
+                (set_num, set_year, fb["identity_confidence"], r["id"]))
+            stats["partial"] += 1
             continue
         if r["identity_key"] == ident["identity_key"]:
             stats["unchanged"] += 1

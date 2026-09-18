@@ -247,6 +247,13 @@ def cmd_stats(_args):
                         " AND identity_key IS NULL").fetchone()["c"]
     if ident:
         log.info(f"⚠︎ منها بلا هوية (رقم/سنة) = {ident} — تُصدَّر بعنوان فقط")
+    # صيانة law-status --reidentify تملأ السنة وحدها أحياناً؛ الفرق يُرى هنا:
+    # «سنة بلا رقم» تُصدَّر باسم ملف فيه السنة، فتظهر بميزان في موضعها الزمني.
+    half = cur.execute(
+        "SELECT COUNT(*) AS c FROM documents WHERE status='active'"
+        " AND year IS NOT NULL AND number IS NULL").fetchone()["c"]
+    if half:
+        log.info(f"   منها بسنة بلا رقم = {half} — تُصدَّر بعنوان وسنة")
     conn.close()
     return 0
 

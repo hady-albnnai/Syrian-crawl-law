@@ -204,3 +204,30 @@ def test_stats_reports_exportable_not_only_total(tmp_path, monkeypatch, caplog):
     assert "قابلة للتصدير (active)" in out, out
     assert "documents[active] = 1" in out, out
     assert "documents[rejected] = 1" in out, out
+
+
+def test_stats_separates_year_only_rows_from_identityless(tmp_path, monkeypatch):
+    """بعد law-status --reidentify تصير صفوف «بسنة بلا رقم» — الفرق لازم
+    يُطبع، لأن اسم الملف (وبالتالي موضع الوثيقة في ميزان) تغيّر فعلاً."""
+    import cli
+    import io
+    import logging
+    import sqlite3
+    db = _mk_db(tmp_path, monkeypatch,
+                [("قانون حديث بلا رقم", None, 2001, _body("نص المادة."))])
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE documents SET identity_key=NULL WHERE number IS NULL")
+    conn.commit(); conn.close()
+    import config
+    monkeypatch.setattr(config, "DB_PATH", db)
+    buf = io.StringIO()
+    h = logging.StreamHandler(buf)
+    root = logging.getLogger("mizan")
+    root.addHandler(h)
+    try:
+        assert cli.cmd_stats(None) == 0
+    finally:
+        root.removeHandler(h)
+    out = buf.getvalue()
+    assert "بلا هوية (رقم/سنة) = 1" in out, out
+    assert "منها بسنة بلا رقم = 1" in out, out

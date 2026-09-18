@@ -253,3 +253,77 @@ def test_slash_fallback_not_applied_to_text():
         "نظام مزعوم بلا رقم",
         "يستبدل النص المشار إليه في القانون 10/2014 بما يلي")
     assert r["identity_key"] is None
+
+
+# ────── قِيس على قاعدة المالك (2026-09-18): 251 من 285 عنواناً فيها أرقام ──────
+# العيّنة هنا عناوين حقيقية من قاعدة المالك، منسوخة من طبع «stats» والعيون.
+
+def test_long_instrument_name_still_yields_number_and_year():
+    """كانت النافذة بين اسم الصك و«رقم» 15 حرفاً فتسقط العناوين الطويلة."""
+    r = li.extract_law_identity(
+        "قانون منع التعامل مع اسرائيل رقم 286 لعام1956", "")
+    assert (r["law_number"], r["law_year"]) == (286, 1956)
+    assert r["identity_key"] == "القانون:286:1956"
+    assert r["identity_confidence"] == "number_year"
+
+
+def test_presentation_form_title_is_normalized():
+    """«ﻗﺎﻧﻮﻥ» بحروف العرض U+FEFB… — بلا NFKC تسقط وثيقة سليمة العنوان."""
+    fb = li.title_only_identity(
+        "ﻗﺎﻧﻮﻥ أﺻﻮﻝ ﺍﻟﻤﺤﺎﻛﻤﺎﺕ ﺍﻟﺴﻮﺭﻱ 2016")
+    assert fb["law_year"] == 2016
+    assert fb["identity_confidence"] == "title_only"
+
+
+def test_amendment_reference_never_steals_identity():
+    """الرقم والسنة بعد «بالمرسوم رقم» هي لذلك المرسوم، لا لعنواننا.
+
+    regression قِيس على HEAD السابق: كان يعيد «المرسوم:12:2001» هويةً
+    لقانون العقوبات — هوية مسروقة من صكّ آخر، وأخطر على المنقّح من لا-هوية.
+    """
+    t = "قانون العقوبات العامة السوري المعدل بالمرسوم رقم 12 لعام 2001"
+    assert li.extract_law_identity(t, "")["identity_key"] is None
+    fb = li.title_only_identity(t)
+    assert fb["law_number"] is None and fb["law_year"] is None
+
+
+def test_title_only_fallback_does_not_invent_identity_key():
+    fb = li.title_only_identity("قانون تنظيم مهنة المحاماة لعام 2010")
+    assert fb["law_year"] == 2010 and fb["law_number"] is None
+    assert fb["identity_confidence"] == "title_only"
+    # لا هوية كاملة برقم ناقص — التطابق بين النسخ يبقى على الرقم+السنة معاً
+    r = li.extract_law_identity("قانون تنظيم مهنة المحاماة لعام 2010", "")
+    assert r["identity_key"] is None
+
+
+def test_title_only_accepts_slash_citation_year():
+    fb = li.title_only_identity("أصول تسليم المجرمين العاديين رقم 53/1953")
+    assert (fb["law_number"], fb["law_year"]) == (53, 1953)
+
+
+def test_reidentify_partial_fills_year_only(tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    doc_id = _insert(conn, "قانون حماية حقوق المؤلف في سورية 2001",
+                     "نص القانون هنا.")
+    stats = li.reidentify_documents(conn)
+    assert stats["partial"] == 1 and stats["gained"] == 0
+    row = conn.execute("SELECT number, year, identity_key,"
+                       " identity_confidence FROM documents WHERE id=?",
+                       (doc_id,)).fetchone()
+    assert row["year"] == 2001 and row["number"] is None
+    assert row["identity_key"] is None  # لا مفتاح بهوية ناقصة
+    assert row["identity_confidence"] == "title_only"
+
+
+def test_reidentify_partial_never_overwrites_stored_number(tmp_path,
+                                                            monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    cur = conn.execute(
+        "INSERT INTO documents (doc_id, title, clean_content, number, year)"
+        " VALUES (?,?,?,?,?)",
+        ("dX1", "قانون حماية حقوق المؤلف في سورية 2001", "نص.", 99, None))
+    conn.commit()
+    assert li.reidentify_documents(conn)["partial"] == 1
+    row = conn.execute("SELECT number, year FROM documents WHERE id=?",
+                       (cur.lastrowid,)).fetchone()
+    assert (row["number"], row["year"]) == (99, 2001)  # المحفوظ لا يُمس
