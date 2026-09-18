@@ -149,6 +149,9 @@ def cmd_export(args):
     print(f"  الفهرس: {rep['csv']}")
     if rep["skipped"]:
         print(f"  تخطي (مواد < {args.min_articles}): {rep['skipped']}")
+    if rep.get("renamed"):
+        print(f"  تكرار أسماء: {rep['renamed']} وثيقة نالت لاحقة بدل أن تُدفن "
+              "تحت ملف آخر (نفس الهوية من مصدرين)")
     if rep.get("manifest"):
         m = rep["manifest"]
         print(f"  المانيفست: schema v{m['schema_version']} — {m['files']} حزمة ملفات "
@@ -228,6 +231,22 @@ def cmd_stats(_args):
     cur.execute("SELECT status, COUNT(*) AS c FROM sources GROUP BY status")
     for row in cur.fetchall():
         log.info(f"sources[{row['status']}] = {row['c']}")
+    # «كم وثيقة عندي» ≠ «كم وثيقة تُصدَّر»: المُصدِّر يأخذ status='active' وحده،
+    # والفارق كان يُسأل عنه كل مرة (قِيس: 513 في القاعدة مقابل 405 في الحزمة).
+    cur.execute("SELECT status, COUNT(*) AS c FROM documents GROUP BY status"
+                " ORDER BY c DESC")
+    doc_rows = cur.fetchall()
+    for row in doc_rows:
+        log.info(f"documents[{row['status']}] = {row['c']}")
+    active = next((r["c"] for r in doc_rows if r["status"] == "active"), 0)
+    art = cur.execute(
+        "SELECT COUNT(*) AS c FROM articles WHERE doc_id IN"
+        " (SELECT id FROM documents WHERE status='active')").fetchone()["c"]
+    log.info(f"قابلة للتصدير (active) = {active} وثيقة / {art} مادة")
+    ident = cur.execute("SELECT COUNT(*) AS c FROM documents WHERE status='active'"
+                        " AND identity_key IS NULL").fetchone()["c"]
+    if ident:
+        log.info(f"⚠︎ منها بلا هوية (رقم/سنة) = {ident} — تُصدَّر بعنوان فقط")
     conn.close()
     return 0
 

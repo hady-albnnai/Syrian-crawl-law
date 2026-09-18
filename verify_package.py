@@ -100,6 +100,17 @@ def check_package(package_dir) -> list[tuple[str, bool]]:
                     + (" …" if len(bad_sha) > 6 else ""), False))
     out.append((f"لا ملف مفقود على القرص ({len(missing)} مفقود)", not missing))
     out.append((f"size_bytes مطابقة للملفات ({len(bad_size)} مخالف)", not bad_size))
+    paths = [(r.get("local_path") or "").strip() for r in rows]
+    seen, dups = set(), set()
+    for pth in paths:
+        (dups if pth in seen else seen).add(pth)
+    # ميزان يفصل التكرار على `filePath` عنده — فمساران متطابقان معناهما أن
+    # وثيقة واحدة تُستورد والأخرى تُدفن بصمت.
+    out.append((f"لا مسار مكرر في local_path ({len(dups)} مكرر)", not dups))
+    if dups:
+        out.append(("  ⚠︎ تكرار اسم ملف ⇒ دفن وثيقة: "
+                    + ", ".join(sorted(dups)[:4])
+                    + (" …" if len(dups) > 4 else ""), False))
     ids = [r.get("id", "") for r in rows]
     out.append(("لا id مكرر ولا عنوان فارغ",
                 len(ids) == len(set(ids)) and all((r.get("title") or "").strip()

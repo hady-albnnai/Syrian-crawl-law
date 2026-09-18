@@ -144,6 +144,12 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
     out = Path(out_dir)
     (out / "markdown").mkdir(parents=True, exist_ok=True)
     used_ids, rows, skipped = set(), [], 0
+    # stem → بايتات الملف المكتوب فعلاً. بدون هذا الحارس يكتب صفاً لنفس
+    # الوثيقة نفس الاسم، ومن يكتب لاحقاً يدفن سابقه بصمت: الفهرس يبقى يحمل
+    # بصمة وحجماً لملف لم يعد على القرص (قِيس على قاعدة المالك: بوابة حمراء
+    # بـ«بصمة غير مطابقة» + «size_bytes مخالفة»).
+    used_stems: set[str] = set()
+    renamed = 0
     for doc in docs:
         articles = conn.execute(
             "SELECT * FROM articles WHERE doc_id = ? ORDER BY id",
@@ -156,13 +162,26 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
             sanitize_filename(doc["title"]),
             str(doc["number"]) if doc["number"] else None,
         ] if x)
+        md_bytes = doc_markdown(doc, articles).encode("utf-8")
+        # لا حذف «نسخة مطابقة» هنا: المتن يتضمّن «المصدر: <url>» و`documents
+        # .source_url` مقيّد UNIQUE، فمستحيل أن يولّد صَفّان نفس البايتات — وأي
+        # شقّ «دمج» would كان كوداً ميتاً يبيع حماية لا تعمل. التكرار الحقيقي
+        # بنفس المصدر يُفصل عند الحفظ (save_document) لا هنا.
+        base_stem, k = stem, 2
+        while stem in used_stems:
+            stem = f"{base_stem}_{k}"          # نفس الاسم ⇒ لاحقة، لا دفن
+            k += 1
+        if stem != base_stem:
+            renamed += 1
+        used_stems.add(stem)
         md_path = out / "markdown" / f"{stem}.md"
         js_path = out / "markdown" / f"{stem}.json"
-        md_bytes = doc_markdown(doc, articles).encode("utf-8")
         md_path.write_bytes(md_bytes)
-        js_path.write_text(json.dumps(doc_json(doc, articles),
-                                      ensure_ascii=False, indent=2),
-                           encoding="utf-8")
+        with open(js_path, "w", encoding="utf-8", newline="\n") as jf:
+            # LF صريح: بايت الجانبي لا تتبدّل بين ويندوز وLinux (النص نفسه،
+            # لكن «الحجم = البايتات» يجب أن يبقى صادقاً على كل منصة)
+            jf.write(json.dumps(doc_json(doc, articles),
+                                ensure_ascii=False, indent=2))
         # sha256 = بصمة **الملف الذي سيحمّصه ميزان فعلياً** (= ملف md المذكور
         # في local_path). الدلالة القديمة كانت «بصمة الملف المصدري» (لقطة
         # HTML الخام إن وُجدت)، وبوابة السلامة في csv_legal_library_importer
@@ -206,8 +225,12 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
         w = csv.DictWriter(f, fieldnames=COLUMNS, lineterminator="\n")
         w.writeheader()
         w.writerows(rows)
+    if renamed:
+        log.info(f"تكرار أسماء الملفات: {renamed} وثيقة أعيدت تسميتها بلاحقة "
+                 "لتجنّب الدفن (نفس الهوية من مصدرين)")
     log.info(f"حزمة المحتوى: {len(rows)} وثيقة في {out} ({skipped} تخطي)")
     rep = {"docs": len(rows), "skipped": skipped,
+           "renamed": renamed,
            "csv": str(csv_path), "out_dir": str(out)}
     if with_manifest:
         rep.update(_finalize(out, db_path, rows))
