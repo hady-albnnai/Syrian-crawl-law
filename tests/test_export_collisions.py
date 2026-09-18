@@ -110,6 +110,42 @@ def test_near_duplicates_survive_rather_than_being_dropped(tmp_path, monkeypatch
     assert verify_package.gate_ok(out)
 
 
+def test_package_article_count_equals_the_database(tmp_path, monkeypatch):
+    """القياس من القرص يجب أن يساوي الحقيقة بالقاعدة — لا أقل ولا أكثر.
+
+    قِيس على قاعدة المالك قبل الإصلاح: الحزمة أعلنت 15٬300 مادة وهي تعدّ من
+    ملفات مدفون بعضها، والقاعدة تقول 15٬142 ⇒ فرق 158 مادة. هنا نفس العلة
+    بأرقام صغيرة: صَفّان يشيران نفس الملف ⇒ العدد ينحرف في أي اتجاه.
+    """
+    import exporter
+    import verify_package
+    db = _mk_db(tmp_path, monkeypatch, [
+        ("قانون العقوبات", 148, 1949, _body("نص المصدر الأول.")),
+        ("قانون العقوبات", 148, 1949, "متن أطول بكثير من المصدر الثاني " * 6),
+    ])
+    # الثاني بأربع مواد، الأول بمادة واحدة — والتصادم كان يجعل الاثنين يعدّان
+    # ملف الفائز فقط
+    import database
+    conn = database.get_connection()
+    last = conn.execute("SELECT id FROM documents ORDER BY id DESC LIMIT 1").fetchone()[0]
+    for n in ("2", "3", "4"):
+        conn.execute("INSERT INTO articles (doc_id, article_number,"
+                     " article_label, text, char_count) VALUES (?,?,?,?,?)",
+                     (last, n, f"المادة {n}", "متن", 8))
+    conn.commit()
+    truth = conn.execute(
+        "SELECT COUNT(*) FROM articles WHERE doc_id IN"
+        " (SELECT id FROM documents WHERE status='active')").fetchone()[0]
+    conn.close()
+    out = tmp_path / "pkg"
+    rep = exporter.build_package(db_path=db, out_dir=out)
+    counts = verify_package.article_counts(out)
+    assert counts["articles"] == truth, (
+        f"عدد الحزمة {counts['articles']} ≠ عدد القاعدة {truth}")
+    assert rep["docs"] == 2 and counts["rows"] == 2
+    assert verify_package.gate_ok(out)
+
+
 def test_gate_flags_duplicate_local_paths(tmp_path, monkeypatch):
     """ولو جاء التكرار من حزمة قديمة/يدوية، البوابة ترفضه لا تمرّره."""
     import exporter
