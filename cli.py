@@ -559,6 +559,27 @@ def cmd_seed_official(args):
     return 0
 
 
+def cmd_parts(args):
+    """ف٧: أجزاء الصك الواحد — عرض/ربط."""
+    from database import create_tables, get_connection
+    from law_parts import link_parts
+    create_tables()
+    conn = get_connection()
+    if args.link:
+        rep = link_parts(conn)
+        log.info(f"مجموعات الأجزاء: {rep['groups']}، أجزاء مربوطة: "
+                 f"{rep['parts_linked']}")
+        for head, num, year, parts in rep["detail"]:
+            log.info(f"  رأس #{head} (رقم {num}/{year or '؟'}) ← أجزاء {parts}")
+    else:
+        rows = conn.execute(
+            "SELECT part_of, COUNT(*) c FROM documents WHERE part_of IS NOT NULL "
+            "GROUP BY part_of").fetchall()
+        log.info("مجموعات مربوطة: " + (", ".join(
+            f"#{r['part_of']}×{r['c']}" for r in rows) or "لا شيء"))
+    return 0
+
+
 def cmd_nature(args):
     """ف٤: طبيعة الوثائق — تصنيف/توزيع (صك، أعمال تحضيرية، فهرس، مسودة…)."""
     from database import create_tables, get_connection
@@ -854,6 +875,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--reclassify", action="store_true",
                     help="إعادة تصنيف كل الوثائق المخزَّنة وكتابة nature")
     sp.set_defaults(fn=cmd_nature)
+
+    sp = sub.add_parser("parts",
+                        help="ف٧: ربط أجزاء الصك الواحد المشتّتة (part_of)")
+    sp.add_argument("--link", action="store_true",
+                    help="حساب المجموعات وكتابة documents.part_of")
+    sp.set_defaults(fn=cmd_parts)
 
     sp = sub.add_parser("law-status",
                         help="ف١: حساب الحالة القانونية (ساري/معدَّل/ملغى)")

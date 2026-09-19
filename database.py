@@ -76,7 +76,8 @@ def create_tables():
         quality_score REAL,
         legal_status TEXT,
         nature TEXT DEFAULT 'instrument',
-        travaux_article INTEGER
+        travaux_article INTEGER,
+        part_of INTEGER
     )
     ''')
 

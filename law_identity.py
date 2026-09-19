@@ -26,7 +26,12 @@ def _nfkc(s: str) -> str:
     الوثيقة تسقط بلا هوية وهي سليمة العنوان. التطبيع يردّها حروفاً عادية
     قبل أي نمط، ولا يمسّ الأرقام (to_western_digits يتكفّل بالمشرقية).
     """
-    return unicodedata.normalize("NFKC", s or "")
+    # الياء المقصورة مكان الياء (رسم مصري شائع بالمصادر): «المرسوم التشريعى»
+    # (قِيس 2026-09-19: #277 «المرسوم التشريعى رقم/30» ×4 بلا هوية) — يُرَدّ
+    # «ى» إلى «ي» فقط حين يليها حرف (لا في آخر الكلمة حيث الألف المقصورة حقيقية:
+    # «إلى»، «على»).
+    out = unicodedata.normalize("NFKC", s or "")
+    return re.sub(r"ى(?=[\u0621-\u064A])", "ي", out)
 
 # أنواع الصكوك القانونية السورية بترتيب الأكثر تحديداً أولاً — «المرسوم
 # التشريعي» يجب أن يُطابَق قبل «المرسوم» و«القانون» وإلا يُقتطع جزئياً.
@@ -231,6 +236,33 @@ def _number_belongs_to_other_instrument(title: str, num_start: int,
     return False
 
 
+_GENERIC_TITLE_RE = re.compile(r"^\W*وثيقة\s+قانونية(?:\s+سورية)?\W*$")
+
+
+def generic_title_preamble_number(title: str, text: str) -> dict | None:
+    """عنوان عام («وثيقة قانونية سورية») + مطلع النص يبدأ بـ«<صك> رقم N».
+
+    قِيس 2026-09-19: #177/#178/#179 شذرات قانون الجمارك نصها يبدأ «القانون
+    رقم 38 المادة 77…». الرقم يُقبل جزئياً (لا مفتاح هوية: السنة غائبة) ليدخل
+    في تجميع الأجزاء (law_parts). مطلع النص = أول 40 حرفاً فقط: أبعد من ذلك
+    قد يكون إحالة.
+    """
+    if not _GENERIC_TITLE_RE.search(_nfkc(title or "")):
+        return None
+    head = _nfkc(text or "")[:40]
+    m = _PREAMBLE_NUM_RE.match(head.lstrip())
+    if not m:
+        return None
+    try:
+        n = int(to_western_digits(m.group("num")))
+    except ValueError:
+        return None
+    if not 0 < n < 10000:
+        return None
+    return {"doc_type": _normalize_type(m.group(1)), "law_number": n,
+            "law_year": None, "identity_confidence": "preamble_number"}
+
+
 def title_only_identity(title: str) -> dict:
     """احتياط أضعف: رقم مذكور بلفظ «رقم N» و/أو سنة رباعية — من العنوان وحده.
 
@@ -342,6 +374,8 @@ def extract_law_identity(title: str, text: str) -> dict:
     return dict(_NO_IDENTITY)
 
 
+_ENACTING_HEAD_RE = re.compile(
+    r"رئيس\s+الجمهورية.{0,80}?(?:يرسم|يصدر|يقرر)\s+ما\s+يلي")
 _PREAMBLE_NUM_RE = re.compile(
     rf"({_TYPE_ALT})\s*(?:ذي\s+)?(?:ال)?رقم\s*[\u200f/(\[]?\s*(?P<num>{_NUM})")
 
@@ -390,7 +424,20 @@ def merge_title_preamble_identity(title: str, text: str) -> dict | None:
         except ValueError:
             tnum = None
         if tnum is not None and tnum != number:
-            return None  # تناقض عنوان/ديباجة — لا حسم آلي
+            # تناقض عنوان/ديباجة. يُحسم للديباجة فقط حين تكون رأس إصدارٍ
+            # رسمياً («رئيس الجمهورية … يرسم/يصدر ما يلي») — العنوان يكتبه
+            # الناشر والديباجة نص الصك نفسه (قرار المالك 2026-09-19 على #19:
+            # عنوان «المرسوم التشريعي رقم 6» وديباجة «رقم (3)» → 3/2010 مع
+            # وسم المخالفة). بغير ذلك لا حسم آلي.
+            if not _ENACTING_HEAD_RE.search(head):
+                return None
+            return {
+                "doc_type": lead, "law_number": number, "law_year": year,
+                "identity_key": build_identity_key(lead, number, year),
+                "identity_confidence": "preamble_over_title",
+                "provenance": "merged",
+                "title_number_conflict": tnum,
+            }
     return {
         "doc_type": lead, "law_number": number, "law_year": year,
         "identity_key": build_identity_key(lead, number, year),
@@ -439,6 +486,11 @@ def reidentify_documents(conn) -> dict:
             # لا هوية كاملة: يُجرَّب احتياط العنوان لملء العمود الفارغ فقط.
             # هوية قائمة لا تُمسّ، وidentity_key لا يُمسّ إطلاقاً هنا.
             fb = title_only_identity(r["title"] or "")
+            if fb["law_number"] is None and fb["law_year"] is None:
+                g = generic_title_preamble_number(r["title"] or "",
+                                                  r["clean_content"] or "")
+                if g:
+                    fb = g
             set_num = fb["law_number"] if r["number"] is None else None
             set_year = fb["law_year"] if r["year"] is None else None
             if set_num is None and set_year is None:

@@ -247,6 +247,16 @@ def _migration_007_doc_nature(cursor) -> dict:
     return {"columns_added": a + b}
 
 
+def _migration_008_law_parts(cursor) -> dict:
+    """ف٧: documents.part_of — الجزء يشير إلى وثيقة الرأس لصكٍّ دخل شذرات
+    (law_parts.py). قِيس على قاعدة المالك: قانون الجمارك 38 والمرسوم
+    التشريعي 30 وأصول المحاكمات 2016. لا حذف ولا دمج نصوص؛ علاقة فقط."""
+    a = _add_column_if_missing(cursor, "documents", "part_of", "INTEGER")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_part_of "
+                   "ON documents(part_of)")
+    return {"columns_added": a}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
     (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
@@ -259,6 +269,8 @@ MIGRATIONS = [
      _migration_006_law_status),
     (7, "documents.nature + travaux_article (ف٤ doc_nature)",
      _migration_007_doc_nature),
+    (8, "documents.part_of (ف٧ law_parts: أجزاء الصك الواحد)",
+     _migration_008_law_parts),
 ]
 LATEST = MIGRATIONS[-1][0]
 

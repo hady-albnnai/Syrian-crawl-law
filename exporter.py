@@ -145,9 +145,18 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
                      conn.execute("PRAGMA table_info(documents)").fetchall())
     nature_filter = ("AND COALESCE(nature, 'instrument') = 'instrument' "
                      if has_nature else "")
+    # ف٧: أجزاء الصك الواحد (part_of) لا تُصدَّر صفوفاً مستقلة — تُطوى تحت
+    # رأسها ومواد الأجزاء تلحق بمواد الرأس مرتبة برقم المادة. قاعدة بلا عمود
+    # part_of (قبل الهجرة 8) تُعامل كما كانت.
+    has_parts = any(r[1] == "part_of" for r in
+                    conn.execute("PRAGMA table_info(documents)").fetchall())
+    parts_filter = "AND part_of IS NULL " if has_parts else ""
     docs = conn.execute(
         "SELECT * FROM documents WHERE status = 'active' "
-        f"{nature_filter}ORDER BY year, number, id").fetchall()
+        f"{nature_filter}{parts_filter}ORDER BY year, number, id").fetchall()
+    folded_parts = conn.execute(
+        "SELECT COUNT(*) FROM documents WHERE status='active' "
+        "AND part_of IS NOT NULL").fetchone()[0] if has_parts else 0
     non_instruments = conn.execute(
         "SELECT COUNT(*) FROM documents WHERE status = 'active' "
         "AND COALESCE(nature, 'instrument') <> 'instrument'").fetchone()[0] \
@@ -162,9 +171,16 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
     used_stems: set[str] = set()
     renamed = 0
     for doc in docs:
-        articles = conn.execute(
-            "SELECT * FROM articles WHERE doc_id = ? ORDER BY id",
-            (doc["id"],)).fetchall()
+        if has_parts:
+            articles = conn.execute(
+                """SELECT a.* FROM articles a JOIN documents d ON d.id = a.doc_id
+                   WHERE (a.doc_id = ? OR d.part_of = ?) AND d.status = 'active'
+                   ORDER BY CAST(a.article_number AS INTEGER), a.id""",
+                (doc["id"], doc["id"])).fetchall()
+        else:
+            articles = conn.execute(
+                "SELECT * FROM articles WHERE doc_id = ? ORDER BY id",
+                (doc["id"],)).fetchall()
         if len(articles) < min_articles:
             skipped += 1
             continue
@@ -240,9 +256,11 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
         log.info(f"تكرار أسماء الملفات: {renamed} وثيقة أعيدت تسميتها بلاحقة "
                  "لتجنّب الدفن (نفس الهوية من مصدرين)")
     log.info(f"حزمة المحتوى: {len(rows)} وثيقة في {out} ({skipped} تخطي"
-             f" | {non_instruments} ليست صكوكاً خارج الفهرس)")
+             f" | {non_instruments} ليست صكوكاً خارج الفهرس"
+             f" | {folded_parts} أجزاء طُويت تحت رأسها)")
     rep = {"docs": len(rows), "skipped": skipped,
            "renamed": renamed, "non_instruments": non_instruments,
+           "folded_parts": folded_parts,
            "csv": str(csv_path), "out_dir": str(out)}
     if with_manifest:
         rep.update(_finalize(out, db_path, rows))
