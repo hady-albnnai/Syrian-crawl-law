@@ -27,18 +27,23 @@ from datetime import date
 from extractor_v4 import to_western_digits
 from law_identity import _nfkc
 
-_SEP = r"\s*[/\-ـ.]\s*"
-_D = rf"(?P<d>\d{{1,2}}){_SEP}(?P<m>\d{{1,2}}){_SEP}(?P<y>\d{{4}})"
-
-_CLOSING_RE = re.compile(
-    rf"(?:دمشق|صدر|صدرت)\s+(?:في|فى|بتاريخ)\s*:?\s*"
-    rf"(?P<first>{_D})"
-    rf"(?:\s*(?:هـ|هجري|هجرية|هجرى)?\s*(?:الموافق|المصادف|و)\s*(?:لـ|ل)?\s*"
-    rf"(?P<second>(?P<d2>\d{{1,2}}){_SEP}(?P<m2>\d{{1,2}}){_SEP}(?P<y2>\d{{4}})))?",
-    re.S)
-_HEADING_RE = re.compile(
-    rf"(?:رقم|الرقم)\s*[/(]?\s*\d{{1,4}}\s*[/)]?\s*(?:و)?تاريخ\s*[/(]?\s*{_D}", re.S)
-_ANY_DATE_RE = re.compile(_D)
+_SEP = r"\s*[/\-ـ.،]\s*"
+# يوم/شهر قد يغيبان («/ /1427») ولا يُقبل يوم/شهر بلا سنة
+_D = rf"(?P<d>\d{{1,2}})?{_SEP}?(?P<m>\d{{1,2}})?{_SEP}(?P<y>\d{{4,5}})"
+_DATE_RE = re.compile(rf"(?<!\d)(?:(?P<d>\d{{1,2}}){_SEP})?(?:(?P<m>\d{{1,2}}){_SEP})?(?P<y>\d{{4}})(?!\d)")
+_MONTHS = {"كانون الثاني": 1, "يناير": 1, "شباط": 2, "فبراير": 2, "آذار": 3, "اذار": 3,
+           "مارس": 3, "نيسان": 4, "أبريل": 4, "ابريل": 4, "أيار": 5, "ايار": 5, "مايو": 5,
+           "حزيران": 6, "يونيو": 6, "تموز": 7, "يوليو": 7, "آب": 8, "اب": 8, "أغسطس": 8,
+           "أيلول": 9, "ايلول": 9, "سبتمبر": 9, "تشرين الأول": 10, "تشرين الاول": 10,
+           "أكتوبر": 10, "تشرين الثاني": 11, "تشرين الثانى": 11, "نوفمبر": 11,
+           "كانون الأول": 12, "كانون الاول": 12, "ديسمبر": 12}
+_NAMED_RE = re.compile(
+    r"(?P<d>\d{1,2})\s+(?P<mon>" + "|".join(sorted(map(re.escape, _MONTHS), key=len, reverse=True))
+    + r")\s+(?:سنة\s+|عام\s+)?(?P<y>\d{4})")
+# مرساة الختام: «دمشق في» / «دمشق» / «صدر في» / «صادر في» / «بتاريخ» — ثم نافذة قصيرة
+_ANCHOR_RE = re.compile(r"(?:دمشق|صدر|صدرت|صادر)\s*(?:في|فى|بتاريخ|تاريخ)?\s*:?")
+_HEADING_RE = re.compile(r"(?:رقم|الرقم)\s*[/(]?\s*\d{1,4}\s*[/)]?\s*(?:و)?(?:ب)?تاريخ\s*[/(:]?\s*")
+_WINDOW = 90
 
 _MIN_G, _MAX_G = 1920, 2100
 _MIN_H, _MAX_H = 1338, 1530
@@ -59,6 +64,45 @@ def _iso(d: int, m: int, y: int) -> str | None:
         return None
 
 
+def _dates_in(window: str) -> list[tuple[str, int | None, int | None, int]]:
+    """كل التواريخ في نافذة نصية: (kind, d, m, y) — بالأرقام أو بأسماء الأشهر."""
+    found = []
+    for m in _NAMED_RE.finditer(window):
+        y = int(m["y"])
+        if _kind(y) == "gregorian":
+            found.append(("gregorian", int(m["d"]), _MONTHS[m["mon"]], y))
+    for m in _DATE_RE.finditer(window):
+        y = int(m["y"])
+        k = _kind(y)
+        if not k:
+            continue
+        d = int(m["d"]) if m["d"] else None
+        mo = int(m["m"]) if m["m"] else None
+        found.append((k, d, mo, y))
+    return found
+
+
+def _pick(found, identity_year, conf):
+    """يفضّل ميلادياً كاملاً؛ وإلا هجرياً نصاً. يعيد dict أو None."""
+    greg = [f for f in found if f[0] == "gregorian" and f[1] and f[2]]
+    hij = [f for f in found if f[0] == "hijri"]
+    if greg:
+        _, d, mo, y = greg[-1]
+        iso = _iso(d, mo, y)
+        if iso is None:
+            return None
+        if identity_year and abs(y - int(identity_year)) > 1:
+            return {"conflict": True}
+        h = hij[-1] if hij else None
+        return {"issue_date": iso, "issue_date_confidence": conf,
+                "issue_date_hijri": f"{h[1] or ''}/{h[2] or ''}/{h[3]}" if h else None}
+    if hij:
+        h = hij[-1]
+        return {"issue_date_hijri": f"{h[1] or ''}/{h[2] or ''}/{h[3]}",
+                "issue_date_confidence": conf + "_hijri"}
+    return None
+
+
 def extract_issue_date(text: str, identity_year: int | None = None) -> dict:
     """يعيد {issue_date, issue_date_hijri, issue_date_confidence, conflict}."""
     out = {"issue_date": None, "issue_date_hijri": None,
@@ -66,53 +110,28 @@ def extract_issue_date(text: str, identity_year: int | None = None) -> dict:
     t = to_western_digits(_nfkc(text or ""))
     if not t:
         return out
-
-    cands: list[tuple[str, int, int, int, str | None]] = []   # (conf, d, m, y, hijri_txt)
     tail = t[-1500:]
-    for m in _CLOSING_RE.finditer(tail):
-        d, mo, y = int(m["d"]), int(m["m"]), int(m["y"])
-        k = _kind(y)
-        if m["second"]:
-            d2, m2, y2 = int(m["d2"]), int(m["m2"]), int(m["y2"])
-            if _kind(y2) == "gregorian":
-                cands.append(("closing", d2, m2, y2,
-                              f"{d}/{mo}/{y}" if k == "hijri" else None))
-                continue
-            if k == "gregorian":
-                cands.append(("closing", d, mo, y, None))
-                continue
-        if k == "gregorian":
-            cands.append(("closing", d, mo, y, None))
-        elif k == "hijri":
-            cands.append(("closing_hijri", d, mo, y, f"{d}/{mo}/{y}"))
-    if not cands:
+    # الختام: آخر مرساة يليها تاريخ (التوقيع في نهاية الصك)
+    best = None
+    for a in _ANCHOR_RE.finditer(tail):
+        found = _dates_in(tail[a.end():a.end() + _WINDOW])
+        r = _pick(found, identity_year, "closing")
+        if r:
+            best = r
+    if best is None:
         head = t[:600]
-        for m in _HEADING_RE.finditer(head):
-            d, mo, y = int(m["d"]), int(m["m"]), int(m["y"])
-            k = _kind(y)
-            if k == "gregorian":
-                cands.append(("heading", d, mo, y, None))
-            elif k == "hijri":
-                cands.append(("heading_hijri", d, mo, y, f"{d}/{mo}/{y}"))
-            break
-    if not cands:
+        for a in _HEADING_RE.finditer(head):
+            found = _dates_in(head[a.end():a.end() + 40])
+            r = _pick(found, identity_year, "heading")
+            if r:
+                best = r
+                break
+    if best is None:
         return out
-
-    # الأفضلية: ميلادي على هجري؛ الختام على الرأس؛ الأخير في الختام (التوقيع)
-    greg = [c for c in cands if not c[0].endswith("_hijri")]
-    pick = greg[-1] if greg else cands[-1]
-    conf, d, mo, y, hij = pick
-    if conf.endswith("_hijri"):
-        out["issue_date_hijri"] = hij
-        out["issue_date_confidence"] = conf
-        return out
-    iso = _iso(d, mo, y)
-    if iso is None:
-        return out
-    if identity_year and abs(y - int(identity_year)) > 1:
+    if best.get("conflict"):
         out["conflict"] = True
         return out
-    out.update(issue_date=iso, issue_date_hijri=hij, issue_date_confidence=conf)
+    out.update(best)
     return out
 
 
