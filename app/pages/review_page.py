@@ -5,20 +5,21 @@
 قائمة كل ما جُمع، إمكانية فتح كل نتيجة ومعاينة نصها الكامل، تمييز ما
 يحتاج مراجعة صراحة، وزرَّي موافقة/رفض لكل نتيجة.
 
-زر «اعتماد وتجهيز لميزان» النهائي مُعطَّل حالياً بقرار صريح من المالك:
-الأولوية الآن لدقّة واستقرار نتائج الزحف نفسها؛ صيغة التصدير الفعلية
-لميزان (استيراد مباشر أو ملفات بصيغة يقبلها التطبيق) ستُحسم لاحقاً بعد
-قراءة تطبيق ميزان فعلياً — لا تخمين لصيغة غير مؤكدة الآن.
+زر «اعتماد وتجهيز لميزان» — مُفعَّل من 2026-09-19: يولّد حزمة المحتوى
+المتوافقة مع عقد ميزان (ADR-001) في المجلد الذي يختاره المالك (افتراضياً
+مجلد المكتبة في ميزان إن وُجد)، ثم يُرشد إلى خطوة التنظيف في ميزان.
 """
 import sqlite3
+
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QButtonGroup, QDialog, QDialogButtonBox,
-                               QHBoxLayout, QHeaderView, QLabel,
-                               QPlainTextEdit, QPushButton, QRadioButton,
-                               QTableWidget, QTableWidgetItem, QTextEdit,
-                               QVBoxLayout, QWidget)
+                               QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+                               QMessageBox, QPlainTextEdit, QPushButton,
+                               QRadioButton, QTableWidget, QTableWidgetItem,
+                               QTextEdit, QVBoxLayout, QWidget)
 
 from app import core_data as md
 from ._common import card, page_header
@@ -150,10 +151,11 @@ class ReviewPage(QWidget):
         bottom.addWidget(self.hint); bottom.addStretch()
         finalize = QPushButton("اعتماد وتجهيز لميزان  ◀")
         finalize.setProperty("class", "gold")
-        finalize.setEnabled(False)
         finalize.setToolTip(
-            "مؤجَّل عمداً: سيُفعَّل بعد استقرار دقّة نتائج الزحف، وبعد "
-            "تحديد صيغة الاستيراد التي يقبلها تطبيق ميزان فعلياً")
+            "يولّد حزمة المحتوى (CSV+md+JSON) المتوافقة مع عقد ميزان في "
+            "المجلد الذي تختاره — افتراضياً مجلد المكتبة في ميزان إن وُجد — "
+            "ثم شغّل في ميزان: مكتبة قانونية ← «تنظيف وإعادة البناء».")
+        finalize.clicked.connect(self._finalize_to_mizan)
         bottom.addWidget(finalize)
         root.addLayout(bottom)
 
@@ -252,3 +254,32 @@ class ReviewPage(QWidget):
     def _back(self):
         if self.on_back:
             self.on_back()
+
+    @staticmethod
+    def _discover_mizan_dir() -> str:
+        crawler_root = Path(__file__).resolve().parent.parent.parent
+        candidate = (crawler_root.parent / "lawyer-office2" / "content"
+                     / "legal_library" / "laws_decrees")
+        if candidate.exists():
+            return str(candidate)
+        return str(crawler_root / "export" / "content_package")
+
+    def _finalize_to_mizan(self):
+        """يولّد حزمة المحتوى المتوافقة مع عقد ميزان في المجلد المختار."""
+        from exporter import build_package
+        default = self._discover_mizan_dir()
+        out = QFileDialog.getExistingDirectory(
+            self, "اختر مجلد حزمة ميزان", default)
+        if not out:
+            return
+        try:
+            rep = build_package(out_dir=out)
+        except Exception as exc:  # لا ابتلاع صامت — أبلغ المستخدم بسبب الفشل
+            QMessageBox.critical(self, "فشل التصدير", str(exc))
+            return
+        msg = (f"حزمة المحتوى: {rep['docs']} وثيقة\n"
+               f"المسار: {rep['out_dir']}\n"
+               f"تخطّي (مواد قليلة): {rep['skipped']}\n"
+               f"استبدال يدوي: {rep['replaced']} | إبقاء يدوي: {rep['kept']}\n\n"
+               "الخطوة التالية في ميزان: مكتبة قانونية ← «تنظيف وإعادة البناء».")
+        QMessageBox.information(self, "تم التصدير", msg)

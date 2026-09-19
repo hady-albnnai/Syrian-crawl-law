@@ -141,11 +141,18 @@ def cmd_eval_search(args):
 def cmd_export(args):
     from exporter import build_package
     rep = build_package(out_dir=args.out, prefix=args.prefix,
-                        min_articles=args.min_articles)
+                        min_articles=args.min_articles,
+                        reconcile=not args.no_reconcile)
     print(f"حزمة المحتوى: {rep['docs']} وثيقة → {rep['out_dir']}")
     print(f"  الفهرس: {rep['csv']}")
     if rep["skipped"]:
         print(f"  تخطي (مواد < {args.min_articles}): {rep['skipped']}")
+    if rep["replaced"] or rep["kept"]:
+        print(f"  دمج آمن مع فهرس قائم: استبدال يدوي {rep['replaced']} "
+              f"| إبقاء يدوي {rep['kept']}")
+        if rep["kept"]:
+            print("  ⚠️ بقيت قوانين يدوية غير مغطّاة في الزاحف — أُبقيت لسلامة "
+                  "المكتبة (راجع التقرير).")
     return 0
 
 
@@ -667,6 +674,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--out", default="export/content_package")
     sp.add_argument("--prefix", default="content/legal_library/laws_decrees/")
     sp.add_argument("--min-articles", type=int, default=0)
+    sp.add_argument("--no-reconcile", action="store_true",
+                    help="تعطيل الدمج الآمن مع فهرس قائم (استبدال كامل)")
     sp.set_defaults(fn=cmd_export)
 
     sp = sub.add_parser("seeds", help="عرض دليل البذور المرفق")

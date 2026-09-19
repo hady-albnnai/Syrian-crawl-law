@@ -129,11 +129,17 @@ class TestExporter:
             assert int(r["size_bytes"]) == f.stat().st_size
 
     def test_snapshot_hash_preferred(self, package, tmp_path, monkeypatch):
-        """مع لقطة خام ⇒ البصمة للملف المصدري (دلالة حزمة ميزان)."""
+        """مع لقطة خام موجودة ⇒ البصمة تبقى لملف الـ .md المُسلَّم (لا للقطة).
+
+        حرج: مستورد ميزان يحسب sha256 لملف `local_path` (الـ .md) ويقارنه
+        بالفهرس؛ لو بُصِّمَت القطة لتعذّر تطابق البايت فيُسقَط الصف بصمت
+        (skippedIntegrity). العقد: البصمة = بايتات الملف الفعلي المُسلَّم.
+        """
         _, out, db = package
         snap = tmp_path / "snaps"
         snap.mkdir()
-        (snap / "deadbeef.html").write_bytes(b"<html>raw</html>")
+        snap_file = snap / "deadbeef.html"
+        snap_file.write_bytes(b"<html>raw</html>")
         monkeypatch.setattr(exporter, "SNAPSHOT_DIR", snap)
         conn = sqlite3.connect(db)
         conn.execute("UPDATE documents SET snapshot_sha256='sha256:deadbeef'"
@@ -144,8 +150,10 @@ class TestExporter:
         rows = list(csv.DictReader(
             open(out / "laws_decrees_index.csv", encoding="utf-8-sig")))
         r = next(r for r in rows if r["id"] == "law_2021_7")
-        expect = hashlib.sha256(b"<html>raw</html>").hexdigest()
+        md_file = out / "markdown" / r["local_path"].split("/")[-1]
+        expect = hashlib.sha256(md_file.read_bytes()).hexdigest()
         assert r["sha256"] == expect
+        assert r["sha256"] != hashlib.sha256(b"<html>raw</html>").hexdigest()
 
     def test_min_articles_filter(self, legacy_db, tmp_path):
         migrations.migrate(legacy_db)

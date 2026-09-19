@@ -3,11 +3,19 @@
 العقد مُثبت من `lawyer-office2/content/legal_library/laws_decrees/laws_decrees_index.csv`:
 - 14 عموداً بترتيب ثابت، الملف بترميز UTF-8 مع BOM.
 - ملفات النصوص markdown/ باسم `{year}_{title}_{number}.md`.
-- sha256 = بصمة **الملف المصدري** (bytes) كما في حزمة ميزان — عندنا هو
-  لقطة HTML الخام إن وُجدت، وإلا بصمة ملف md نفسه (موثق في التقرير).
+- sha256 = بصمة **الملف الفعلي الذي يُسلَّم ويُتحقَّق منه** (الـ .md) — لا لقطة
+  المصدر. هذا حرج: مستورد ميزان يحسب sha256 لملف `local_path` (الـ .md) ويقارنه
+  بالفهرس؛ أي بصمة لملف آخر (لقطة HTML) تُسقط الصف بصمت (skippedIntegrity). راجع ADR-001 §3.
 
-قرار المالك 2026-09-05: md + JSON — لذا يُكتب بجانب كل md ملف JSON
+قرار المالك 2026-09-05: md + JSON — يُكتب بجانب كل md ملف JSON
 بالعقد الغني للمواد (رقم/لفظية/نص/فقرات/مسار هرمي) للاستهلاك الآلي.
+
+منطق الدمج/التنظيف (طلب المالك 2026-09-19): عند التصدير إلى مجلد ميزان
+الحالي (فيه فهرس قائم)، يُجرى «دمج آمن»:
+- أي قانون يدويّ قائم **مغطّى** بهويّة في الزاحف (رقم+سنة أو عنوان) يُستبدَل
+  بنسخة الزاحف (تنظيف).
+- أي قانون يدويّ **غير مغطّى** (لا نظير له في الزاحف) يُبقى لسلامة المكتبة.
+- يُطبع تقرير بالمستبدَل/المُبقى قبل الكتابة.
 """
 import csv
 import hashlib
@@ -28,6 +36,9 @@ DEFAULT_PREFIX = "content/legal_library/laws_decrees/"
 SNAPSHOT_DIR = Path("data/snapshots")
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
+# علامة الاستيراد في ميزان — تُستخدم لاحقاً لإعادة بناء المكتبة نظيفة
+MIZAN_CSV_IMPORT_MARKER = "استيراد CSV من الفهرس"
+
 
 def sanitize_filename(title: str) -> str:
     """اسم ملف آمن على Windows وLinux معاً (ميزان تطبيق Windows)."""
@@ -42,6 +53,23 @@ def _priority_for(credibility) -> int:
     except (TypeError, ValueError):
         c = 0.6
     return 1 if c >= 0.7 else (2 if c >= 0.5 else 3)
+
+
+def _norm_title(t) -> str:
+    return re.sub(r"\s+", "", (t or "").strip())
+
+
+def _row_key(number, year):
+    """مفتاح هوية مستقر من (رقم، سنة) متى توفّرا، وإلا من المتاح."""
+    number = str(number or "").strip()
+    year = str(year or "").strip()
+    if number and year:
+        return ("NY", number, year)
+    if number:
+        return ("N", number)
+    if year:
+        return ("Y", year)
+    return None
 
 
 def doc_markdown(doc, articles) -> str:
@@ -98,9 +126,51 @@ def doc_json(doc, articles) -> dict:
     }
 
 
+def _read_index(path: Path) -> list:
+    if not path.exists():
+        return []
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        return [dict(r) for r in reader]
+
+
+def doc_row(doc, articles, md_bytes, stem, prefix) -> dict:
+    """يولّد صف الفهرس لمستند زاحف — مع بصمة الملف المُسلَّم (الـ .md)."""
+    doc_id = (f"law_{doc['year']}_{doc['number']}"
+              if doc["year"] and doc["number"]
+              else "doc_" + (doc["content_sha256"] or
+                             hashlib.sha256(
+                                 (doc["doc_id"] or stem).encode()
+                             ).hexdigest())[:8])
+    return {
+        "id": doc_id,
+        "title": doc["title"] or "",
+        "type": "قانون" if (doc["doc_type"] or "") == "law"
+                else (doc["doc_type"] or ""),
+        "number": doc["number"] if doc["number"] is not None else "",
+        "year": doc["year"] if doc["year"] is not None else "",
+        "date": "",  # تاريخ الإصدار غير معروف من المنتدى — لا يُختلق
+        "category": BRANCH_AR.get(doc["branch"],
+                                   doc["branch"] or "غير مصنف"),
+        "url": doc["source_url"] or "",
+        "format": "html",  # اتفاق ميزان: ملف نصّي markdown يُوسَم html (كالقائمة اليدوية)
+        "priority": _priority_for(doc["source_credibility"]),
+        "status": "crawled",
+        "local_path": f"{prefix}markdown/{stem}.md",
+        "size_bytes": len(md_bytes),
+        # العقد: البصمة = بايتات الـ .md الفعلي الذي يُسلَّم ويُتحقَّق منه في ميزان
+        "sha256": hashlib.sha256(md_bytes).hexdigest(),
+    }
+
+
 def build_package(db_path=DB_PATH, out_dir="export/content_package",
-                  prefix=DEFAULT_PREFIX, min_articles=0) -> dict:
-    """يبني الحزمة كاملة ويعيد إحصاءات للتقرير."""
+                  prefix=DEFAULT_PREFIX, min_articles=0,
+                  reconcile=True) -> dict:
+    """يبني الحزمة كاملة ويعيد إحصاءات للتقرير.
+
+    reconcile=True: إن وُجد فهرس قائم في out_dir، يُدمج آمناً — يستبدل القوانين
+    اليدوية المغطّاة بالزاحف ويُبقي غير المغطّاة (سلامة المكتبة).
+    """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     docs = conn.execute(
@@ -108,6 +178,8 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
         "ORDER BY year, number, id").fetchall()
     out = Path(out_dir)
     (out / "markdown").mkdir(parents=True, exist_ok=True)
+
+    crawler_keys, crawler_titles = set(), set()
     used_ids, rows, skipped = set(), [], 0
     for doc in docs:
         articles = conn.execute(
@@ -128,50 +200,52 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
         js_path.write_text(json.dumps(doc_json(doc, articles),
                                       ensure_ascii=False, indent=2),
                            encoding="utf-8")
-        # sha256 = بصمة الملف المصدري: اللقطة الخام إن وُجدت، وإلا md نفسه
-        snap = doc["snapshot_sha256"]
-        snap_file = (SNAPSHOT_DIR / (snap.split(":")[-1] + ".html")
-                     if snap else None)
-        if snap_file and snap_file.exists():
-            sha = hashlib.sha256(snap_file.read_bytes()).hexdigest()
-        else:
-            sha = hashlib.sha256(md_bytes).hexdigest()
-        doc_id = (f"law_{doc['year']}_{doc['number']}"
-                  if doc["year"] and doc["number"]
-                  else "doc_" + (doc["content_sha256"] or
-                                 hashlib.sha256(
-                                     (doc["doc_id"] or stem).encode()
-                                 ).hexdigest())[:8])
-        base_id, n = doc_id, 2
+        row = doc_row(doc, articles, md_bytes, stem, prefix)
+
+        base_id, n = row["id"], 2
+        doc_id = base_id
         while doc_id in used_ids:
             doc_id = f"{base_id}_{n}"
             n += 1
         used_ids.add(doc_id)
-        rows.append({
-            "id": doc_id,
-            "title": doc["title"] or "",
-            "type": "قانون" if (doc["doc_type"] or "") == "law"
-                    else (doc["doc_type"] or ""),
-            "number": doc["number"] if doc["number"] is not None else "",
-            "year": doc["year"] if doc["year"] is not None else "",
-            "date": "",  # تاريخ الإصدار غير معروف من المنتدى — لا يُختلق
-            "category": BRANCH_AR.get(doc["branch"],
-                                       doc["branch"] or "غير مصنف"),
-            "url": doc["source_url"] or "",
-            "format": "html",
-            "priority": _priority_for(doc["source_credibility"]),
-            "status": "crawled",
-            "local_path": f"{prefix}markdown/{stem}.md",
-            "size_bytes": len(md_bytes),
-            "sha256": sha,
-        })
+        row["id"] = doc_id
+
+        rows.append(row)
+        k = _row_key(doc["number"], doc["year"])
+        if k:
+            crawler_keys.add(k)
+        crawler_titles.add(_norm_title(doc["title"]))
     conn.close()
+
+    replaced, kept = 0, 0
+    if reconcile:
+        existing_path = out / "laws_decrees_index.csv"
+        existing = _read_index(existing_path)
+        if existing:
+            final = []
+            for r in existing:
+                k = _row_key(r.get("number"), r.get("year"))
+                covered = ((k is not None and k in crawler_keys)
+                           or _norm_title(r.get("title")) in crawler_titles)
+                if covered:
+                    replaced += 1  # الزاحف يوفّر نظيراً — استبدال/تنظيف
+                    continue
+                fp = (r.get("local_path") or "").strip()
+                if fp and (out / fp).exists():
+                    kept += 1  # غير مغطّى + ملفه موجود — إبقاء لسلامة المكتبة
+                    final.append(r)
+                else:
+                    replaced += 1  # غير مغطّى لكن ملفه مفقود — لا فائدة منه
+            rows = final + rows
+
     csv_path = out / "laws_decrees_index.csv"
-    # fاصله الأسطر LF حصراً — فهرس ميزان LF-only (مثبت بالفحص، لا CRLF)
+    # فاصلة الأسطر LF حصراً — فهرس ميزان LF-only (مثبت بالفحص، لا CRLF)
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=COLUMNS, lineterminator="\n")
         w.writeheader()
         w.writerows(rows)
-    log.info(f"حزمة المحتوى: {len(rows)} وثيقة في {out} ({skipped} تخطي)")
-    return {"docs": len(rows), "skipped": skipped,
-            "csv": str(csv_path), "out_dir": str(out)}
+
+    log.info(f"حزمة المحتوى: {len(rows)} صف في {out} "
+             f"(تخطّي {skipped} | استبدال يدوي {replaced} | إبقاء يدوي {kept})")
+    return {"docs": len(rows), "skipped": skipped, "replaced": replaced,
+            "kept": kept, "csv": str(csv_path), "out_dir": str(out)}
