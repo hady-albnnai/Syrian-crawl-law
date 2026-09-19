@@ -586,6 +586,16 @@ def cmd_parts(args):
     return 0
 
 
+def cmd_refine(args):
+    """تنقيح شامل بأمر واحد (يجري آلياً أيضاً في نهاية كل دورة زحف)."""
+    from database import create_tables, get_connection
+    import postprocess
+    create_tables()
+    conn = get_connection()
+    log.info(postprocess.format_summary(postprocess.refine_all(conn)))
+    conn.close()
+
+
 def cmd_nature(args):
     """ف٤: طبيعة الوثائق — تصنيف/توزيع (صك، أعمال تحضيرية، فهرس، مسودة…)."""
     from database import create_tables, get_connection
@@ -885,6 +895,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="عرض ما سيُبذر دون إدراجه")
     sp.set_defaults(fn=cmd_seed_community)
 
+    sp = sub.add_parser(
+        "refine", help="تنقيح شامل: طبيعة → هوية → أجزاء → إحالات وحالة النفاذ")
+    sp.set_defaults(fn=cmd_refine)
     sp = sub.add_parser("nature",
                         help="طبيعة الوثائق: صك/أعمال تحضيرية/فهرس/مسودة (ف٤)")
     sp.add_argument("--reclassify", action="store_true",

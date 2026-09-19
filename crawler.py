@@ -292,6 +292,10 @@ def _handle_topic(conn, task, html, dry_run, stats):
     log.info(f"   ✅ حُفظت {title[:60]} ({len(articles)} مادة)")
 
 
+def stop_event_set(ev) -> bool:
+    return bool(ev is not None and getattr(ev, "is_set", lambda: False)())
+
+
 def start_crawling(max_pages=40, dry_run=False, stop_event=None):
     log.info("=" * 100)
     log.info(f"🚀 الزاحف القابل للاستئناف v2.4 — طابور دائم + تقرير دورة")
@@ -469,6 +473,15 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
         learning.update_source_performance(conn)
     except Exception as exc:  # جدول source_performance غير موجود (قاعدة قديمة)
         log.info(f"تخطي تحديث أداء المصادر: {exc}")
+
+    # التنقيح الختامي (قرار المالك 2026-09-19): الهوية والأجزاء وحالة النفاذ
+    # تُحسب آلياً بعد كل دورة فعلية — لا أوامر يدوية بعد الزحف.
+    if not dry_run and not stop_event_set(stop_event):
+        try:
+            import postprocess
+            log.info("🧹 " + postprocess.format_summary(postprocess.refine_all(conn)))
+        except Exception as exc:  # التنقيح لا يُسقط الدورة أبداً
+            log.warning(f"تخطي التنقيح الختامي: {exc}")
 
     out = Path(__file__).parent / "output"
     out.mkdir(exist_ok=True)
