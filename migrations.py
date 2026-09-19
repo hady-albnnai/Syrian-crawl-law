@@ -257,6 +257,13 @@ def _migration_008_law_parts(cursor) -> dict:
     return {"columns_added": a}
 
 
+def _migration_009_parent_identity(cursor) -> dict:
+    """ف٩: documents.parent_identity — الصك التابع (لائحة/تعليمات تنفيذية)
+    يشير إلى مفتاح هوية قانونه الأم (regulations.py). علاقة فقط."""
+    a = _add_column_if_missing(cursor, "documents", "parent_identity", "TEXT")
+    return {"columns_added": a}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
     (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
@@ -271,6 +278,8 @@ MIGRATIONS = [
      _migration_007_doc_nature),
     (8, "documents.part_of (ف٧ law_parts: أجزاء الصك الواحد)",
      _migration_008_law_parts),
+    (9, "documents.parent_identity (ف٩ regulations: الصك التابع → الأم)",
+     _migration_009_parent_identity),
 ]
 LATEST = MIGRATIONS[-1][0]
 

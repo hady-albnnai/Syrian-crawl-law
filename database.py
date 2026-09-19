@@ -77,7 +77,8 @@ def create_tables():
         legal_status TEXT,
         nature TEXT DEFAULT 'instrument',
         travaux_article INTEGER,
-        part_of INTEGER
+        part_of INTEGER,
+        parent_identity TEXT
     )
     ''')
 

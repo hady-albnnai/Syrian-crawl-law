@@ -641,13 +641,13 @@ def cmd_law_status(args):
                       substr(clean_content, 1, 300) AS head
                FROM documents WHERE identity_key IS NULL
                AND status='active' AND COALESCE(nature,'instrument')='instrument'
-               AND part_of IS NULL
+               AND part_of IS NULL AND parent_identity IS NULL
                ORDER BY id LIMIT ?""",
             (args.unidentified,)).fetchall()
         total = conn.execute(
             "SELECT COUNT(*) FROM documents WHERE identity_key IS NULL "
             "AND status='active' AND COALESCE(nature,'instrument')='instrument'"
-            " AND part_of IS NULL"
+            " AND part_of IS NULL AND parent_identity IS NULL"
         ).fetchone()[0]
         folded = conn.execute(
             "SELECT COUNT(*) FROM documents WHERE identity_key IS NULL "

@@ -72,3 +72,41 @@ def test_civil_procedure_1953_vs_2016_by_marker():
 def test_traffic_law_and_extradition():
     assert lookup_named_law("قانون السير والمركبات ـ", "قانون السير والمركبات مادة 1 تعتمد في تطبيق احكام هذا القانون التعاريف الآتية: 1 المركبة")["identity_key"] == "القانون:31:2004"
     assert lookup_named_law("أصول تسليم المجرمين العاديين والملاحقين قضائيا بجرائم عادية رقم 53/1955  في سورية", "")["identity_key"] == "القانون:53:1955"
+
+
+# --- جولة unidentified9 (بحث معمّق) ---------------------------------------------
+def test_deep_search_round_entries():
+    assert lookup_named_law("قانون مصرف التوفير", "قانون مصرف التوفير المادة 1 مصرف التوفير مؤسسة عامة ذات طابع اقتصادي")["identity_key"] == "المرسوم التشريعي:29:2005"
+    assert lookup_named_law("المادة 5 ـ قانون الجمعيات التعاونية السكنية رقم 13", "")["identity_key"] == "القانون:13:1981"
+    assert lookup_named_law("القانون رقم 34 ‏", "القانون رقم 34 المادة 1 يقصد بالتعابير الآتية في معرض أحكام هذا القانون المعني")["identity_key"] == "القانون:34:2004"
+    assert lookup_named_law("قانون الحق العائلي لطائفة الروم الأرثوذكس", "")["identity_key"] == "القانون:23:2004"
+
+
+def test_generic_title_matches_text_head_only_when_allowed():
+    t = "قانون الآثار مادة 1 تعتبر آثارا الممتلكات الثابتة والمنقولة التي بناها أو صنعها أو أنتجها"
+    assert lookup_named_law("وثيقة قانونية سورية", t)["identity_key"] == "المرسوم التشريعي:222:1963"
+    # مدخل بلا match_text_head لا يُطابَق من المطلع
+    assert lookup_named_law("وثيقة قانونية سورية", "قانون مصرف التوفير المادة 1 مصرف التوفير مؤسسة عامة ذات طابع اقتصادي") is None
+
+
+def test_non_syrian_instruments_stay_out():
+    assert lookup_named_law("الأحوال الشخصية للطائفة الدرزية", "المادة 1- يحوز الخاطب") is None
+    assert lookup_named_law("نظام سر الزواج للكنيسة الشرقية", "") is None
+
+
+def test_regulations_link_to_parent(db):
+    from regulations import link_regulations
+    db.execute("INSERT INTO documents(id,title,clean_content,status,nature) VALUES "
+               "(137,'اللائحة التنفيذية لقانون السجل العقاري','المادة 1 يتألف سجل الملكية','active','instrument')")
+    db.execute("INSERT INTO documents(id,title,clean_content,status,nature) VALUES "
+               "(111,'التعليمات التنفيذية للمرسوم التشريعي ذي الرقم /55','المادة (1)','active','instrument')")
+    db.execute("INSERT INTO documents(id,title,clean_content,status,nature) VALUES "
+               "(1,'قانون السير والمركبات','مادة 1','active','instrument')")
+    db.commit()
+    rep = link_regulations(db)
+    assert rep == {"linked": 2, "own_identity": 1}
+    r = {x["id"]: (x["parent_identity"], x["identity_key"]) for x in
+         db.execute("SELECT id, parent_identity, identity_key FROM documents")}
+    assert r[137] == ("القرار:188:1926", "القرار:189:1926")
+    assert r[111] == ("المرسوم التشريعي:55:2004", None)
+    assert r[1] == (None, None)

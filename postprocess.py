@@ -33,6 +33,9 @@ def refine_all(conn) -> dict:
     summary["nature"] = nat.get("distribution")
     ident = reidentify_documents(conn)
     summary["identity"] = {k: v for k, v in ident.items() if v}
+    # 2-أ. الصكوك التابعة → قانونها الأم (parent_identity)
+    from regulations import link_regulations
+    summary["regulations"] = link_regulations(conn)
     # 2-ب. تصادمات الهوية بعد القاموس (نسختان لقانون العقوبات العسكري
     # #105/#145 تصيران 61/1950 معاً): الخاسر يُؤرشف نسخاً لا حذفاً.
     from dedup import dedupe_active_by_identity
@@ -50,5 +53,5 @@ def refine_all(conn) -> dict:
 
 def format_summary(s: dict) -> str:
     return (f"تنقيح: طبيعة={s.get('nature')} | هوية={s.get('identity')} | "
-            f"تصادمات={s.get('dedup')} | أجزاء={s.get('parts')} | إحالات={s.get('amendment_links')} | "
+            f"لوائح={s.get('regulations')} | تصادمات={s.get('dedup')} | أجزاء={s.get('parts')} | إحالات={s.get('amendment_links')} | "
             f"حالات={s.get('status')}")
