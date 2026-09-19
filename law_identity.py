@@ -125,6 +125,14 @@ LAW_ID_SLASH_RE = re.compile(
     rf"[^\d]{{0,20}}(?P<num>{_NUM})\s*/\s*(?P<year_slash>{_NUM})"
 )
 
+# صيغة الشرطة «قانون قمع التهريب13 - 1974» و«قانون النقد الأساسي 23-2002»
+# (قِيست على عيّنة المالك 2026-09-19، ف٦). العنوان فقط، بنفس منطق الصيغة
+# المائلة: الرقم ≤ 4 خانات ملتصق أو مفصول، ثم شرطة بأشكالها، ثم سنة رباعية.
+LAW_ID_DASH_RE = re.compile(
+    rf"({_TYPE_ALT})"
+    rf"(?P<gap>[^\d]{{0,30}}?)(?P<num>\d{{1,4}})\s*[-–—ـ]\s*(?P<year_slash>(?:19|20)\d\d)(?!\d)"
+)
+
 
 def _year_of(m) -> int:
     """سنة الصك من المطابقة: صيغة «لعام» أو الصيغة المائلة — مع أي من
@@ -163,8 +171,14 @@ def _normalize_type(raw: str) -> str:
 
 
 _ISSUED_BY_RE = re.compile(r"الصادرة?\s+ب(?:ال)?$|الصادرة?\s+بموجب\s+(?:ال)?$")
+# «الصادر بالمرسوم التشريعي رقم» في ذيل ما قبل الرقم — صيغة إصدار لا إحالة
+_ISSUED_BY_TYPE_RE = re.compile(
+    rf"الصادرة?\s+(?:بموجب\s+)?ب?(?:{_TYPE_ALT})\s*(?:ذي\s+)?(?:(?:ال)?رقم\s*[\u200f/(\[]?)?\s*$")
 _TITLE_YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d\d)(?!\d)")
 _TITLE_NUM_RE = re.compile(rf"رقم\s*[\u200f/(\[]?\s*(?P<n>{_NUM})")
+# «قانون البينات 359 تاريخ 10» — رقم بلا كلمة «رقم» تليه «تاريخ» (عيّنة المالك
+# 2026-09-19). يُقبل للعمود الجزئي فقط، ولا يبني مفتاح هوية.
+_TITLE_NUM_DATE_RE = re.compile(rf"(?<!\d)(?P<n>\d{{1,4}})\s+(?:ب?تاريخ|المؤرخ)\b")
 
 
 _LEAD_RES = [(re.compile(_type_pattern(t).lstrip()), t) for t in DOC_TYPES]
@@ -198,8 +212,16 @@ def _number_belongs_to_other_instrument(title: str, num_start: int,
 
     المقارنة على الكلمة الأولى المجردة لا على التسمية كاملة: «المرسوم
     التشريعي رقم 6» ليست إحالة — «مرسوم» رأس «المرسوم التشريعي» نفسه.
+    النافذة = كل ما قبل الرقم (كانت 22 حرفاً؛ قِيس 2026-09-19: «التعليمات
+    التنفيذية لقانون الضريبة على الدخل رقم /24/ لعام 2003» أخذت رقم القانون
+    الأم لنفسها لأن «قانون» أبعد من 22 حرفاً). صيغة الإصدار «الصادر ب…»
+    مستثناة: رقم صك الإصدار هو رقم القانون نفسه.
     """
-    before = (title or "")[max(0, num_start - 22):num_start]
+    before = (title or "")[:num_start]
+    if _ISSUED_BY_TYPE_RE.search(before):
+        # «قانون الأحوال الشخصية الصادر بالمرسوم التشريعي رقم 59»: المرسوم
+        # هو صك القانون نفسه لا إحالة — الرقم رقمنا (نفس استثناء الهوية الكاملة).
+        return False
     lead_head = (leading or "").split()[0] if leading else None
     lead_head = lead_head[2:] if lead_head and lead_head.startswith("ال") \
         else lead_head
@@ -224,7 +246,7 @@ def title_only_identity(title: str) -> dict:
     # رقمنا ولا سنتنا — «قانون العقوبات المعدَّل بالمرسوم رقم 12 لعام 2001»
     # سنةُ 2001 للمرسوم.
     limit = len(t)
-    m = _TITLE_NUM_RE.search(t)
+    m = _TITLE_NUM_RE.search(t) or _TITLE_NUM_DATE_RE.search(t)
     if m:
         if _number_belongs_to_other_instrument(t, m.start(), _leading_type(t)):
             limit = m.start()
@@ -306,7 +328,11 @@ def extract_law_identity(title: str, text: str) -> dict:
             # 2001» صكّه القانون، والمرسوم إحالة — لا يسرق هويته.
             m = next((mm for mm in LAW_ID_NO_RAQM_RE.finditer(haystack)
                       if not lead or lead == _normalize_type(mm.group(1))),
-                     None) or LAW_ID_SLASH_RE.search(haystack)
+                     None) or LAW_ID_SLASH_RE.search(haystack) \
+                or next((mm for mm in LAW_ID_DASH_RE.finditer(haystack)
+                         if (not lead or lead == _normalize_type(mm.group(1)))
+                         and not _gap_crosses_other_instrument(mm.group("gap"))),
+                        None)
             if m:
                 got = _accept(m)
                 if got:
@@ -511,3 +537,51 @@ def reference_to_search_query(ref: dict) -> str:
     مزوّدي البحث الموجودين أصلاً في discovery.py."""
     return (f"{ref['doc_type']} رقم {ref['law_number']} "
             f"لعام {ref['law_year']} سوريا نص كامل")
+
+
+# --- ف٦: فرز «بلا هوية» إلى فئات قابلة للعلاج (عيّنة المالك 2026-09-19) -----
+_REGULATION_TITLE_RE = re.compile(
+    r"^\W*(?:ال)?(?:لائحة|اللائحة|تعليمات|التعليمات)\s+(?:ال)?(?:تنفيذية|توضيحية)")
+_DUPLICATE_HINT_RE = re.compile(r"^\W*(?:نصوص\s+و?\s*مواد\s+|المادة\s+1\s*[ـ\-–]\s*)")
+_FRAGMENT_TITLE_RE = re.compile(
+    r"^وثيقة\s+قانونية\s+سورية$|^\W*(?:ب|و)?ال?ترخيص\s+ل|^\W*بالترخيص\s")
+
+
+def triage_unidentified(title: str, text: str) -> dict:
+    """يصنّف وثيقةً بلا هوية إلى فئة علاج، من العنوان ومطلع النص فقط.
+
+    الفئات (قِيست على 46 صكاً بلا هوية من قاعدة المالك):
+      partial_number_year  عنوان يحمل رقماً أو سنة (لا كليهما) — يُكمَل بمصدر ثانٍ
+      regulation           لائحة/تعليمات تنفيذية — صك تابع، يُربط بقانونه الأم
+      title_preamble_clash العنوان يذكر رقماً والديباجة رقماً آخر — مراجعة بشرية
+      likely_duplicate     إعادة نشر لنص صك مُعرَّف على الأرجح («نصوص ومواد…»)
+      fragment             عنوان عام أو شذرة — مراجعة بشرية
+      named_law            صك مشهور بلا رقم بالعنوان («قانون مجلس الدولة») — قاموس مرجعي
+    كل ما هنا اقتراحُ فرزٍ لا هوية؛ لا يُكتب في identity_key.
+    """
+    t = _nfkc(title or "").strip()
+    head = _nfkc(text or "")[:300]
+    fb = title_only_identity(t)
+    if _REGULATION_TITLE_RE.search(t):
+        return {"category": "regulation", "hint": fb}
+    if _FRAGMENT_TITLE_RE.search(t) or len(t) < 8:
+        return {"category": "fragment", "hint": fb}
+    tm = _TITLE_NUM_RE.search(t)
+    lead = _leading_type(t)
+    if tm and lead:
+        for m in _PREAMBLE_NUM_RE.finditer(head):
+            if _normalize_type(m.group(1)) == lead:
+                try:
+                    if int(to_western_digits(m.group("num"))) != \
+                            int(to_western_digits(tm.group("n"))):
+                        return {"category": "title_preamble_clash",
+                                "hint": {"title_number": tm.group("n"),
+                                         "preamble_number": m.group("num")}}
+                except ValueError:
+                    pass
+                break
+    if _DUPLICATE_HINT_RE.search(t) or _DUPLICATE_HINT_RE.search(head):
+        return {"category": "likely_duplicate", "hint": fb}
+    if fb["law_number"] or fb["law_year"]:
+        return {"category": "partial_number_year", "hint": fb}
+    return {"category": "named_law", "hint": fb}

@@ -596,27 +596,43 @@ def cmd_law_status(args):
         log.info(f"إعادة تحديد الهوية: {stats}")
     if getattr(args, "unidentified", 0):
         # ف٣: عيّنة «بلا هوية» لتحسين المستخرج بالدليل (عناوين حقيقية)
+        # ف٦: صكوك فقط (nature='instrument') — الأعمال التحضيرية والفهارس
+        # ليست «بلا هوية» بل بلا حاجة إليها؛ وكل صك يُفرز إلى فئة علاج.
+        from law_identity import triage_unidentified
         rows = conn.execute(
-            """SELECT id, title, substr(clean_content, 1, 160) AS head
+            """SELECT id, title, substr(clean_content, 1, 300) AS head
                FROM documents WHERE identity_key IS NULL
-               AND status='active' ORDER BY id LIMIT ?""",
+               AND status='active' AND COALESCE(nature,'instrument')='instrument'
+               ORDER BY id LIMIT ?""",
             (args.unidentified,)).fetchall()
         total = conn.execute(
             "SELECT COUNT(*) FROM documents WHERE identity_key IS NULL "
-            "AND status='active'").fetchone()[0]
-        log.info(f"وثائق نشطة بلا هوية: {total} (عرض {len(rows)})")
+            "AND status='active' AND COALESCE(nature,'instrument')='instrument'"
+        ).fetchone()[0]
+        log.info(f"صكوك نشطة بلا هوية: {total} (عرض {len(rows)})")
+        by_cat: dict = {}
+        lines = []
+        for r in rows:
+            tri = triage_unidentified(r["title"] or "", r["head"] or "")
+            by_cat.setdefault(tri["category"], []).append((r, tri))
+        for cat, items in sorted(by_cat.items()):
+            lines.append(f"## {cat} ({len(items)})")
+            for r, tri in items:
+                head = " ".join((r["head"] or "").split())[:160]
+                lines.append(f"#{r['id']} | {r['title']}\n    hint={tri['hint']}"
+                             f"\n    ↳ {head}")
+        summary = ", ".join(f"{c}={len(v)}" for c, v in sorted(by_cat.items()))
+        log.info(f"الفرز: {summary}")
         out_file = getattr(args, "out", None)
         if out_file:
             # إلى ملف بدل الشاشة: المخرجات الطويلة تُرفق لا تُلصق
             with open(out_file, "w", encoding="utf-8", newline="\n") as fh:
-                for r in rows:
-                    head = " ".join((r["head"] or "").split())
-                    fh.write(f"#{r['id']} | {r['title']}\n    ↳ {head}\n")
+                fh.write(f"# صكوك نشطة بلا هوية: {total} — الفرز: {summary}\n")
+                fh.write("\n".join(lines) + "\n")
             log.info(f"كُتبت العيّنة إلى {out_file}")
         else:
-            for r in rows:
-                head = " ".join((r["head"] or "").split())
-                log.info(f"  #{r['id']} | {r['title']}\n      ↳ {head}")
+            for ln in lines:
+                log.info(ln)
     links = rebuild_links(conn) if args.rebuild else None
     if args.list:
         rows = conn.execute(
