@@ -498,6 +498,19 @@ def reidentify_documents(conn) -> dict:
                     (fb["law_number"], fb["law_year"], r["id"]))
                 stats["corrected_key"] = stats.get("corrected_key", 0) + 1
                 continue
+        if ident["identity_key"] is None and r["identity_key"] is None:
+            # ف٨: قاموس الصكوك المسمّاة (named_laws.py) — معرفة مرجعية موثَّقة
+            # المصدر لما لا رقم له في عنوانه. لا يمسّ هوية قائمة.
+            from named_laws import lookup_named_law
+            nl = lookup_named_law(r["title"] or "", r["clean_content"] or "")
+            if nl:
+                conn.execute(
+                    "UPDATE documents SET identity_key=?, identity_confidence=?,"
+                    " number=?, year=? WHERE id=?",
+                    (nl["identity_key"], nl["identity_confidence"],
+                     nl["law_number"], nl["law_year"], r["id"]))
+                stats["named"] = stats.get("named", 0) + 1
+                continue
         if ident["identity_key"] is None:
             # لا هوية كاملة: يُجرَّب احتياط العنوان لملء العمود الفارغ فقط.
             # هوية قائمة لا تُمسّ، وidentity_key لا يُمسّ إطلاقاً هنا.

@@ -1,0 +1,90 @@
+"""قاموس الصكوك المسمّاة — بيانات لا كود (ف٨).
+
+المشكلة (unidentified7.txt، 2026-09-19): 15 صكاً مشهوراً عنوانه اسمه فقط
+(«قانون العقوبات العسكري»، «قانون أصول المحاكمات الجزائية»…) بلا رقم ولا
+سنة، و9 صكوك عنوانها يحمل الرقم بلا السنة أو العكس. لا نمطَ يستخرج ما ليس
+مكتوباً؛ الحل معرفةٌ مرجعية: اسم الصك → هويته.
+
+قواعد القاموس (CONSTITUTION: لا رقم غير متحقَّق منه):
+- كل مدخل له `source` (مصدر خارجي قُرئ فعلاً) — بلا مصدر لا مدخل.
+- المطابقة بالعنوان المطبَّع (بعد _nfkc وإزالة أل/الترقيم) **و** ببصمة نصية
+  `text_marker` حيث للاسم أكثر من صك عبر الزمن (مجلس الدولة 55/1959 ≠ 32/2019،
+  العقوبات الاقتصادية 37/1966 ≠ 3/2013) — البصمة من المادة الأولى.
+- ما لم يُتحقق منه ليس هنا (مصرف التوفير، الطوائف، السير…) ويبقى في تقرير
+  «بلا هوية» حتى يُتحقق. الإضافة = سطر بيانات + مصدر، لا تعديل كود.
+- الثقة المكتوبة في القاعدة: `named_law_dictionary`.
+"""
+from __future__ import annotations
+
+import re
+
+from law_identity import _nfkc, build_identity_key
+
+NAMED_LAWS: list[dict] = [
+    {"title": "قانون العقوبات العسكري", "doc_type": "المرسوم التشريعي",
+     "number": 61, "year": 1950,
+     "source": "eastlaws.com Tash RecID=1195653؛ syrian-lawyer.club (القضاء العسكري)"},
+    {"title": "قانون أصول المحاكمات الجزائية", "doc_type": "المرسوم التشريعي",
+     "number": 112, "year": 1950, "source": "syria-law.com (المرسوم 112 لعام 1950)"},
+    {"title": "قانون مجلس الدولة", "doc_type": "المرسوم التشريعي",
+     "number": 55, "year": 1959,
+     "text_marker": "هيئة مستقلة تلحق برئاسة مجلس الوزراء",
+     "source": "casi.gov.sy node=5518 cat=14747 (المادة 1 حرفياً)؛ أُلغي بالقانون 32/2019 م65"},
+    {"title": "قانون العقوبات الاقتصادية", "doc_type": "المرسوم التشريعي",
+     "number": 37, "year": 1966,
+     "text_marker": "يقصد بالدولة في معرض تطبيق هذا المرسوم التشريعي",
+     "source": "parliament.gov.sy nid=8806 (المادة 1 حرفياً؛ غير نافذ — أنهاه القانون 3/2013)"},
+    {"title": "مكافحة عمليات غسل الأموال وتمويل الإرهاب", "doc_type": "المرسوم التشريعي",
+     "number": 33, "year": 2005,
+     "text_marker": "يقصد بالكلمات والتعابير الآتية في معرض تطبيق هذا المرسوم التشريعي",
+     "source": "groups.google.com/g/syrianlaw/c/Za0My2IQlZk (المادة 1 حرفياً)"},
+    {"title": "قانون إنشاء المحاكم المسلكية", "doc_type": "المرسوم التشريعي",
+     "number": 7, "year": 1990,
+     "source": "مكتبة القوانين السورية (syrianlaw) — «الصادر بالمرسوم التشريعي رقم 7 لعام 1990»؛ أُلغي بالقانون 32/2019 م65"},
+    # عنوان يحمل الرقم بلا السنة (أو العكس): القاموس يكمل الناقص فقط
+    {"title": "قانون التأمينات الاجتماعية الصادر بالمرسوم التشريعي رقم 92",
+     "doc_type": "القانون", "number": 92, "year": 1959,
+     "source": "taminat.sy/home/page/7؛ mosal.gov.sy"},
+    {"title": "قانون عمليات التحسين العقاري الصادر بالمرسوم التشريعي رقم 153",
+     "doc_type": "المرسوم التشريعي", "number": 153, "year": 1949,
+     "source": "مكتبة القوانين السورية (syrianlaw): «المرسوم التشريعي رقم 153 لعام 1949»"},
+    {"title": "قانون الأحوال الشخصية الصادر بالمرسوم التشريعي رقم 59",
+     "doc_type": "المرسوم التشريعي", "number": 59, "year": 1953,
+     "source": "DELIVERY/REVIEW-NAMED-LAWS-2026-09-19.md (59/1953 — معلوم قطعاً)"},
+    {"title": "قانون أصول المحاكمات السوري 2016", "doc_type": "القانون",
+     "number": 1, "year": 2016,
+     "source": "قانون أصول المحاكمات المدنية رقم 1 لعام 2016 (REVIEW-NAMED-LAWS)"},
+    {"title": "قانون حماية حقوق المؤلف في سورية 2001", "doc_type": "القانون",
+     "number": 12, "year": 2001,
+     "source": "القانون 12/2001 موجود بالمتن ومسجَّل ملغى بـ م.ت 62/2013 (REVIEW-NAMED-LAWS)"},
+]
+
+
+def _norm(s: str) -> str:
+    s = _nfkc(s or "")
+    s = re.sub(r"[^\u0621-\u064A0-9 ]+", " ", s)
+    s = re.sub(r"\bال(?=[\u0621-\u064A]{3,})", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def lookup_named_law(title: str, text: str = "") -> dict | None:
+    """يعيد هوية كاملة إذا طابق العنوانُ مدخلاً (وبصمتُه النصية إن اشتُرطت)."""
+    nt = _norm(title)
+    if not nt:
+        return None
+    body = _nfkc(text or "")[:1500]
+    for e in NAMED_LAWS:
+        if _norm(e["title"]) not in nt:
+            continue
+        marker = e.get("text_marker")
+        if marker and _nfkc(marker) not in body:
+            continue
+        return {
+            "doc_type": e["doc_type"], "law_number": e["number"],
+            "law_year": e["year"],
+            "identity_key": build_identity_key(e["doc_type"], e["number"], e["year"]),
+            "identity_confidence": "named_law_dictionary",
+            "provenance": "named_laws",
+            "source": e["source"],
+        }
+    return None

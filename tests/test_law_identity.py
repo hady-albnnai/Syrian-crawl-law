@@ -303,7 +303,7 @@ def test_title_only_accepts_slash_citation_year():
 
 def test_reidentify_partial_fills_year_only(tmp_path, monkeypatch):
     conn = _tmp_db(tmp_path, monkeypatch)
-    doc_id = _insert(conn, "قانون حماية حقوق المؤلف في سورية 2001",
+    doc_id = _insert(conn, "قانون حماية المستهلك في سورية 2001",
                      "نص القانون هنا.")
     stats = li.reidentify_documents(conn)
     assert stats["partial"] == 1 and stats["gained"] == 0
@@ -321,7 +321,7 @@ def test_reidentify_partial_never_overwrites_stored_number(tmp_path,
     cur = conn.execute(
         "INSERT INTO documents (doc_id, title, clean_content, number, year)"
         " VALUES (?,?,?,?,?)",
-        ("dX1", "قانون حماية حقوق المؤلف في سورية 2001", "نص.", 99, None))
+        ("dX1", "قانون حماية المستهلك في سورية 2001", "نص.", 99, None))
     conn.commit()
     assert li.reidentify_documents(conn)["partial"] == 1
     row = conn.execute("SELECT number, year FROM documents WHERE id=?",
