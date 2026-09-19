@@ -93,6 +93,17 @@ def parse_law_page(page_html: str) -> dict:
     if not any(not _HIER_RE.match(a[0]) for a in arts):
         return {}
     doc_type = _TYPE_MAP.get(meta.get("نوع التشريع", ""), None)
+    # قِيس missing3: بنود يصنّف م.ت 115/1953 «قانون» بينما نصه يقول «هذا
+    # المرسوم التشريعي» — النص أصدق من بطاقة الموقع؛ الإحالات تطلبه م.ت.
+    # الدليل: المادة الأولى («يطلق على هذا المرسوم التشريعي اسم…») أو مادة
+    # النشر الأخيرة («ينشر هذا المرسوم التشريعي») — لا وسط النص حيث يقول
+    # «هذا القانون» بمعنى الاسم.
+    edges = " ".join(arts[0][1][:2] + arts[-1][1][:2])
+    if doc_type == "القانون" and re.search(
+            r"(?:يطلق على|ينشر|يصدر) هذا المرسوم التشريعي", edges):
+        doc_type = "المرسوم التشريعي"
+        # العنوان يُصحَّح أيضاً وإلا قرأ مستخرج الهوية النوع الخاطئ منه
+        title = re.sub(r"^(?:ال)?قانون\b", "المرسوم التشريعي", title, count=1)
     num = int(meta["الرقم"]) if meta.get("الرقم", "").isdigit() else None
     year = int(meta["السنة"]) if meta.get("السنة", "").isdigit() else None
     return {"title": title, "doc_type": doc_type, "number": num, "year": year,

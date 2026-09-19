@@ -16,13 +16,13 @@ def test_url_recognition():
 
 def test_parse_real_page():
     p = b.parse_law_page(FIX.read_text(encoding="utf-8"))
-    assert p["title"] == "القانون 115 لعام 1953 المتضمن قانون خدمة العلم"
-    assert (p["doc_type"], p["number"], p["year"]) == ("القانون", 115, 1953)
+    assert p["title"] == "المرسوم التشريعي 115 لعام 1953 المتضمن قانون خدمة العلم"
+    assert (p["doc_type"], p["number"], p["year"]) == ("المرسوم التشريعي", 115, 1953)  # النص: «هذا المرسوم التشريعي»
     assert p["source_status"] == "ملغى"
     assert len(p["articles"]) == 93
     assert p["articles"][0] == ("المادة 1", "يطلق على هذا المرسوم التشريعي اسم (قانون خدمة العلم).")
     assert p["articles"][-1][0] == "المادة 93"
-    assert b.identity_of(p) == "القانون:115:1953"
+    assert b.identity_of(p) == "المرسوم التشريعي:115:1953"
 
 
 def test_pipeline_html_goes_through_standard_extractor():
@@ -32,7 +32,7 @@ def test_pipeline_html_goes_through_standard_extractor():
     e = extract_main_content(r["html"], r["final_url"])
     assert e["success"] and len(e["articles"]) == 93
     ident = extract_law_identity(e["title"], e["clean_text"])
-    assert ident["identity_key"] == "القانون:115:1953"
+    assert ident["identity_key"] == "المرسوم التشريعي:115:1953"
 
 
 def test_non_law_page_rejected():
