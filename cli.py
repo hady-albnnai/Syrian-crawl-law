@@ -816,6 +816,29 @@ def cmd_law_status(args):
     return 0
 
 
+def cmd_article_links(args) -> int:
+    import database
+    from article_links import rebuild_article_links
+    conn = database.get_connection()
+    st = rebuild_article_links(conn)
+    lines = [f"# مواد: {st}"]
+    rows = conn.execute("""SELECT aa.target_identity, aa.article_number, aa.action,
+                                  d.identity_key AS by_key, aa.context
+                           FROM article_amendments aa JOIN documents d ON d.id=aa.amending_doc_id
+                           ORDER BY aa.target_identity, CAST(aa.article_number AS INTEGER)""").fetchall()
+    for r in rows:
+        lines.append(f"{r['target_identity']} م{r['article_number']} ← "
+                     f"{'إلغاء' if r['action']=='repeal' else 'تعديل'} بـ {r['by_key']} | {r['context'][:120]}")
+    txt = "\n".join(lines)
+    if args.out:
+        open(args.out, "w", encoding="utf-8").write(txt)
+        print(lines[0], f"→ {args.out}")
+    else:
+        print(txt)
+    conn.close()
+    return 0
+
+
 def _key_of(conn, ref: str) -> str:
     """يقبل معرف الصف أو بادئة مصدر — ويرجع source_key كاملاً."""
     cur = conn.cursor()
@@ -1000,6 +1023,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--questions", default="eval/questions.json")
     sp.add_argument("--k", type=int, default=3)
     sp.set_defaults(fn=cmd_eval_qa)
+
+    sp = sub.add_parser("article-links", help="A-4: تقرير التعديلات على مستوى المادة")
+    sp.add_argument("--out", metavar="FILE")
+    sp.set_defaults(fn=cmd_article_links)
 
     sp = sub.add_parser("export", help="توليد حزمة محتوى لميزان (CSV+md+JSON)")
     sp.add_argument("--out", default="export/content_package")
