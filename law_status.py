@@ -55,6 +55,47 @@ PARTIAL_OBJECT_RE = re.compile(
     r"(?:ال)?(?:مادة|مواد|فقرة|فقرات|بند|بنود|فصل|فصول|باب|جدول|عبارة)")
 
 
+# صيغة ختامية عامة توجد بكل قانون تقريباً — لا تلغي صكاً محدداً:
+# «تلغى جميع الأحكام/النصوص المخالفة لهذا القانون». قِيس 2026-09-19 على
+# قاعدة المالك: عُلِّم قانون العقوبات 148/1949 «ملغى» لأن قانون حق المؤلف
+# أحال إلى مواده 708–715 ثم ختم بهذه الصيغة ضمن نافذة 60 حرفاً.
+GENERIC_REPEAL_RE = re.compile(
+    r"(?:يلغ[يى]|تلغ[يى])\s+(?:جميع|كل|كافة)\s+"
+    r"(?:ال)?(?:أحكام|احكام|نصوص|النصوص)\s+(?:ال)?مخالف")
+# إحالة إلى نطاق مواد من الصك: «المواد من 708 إلى 715 من قانون…» — جزئية.
+RANGE_REF_RE = re.compile(
+    r"(?:ال)?موا?د[ةه]?\s*(?:من\s*)?[/(]?\s*\d+\s*[/)]?\s*"
+    r"(?:إلى|الى|حتى|و|-|ـ)\s*[/(]?\s*\d+[^.]{0,20}من\s*$")
+
+
+def classify_reference(ref: dict) -> str:
+    """تصنيف اتجاهي (ف٥): الفعل يجب أن يقع **قبل** الصك المستهدَف.
+
+    - before (≤60 حرفاً قبل الإشارة) هو ما يحكم: «يلغى [القانون 91/1959]».
+    - after يُستعمل فقط لتأكيد التعديل («…ويستعاض عنه») لا للإلغاء —
+      إلغاءٌ يرد بعد الإشارة يعود غالباً لجملة أخرى (الصيغة الختامية).
+    - إشارة تُذكر كنطاق مواد («من 708 إلى 715 من قانون العقوبات») إحالة
+      جزئية: تعديل على الأكثر، لا إلغاء أبداً.
+    """
+    before = _strip(ref.get("before") or "")
+    after = _strip(ref.get("after") or "")
+    if not before and not after:
+        return classify_context(ref.get("context") or "")
+    # نأخذ آخر جملة قبل الإشارة فقط (بعد آخر نقطة/فاصلة منقوطة)
+    tail = re.split(r"[.؛;\n]", before)[-1]
+    if GENERIC_REPEAL_RE.search(tail):
+        return "cite"
+    if RANGE_REF_RE.search(tail):
+        return "amend" if (AMEND_RE.search(tail) or AMEND_RE.search(after[:40])) else "cite"
+    if PARTIAL_OBJECT_RE.search(tail):
+        return "amend"
+    if REPEAL_RE.search(tail):
+        return "repeal"
+    if AMEND_RE.search(tail) or AMEND_RE.search(after[:40]):
+        return "amend"
+    return "cite"
+
+
 def classify_context(context: str) -> str:
     """تصنيف نية الإحالة من سياقها النصي الخام.
 
@@ -86,7 +127,7 @@ def extract_amendments(title: str, text: str) -> list:
     for ref in extract_law_references(text):
         if own["identity_key"] and ref["identity_key"] == own["identity_key"]:
             continue
-        action = classify_context(ref["context"])
+        action = classify_reference(ref)
         if action == "cite":
             continue
         out.append({

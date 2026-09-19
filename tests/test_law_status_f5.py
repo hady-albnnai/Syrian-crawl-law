@@ -97,3 +97,58 @@ def test_real_repeal_by_newer_instrument(db):
     st = conn.execute("SELECT legal_status FROM documents WHERE doc_id='t'"
                       ).fetchone()[0]
     assert st == "ملغى" and counts["ملغى"] == 1
+
+
+# --- الحالات الحقيقية من repealed.txt (قاعدة المالك 2026-09-19) -----------
+from law_status import extract_amendments
+
+
+def _acts(title, text):
+    return sorted((a["action"], a["target_identity"])
+                  for a in extract_amendments(title, text))
+
+
+def test_penal_code_not_repealed_by_range_reference_plus_generic_clause():
+    """الخطأ الأخطر المقيس: قانون العقوبات 148/1949 عُلِّم «ملغى» لأن قانون
+    حق المؤلف أحال إلى مواده 708–715 ثم ختم بـ«تلغى جميع الأحكام المخالفة»."""
+    acts = _acts(
+        "قانون حماية حق المؤلف (الصادر بالمرسوم التشريعي رقم 62/2013)",
+        "يعاقب بالمواد من /708/ الى /715/ من قانون العقوبات العام الصادر "
+        "بالمرسوم التشريعي ذي الرقم /148/ لعام 1949. المادة 104 تلغى جميع "
+        "الاحكام المخالفة لهذا القانون كما يلغى كل نص آخر")
+    assert ("repeal", "المرسوم التشريعي:148:1949") not in acts
+    assert acts == []
+
+
+def test_labour_law_repeals_both_predecessors():
+    acts = _acts("القانون رقم 17 لعام 2010",
+                 "المادة (279): أ- يلغى القانون رقم 91 لعام 1959 وتعديلاته "
+                 "والمرسوم التشريعي رقم 49 لعام 1962 وتعديلاته. ب- يصدر الوزير")
+    assert set(acts) == {("repeal", "المرسوم التشريعي:49:1962"),
+                         ("repeal", "القانون:91:1959")}
+
+
+def test_media_law_repeals_press_decree_and_keeps_own_identity():
+    """عنوان «قانون الإعلام (الصادر بالمرسوم التشريعي رقم 108 لعام 2011)»:
+    المرسوم هويته لا إحالة — وإلا سرق هوية القانون الذي يلغيه من متنه
+    فسقط الإلغاء كإشارة ذاتية."""
+    import law_identity as li
+    t = "قانون الإعلام (الصادر بالمرسوم التشريعي رقم 108 لعام 2011)،الجمهورية العربية السورية"
+    assert li.extract_law_identity(t, "")["identity_key"] == "المرسوم التشريعي:108:2011"
+    acts = _acts(t, "ويلغى أيضا: 1- قانون المطبوعات الصادر بالمرسوم التشريعي "
+                    "رقم 50 لعام 2001. 2- قانون التواصل مع العموم")
+    assert acts == [("repeal", "المرسوم التشريعي:50:2001")]
+
+
+def test_amending_decree_in_title_still_not_identity():
+    """حارس الفرع يبقى: «المعدَّل بالمرسوم» إحالة لا هوية."""
+    import law_identity as li
+    assert li.extract_law_identity(
+        "قانون العقوبات العامة السوري المعدل بالمرسوم رقم 12 لعام 2001", ""
+    )["identity_key"] is None
+
+
+def test_repeal_verb_after_reference_does_not_apply_backwards():
+    acts = _acts("القانون رقم 1 لعام 2020",
+                 "استناداً إلى القانون رقم 10 لعام 2006 يلغى المرسوم رقم 9 لعام 1990")
+    assert acts == [("repeal", "المرسوم:9:1990")]

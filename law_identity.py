@@ -162,6 +162,7 @@ def _normalize_type(raw: str) -> str:
     return t
 
 
+_ISSUED_BY_RE = re.compile(r"الصادرة?\s+ب(?:ال)?$|الصادرة?\s+بموجب\s+(?:ال)?$")
 _TITLE_YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d\d)(?!\d)")
 _TITLE_NUM_RE = re.compile(rf"رقم\s*[\u200f/(\[]?\s*(?P<n>{_NUM})")
 
@@ -286,8 +287,14 @@ def extract_law_identity(title: str, text: str) -> dict:
         where = "title" if idx == 0 else "preamble"
         lead = _leading_type(haystack) if idx == 0 else None
         for m in LAW_ID_RE.finditer(haystack):
-            if idx == 0 and lead and lead != _normalize_type(m.group(1)):
-                continue  # اسم الصك في الصدر غير المطابقة ⇒ المطابقة إحالة
+            if idx == 0 and lead and lead != _normalize_type(m.group(1)) \
+                    and not _ISSUED_BY_RE.search(haystack[max(0, m.start() - 14):m.start()]):
+                # اسم الصك في الصدر غير المطابقة ⇒ المطابقة إحالة — إلا
+                # صيغة الإصدار «قانون X (الصادر بالمرسوم التشريعي رقم N)»:
+                # المرسوم هو هوية القانون نفسه لا إحالة (قِيس 2026-09-19:
+                # قانون الإعلام 108/2011 فقد هويته فأخذ هوية القانون الذي
+                # يلغيه من متنه، فسقط الإلغاء الحقيقي كإشارة ذاتية).
+                continue
             got = _accept(m, gap_guard=True)
             if got:
                 got["provenance"] = where
@@ -488,6 +495,10 @@ def extract_law_references(text: str) -> list:
             "law_year": year,
             "identity_key": key,
             "context": text[start:end].strip(),
+            # ف٥: ما قبل الإشارة وما بعدها منفصلَين — فعل الإلغاء يجب أن
+            # يسبق الصك المستهدَف؛ جملة ختامية لاحقة لا تلغيه.
+            "before": text[start:m.start()],
+            "after": text[m.end():end],
         })
     return out
 

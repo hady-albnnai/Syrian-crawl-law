@@ -640,22 +640,32 @@ def cmd_law_status(args):
     if getattr(args, "repealed_report", None):
         # ف٥: كل صك عُلِّم «ملغى» مع دليله (المعدِّل + السياق) — للمراجعة
         # البشرية قبل الوثوق؛ إلى ملف لأن المخرجات طويلة.
+        # صك واحد لكل سطر؛ الأدلة المكررة (نفس المُلغي ونفس السياق من
+        # نسخ متعددة للوثيقة) تُجمع بعدّاد — قِيس: المرسوم 49/1962 ظهر 17
+        # مرة لأن القانون 17/2010 محفوظ بـ17 نسخة.
         rows = conn.execute(
-            """SELECT d.identity_key, d.title, d.year,
-                      m.title AS by_title, m.year AS by_year, a.context
+            """SELECT d.identity_key, MIN(d.title) AS title, d.year,
+                      m.identity_key AS by_key, MIN(m.title) AS by_title,
+                      m.year AS by_year, MIN(a.context) AS context,
+                      COUNT(*) AS copies
                FROM documents d
                JOIN law_amendments a ON a.target_identity = d.identity_key
                JOIN documents m ON m.id = a.amending_doc_id
                WHERE d.legal_status = 'ملغى' AND a.action = 'repeal'
+               GROUP BY d.identity_key, COALESCE(m.identity_key, m.title)
                ORDER BY d.year, d.identity_key""").fetchall()
+        targets = {r["identity_key"] for r in rows}
         with open(args.repealed_report, "w", encoding="utf-8",
                   newline="\n") as fh:
-            fh.write("# صكوك معلَّمة «ملغى» — راجع الدليل قبل الاعتماد\n\n")
+            fh.write(f"# {len(targets)} صكاً معلَّماً «ملغى» — راجع الدليل "
+                     "قبل الاعتماد\n\n")
             for r in rows:
                 fh.write(f"## {r['identity_key']} — {r['title']} ({r['year']})\n")
-                fh.write(f"- ألغاه: {r['by_title']} ({r['by_year']})\n")
+                fh.write(f"- ألغاه: {r['by_title']} ({r['by_year']})"
+                         f"{' ×' + str(r['copies']) + ' نسخة' if r['copies'] > 1 else ''}\n")
                 fh.write(f"- السياق: …{' '.join((r['context'] or '').split())}…\n\n")
-        log.info(f"تقرير الملغى: {len(rows)} دليلاً → {args.repealed_report}")
+        log.info(f"تقرير الملغى: {len(targets)} صكاً / {len(rows)} دليلاً "
+                 f"→ {args.repealed_report}")
     if args.law:
         chain = law_chain(conn, args.law)
         if not chain:
