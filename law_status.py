@@ -183,6 +183,10 @@ def compute_legal_statuses(conn) -> dict:
     الأولوية: ملغى > معدَّل > ساري. الوثيقة بلا هوية لا تُمس (بلا حالة).
     """
     counts = {"ملغى": 0, "معدَّل": 0, "ساري": 0}
+    # حالة قديمة لا تبقى بلا دليل: تُمسح كلها ثم تُحسب من الإحالات الحالية
+    # (قِيس 2026-09-19: «ملغى» 19 بالعدّ و3 بالتقرير — 16 يتيمة من حساب
+    # سابق على وثائق فقدت دليلها أو هويتها).
+    conn.execute("UPDATE documents SET legal_status=NULL")
     has_nature = any(r[1] == "nature" for r in
                      conn.execute("PRAGMA table_info(documents)").fetchall())
     nature_ok = ("AND COALESCE(d.nature,'instrument')='instrument' "

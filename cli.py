@@ -666,6 +666,42 @@ def cmd_law_status(args):
                 fh.write(f"- السياق: …{' '.join((r['context'] or '').split())}…\n\n")
         log.info(f"تقرير الملغى: {len(targets)} صكاً / {len(rows)} دليلاً "
                  f"→ {args.repealed_report}")
+    if getattr(args, "why", None):
+        # تشخيص: من يذكر هذا الصك، وبأي فعل، ولماذا قُبل/أُسقط الدليل
+        rows = conn.execute(
+            """SELECT a.action, m.id, m.title, m.year, m.identity_key,
+                      COALESCE(m.nature,'instrument') AS nature, m.status,
+                      substr(a.context,1,120) AS ctx
+               FROM law_amendments a JOIN documents m ON m.id=a.amending_doc_id
+               WHERE a.target_identity=?""", (args.why,)).fetchall()
+        tgt = conn.execute("SELECT year, legal_status FROM documents WHERE "
+                           "identity_key=? LIMIT 1", (args.why,)).fetchone()
+        log.info(f"المستهدَف {args.why}: سنة={tgt['year'] if tgt else '?'} "
+                 f"حالة={tgt['legal_status'] if tgt else '?'} | "
+                 f"{len(rows)} دليل")
+        for r in rows:
+            reasons = []
+            if r["nature"] != "instrument":
+                reasons.append(f"مُسقَط: طبيعة={r['nature']}")
+            if tgt and r["year"] is not None and tgt["year"] is not None \
+                    and r["year"] < tgt["year"]:
+                reasons.append(f"مُسقَط: أقدم ({r['year']}<{tgt['year']})")
+            log.info(f"  {r['action']} ← #{r['id']} {r['title'][:60]} "
+                     f"(سنة={r['year']}, هوية={r['identity_key']}, "
+                     f"status={r['status']}) {' '.join(reasons) or 'مقبول'}")
+            log.info(f"      «{' '.join((r['ctx'] or '').split())}»")
+        mentions = conn.execute(
+            """SELECT id, title, year FROM documents
+               WHERE clean_content LIKE ? AND id NOT IN
+               (SELECT amending_doc_id FROM law_amendments WHERE target_identity=?)
+               LIMIT 10""",
+            (f"%{args.why.split(':')[1]} لعام {args.why.split(':')[2]}%",
+             args.why)).fetchall()
+        if mentions:
+            log.info(f"  وثائق تذكر الرقم/السنة نصياً بلا إحالة مسجلة "
+                     f"({len(mentions)}):")
+            for m in mentions:
+                log.info(f"    #{m['id']} {m['title'][:70]} (سنة={m['year']})")
     if args.law:
         chain = law_chain(conn, args.law)
         if not chain:
@@ -817,6 +853,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="عرض كل الإحالات المستخرجة (تعديل/إلغاء) ومستهدفاتها")
     sp.add_argument("--repealed-report", metavar="FILE",
                     help="كتابة كل صك «ملغى» مع دليله إلى ملف للمراجعة")
+    sp.add_argument("--why", metavar="IDENTITY",
+                    help="تشخيص: أدلة صك ولماذا قُبلت/أُسقطت + من يذكره بلا إحالة")
     sp.add_argument("--law", metavar="IDENTITY",
                     help="طباعة سلسلة تعديلات صك (مثل القانون:17:2010)")
     sp.set_defaults(fn=cmd_law_status)
