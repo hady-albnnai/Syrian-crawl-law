@@ -46,6 +46,18 @@ def missing_targets(conn, limit: int = 100) -> list:
     for r in conn.execute("SELECT clean_content FROM documents WHERE status='active' AND clean_content IS NOT NULL"):
         for ref in law_identity.extract_law_references(r[0]):
             hit(ref["identity_key"], "mention", "مذكور نصياً")
+    # صك موجود بنفس الرقم/السنة لكن بنوع آخر (بنود تسمّي م.ت 115/1953 «قانون»؛
+    # قِيس missing2): يُذكر كتلميح ولا يُحذف — الرقم/السنة قد يتكرر بين نوعين.
+    by_ny = {}
+    for k in known:
+        parts = k.split(":")
+        if len(parts) == 3:
+            by_ny.setdefault((parts[1], parts[2]), []).append(k)
+    for k in list(score):
+        parts = k.split(":")
+        alt = [a for a in by_ny.get((parts[1], parts[2]), []) if a != k]
+        if alt:
+            why[k].insert(0, f"⚠ موجود بنوع آخر: {alt[0]}")
     out = [{"identity_key": k, "score": s, "why": why[k][:3]} for k, s in score.items()]
     out.sort(key=lambda x: (-x["score"], x["identity_key"]))
     return out[:limit]

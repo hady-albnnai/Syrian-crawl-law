@@ -34,3 +34,15 @@ def test_targets_ranked_by_evidence_and_exclude_known(db):
     assert "المرسوم التشريعي:98:1961" in keys
     assert t[0]["why"][0] == "يُلغيه القانون:1:2020"
     assert missing_target_queries(db)[0] == "القانون رقم 91 لعام 1959 سوريا نص كامل"
+
+
+def test_same_number_year_other_type_is_hinted_not_dropped(db):
+    db.execute("INSERT INTO documents(id,doc_id,title,clean_content,status,nature,identity_key,number,year)"
+               " VALUES (1,'a','ق','يعدل المرسوم التشريعي رقم 115 لعام 1953','active','instrument','القانون:13:1981',13,1981)")
+    db.execute("INSERT INTO documents(id,doc_id,title,clean_content,status,nature,identity_key,number,year)"
+               " VALUES (2,'b','خدمة العلم','نص','active','instrument','القانون:115:1953',115,1953)")
+    db.execute("INSERT INTO law_amendments(amending_doc_id,target_identity,action) VALUES (1,'المرسوم التشريعي:115:1953','amend')")
+    db.commit()
+    t = missing_targets(db)
+    assert t[0]["identity_key"] == "المرسوم التشريعي:115:1953"
+    assert t[0]["why"][0] == "⚠ موجود بنوع آخر: القانون:115:1953"
