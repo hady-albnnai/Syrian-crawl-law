@@ -60,7 +60,10 @@ def _type_pattern(doc_type: str) -> str:
     فتفقد الهوية كاملة. التوحيد يتم في _normalize_type بعدها.
     """
     words = [w[2:] if w.startswith("ال") else w for w in doc_type.split()]
-    return r"\s+".join(r"(?:ال)?" + re.escape(w) for w in words)
+    # ياء النسبة تُكتب ألفاً مقصورة أحياناً («التشريعى»، قِيس article_links1
+    # 2026-09-19: صارت الهوية «المرسوم» بلا «التشريعي»).
+    return r"\s+".join(r"(?:ال)?" + re.escape(w).replace("ي", "[يى]") if w.endswith("ي")
+                       else r"(?:ال)?" + re.escape(w) for w in words)
 
 
 _TYPE_ALT = "|".join(_type_pattern(t) for t in DOC_TYPES)
@@ -145,7 +148,17 @@ def _year_of(m) -> int:
     d = m.groupdict()
     raw = (d.get("year_full") or d.get("year_dmy") or d.get("year_ymd")
            or d.get("year_slash"))
-    return int(to_western_digits(raw))
+    return _unmirror_year(int(to_western_digits(raw)))
+
+
+def _unmirror_year(y: int) -> int:
+    """سنة مقلوبة الخانات من ترميز معطوب («لعام 6491» = 1946 — قِيس
+    article_links1 على قاعدة المالك). تُقلب فقط إن كانت خارج النطاق
+    ومقلوبها داخله؛ غير ذلك تبقى كما هي (فترفَض لاحقاً)."""
+    if _MIN_YEAR <= y <= _MAX_YEAR or y < 1000:
+        return y
+    r = int(str(y)[::-1])
+    return r if _MIN_YEAR <= r <= _MAX_YEAR else y
 
 # نطاق سنوات معقول للتشريع السوري الحديث — يستبعد مطابقات زائفة (مثلاً
 # "رقم 5 لعام 12" من عبارة غير قانونية التقطها التعبير عرضاً).
@@ -160,7 +173,7 @@ def _normalize_type(raw: str) -> str:
     - «قانون» و«القانون» (وأل التعريف عموماً، ف١): نفس الصك — حتى لا
       يتفاوت المفتاح باختلاف صياغة العنوان بين المصادر.
     """
-    t = (raw or "").strip()
+    t = re.sub(r"ى\b", "ي", (raw or "").strip())
     if t == "المرسوم الاشتراعي":
         return "المرسوم التشريعي"
 

@@ -68,3 +68,11 @@ def test_older_instrument_cannot_amend_article(db):
     db.execute("INSERT INTO articles(doc_id,article_number,text) VALUES (1,'3','نص')")
     db.commit()
     assert rebuild_article_links(db)["articles_marked"] == 0
+
+
+def test_owner_alif_maqsura_type_and_mirrored_year():
+    # article_links1 (قاعدة المالك): «التشريعى» بألف مقصورة، و«لعام 6491» = 1946 مقلوبة
+    r = extract_article_amendments("تعديل نص الفقرة / أ / من المادة /5/ من المرسوم التشريعى رقم /13/ للعام /1974/")
+    assert r[0]["target_identity"] == "المرسوم التشريعي:13:1974"
+    r = extract_article_amendments("تلغى المادة 87 من المرسوم التشريعي رقم 74 لعام 6491")
+    assert r[0]["target_identity"] == "المرسوم التشريعي:74:1946"
