@@ -839,6 +839,20 @@ def cmd_article_links(args) -> int:
     return 0
 
 
+def cmd_missing(args) -> int:
+    import database
+    from missing_targets import missing_targets, format_report
+    conn = database.get_connection()
+    txt = format_report(missing_targets(conn, args.limit))
+    conn.close()
+    if args.out:
+        open(args.out, "w", encoding="utf-8").write(txt)
+        print(txt.splitlines()[0], f"→ {args.out}")
+    else:
+        print(txt)
+    return 0
+
+
 def _key_of(conn, ref: str) -> str:
     """يقبل معرف الصف أو بادئة مصدر — ويرجع source_key كاملاً."""
     cur = conn.cursor()
@@ -1027,6 +1041,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("article-links", help="A-4: تقرير التعديلات على مستوى المادة")
     sp.add_argument("--out", metavar="FILE")
     sp.set_defaults(fn=cmd_article_links)
+
+    sp = sub.add_parser("missing", help="B-1: الصكوك غير المحصودة التي تستهدفها الإحالات، بالأهمية")
+    sp.add_argument("--limit", type=int, default=100)
+    sp.add_argument("--out", metavar="FILE")
+    sp.set_defaults(fn=cmd_missing)
 
     sp = sub.add_parser("export", help="توليد حزمة محتوى لميزان (CSV+md+JSON)")
     sp.add_argument("--out", default="export/content_package")

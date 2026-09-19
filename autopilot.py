@@ -220,9 +220,13 @@ def generate_candidates(conn, use_search: bool = True,
         except SearchUnavailable:
             pass  # بلا مفتاح — DDG وحده
         from gap_analysis import gap_driven_queries
+        # B-1: الفجوات المعلومة (صكوك مستهدَفة بتعديل/إلغاء/أمومة وغير
+        # محصودة) تتقدّم على كل شيء — الزاحف يبحث عمّا يعرف أنه ينقصه.
+        from missing_targets import missing_target_queries
         effective_queries = list(queries) if queries is not None else (
-            list(DEFAULT_QUERIES) + reference_driven_queries(conn)
-            + gap_driven_queries(conn))
+            missing_target_queries(conn) + list(DEFAULT_QUERIES)
+            + reference_driven_queries(conn) + gap_driven_queries(conn))
+        effective_queries = list(dict.fromkeys(effective_queries))
         for query in effective_queries:
             for provider in providers:
                 try:
