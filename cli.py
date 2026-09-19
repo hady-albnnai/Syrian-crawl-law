@@ -574,8 +574,9 @@ def cmd_parts(args):
         rep = link_parts(conn)
         log.info(f"مجموعات الأجزاء: {rep['groups']}، أجزاء مربوطة: "
                  f"{rep['parts_linked']}")
-        for head, num, year, parts in rep["detail"]:
-            log.info(f"  رأس #{head} (رقم {num}/{year or '؟'}) ← أجزاء {parts}")
+        for head, num, year, parts, contained in rep["detail"]:
+            log.info(f"  رأس #{head} (رقم {num}/{year or '؟'}) ← أجزاء {parts}"
+                     + (f" (محتواة: {contained})" if contained else ""))
     else:
         rows = conn.execute(
             "SELECT part_of, COUNT(*) c FROM documents WHERE part_of IS NOT NULL "

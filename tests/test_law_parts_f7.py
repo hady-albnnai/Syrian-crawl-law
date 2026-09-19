@@ -76,27 +76,73 @@ def test_article_range():
     assert article_range("لا مواد هنا") is None
 
 
-def _doc(i, num, text, year=None, dt="المرسوم التشريعي"):
-    return {"id": i, "doc_type": dt, "number": num, "year": year,
-            "identity_key": None, "text": text}
+def _doc(i, num, text, year=None, dt="المرسوم التشريعي", title="", key=None):
+    return {"id": i, "title": title, "doc_type": dt, "number": num, "year": year,
+            "identity_key": key, "text": text}
 
 
-def test_group_parts_orders_by_first_article_and_links_rest():
+# --- الحالات الحقيقية من parts_explain.txt (قاعدة المالك 2026-09-19) ----------
+def test_undated_same_title_parts_cluster_by_title_stem():
+    # المرسوم 30 ×4 بلا سنة، مادة واحدة لكل جزء، عنوان متطابق — ورقم 30 نفسه
+    # للمحاماة 2010 والمرسوم 2012 (لا يُخلطان)
+    T = "المرسوم التشريعى رقم/30 المتعلق بامصرف الزراعي التعاوني"
     docs = [
-        _doc(280, 30, "المادة/20/ … المادة 25"),
-        _doc(277, 30, "المادة/8/ 00 تضع الدوائر العقارية … المادة 12"),
-        _doc(282, 30, "المادة/30/ … المادة 33", year=1966),
+        _doc(4, 30, "المادة 2 … المادة 42", year=2010, dt="القانون", title="قانون تنظيم مهنة المحاماة لعام 2010", key="القانون:30:2010"),
+        _doc(204, 30, "المادة 1 … المادة 146", year=2012, title="المرسوم التشريعي رقم 30 للعام 2012", key="المرسوم التشريعي:30:2012"),
+        _doc(277, 30, "المادة/8/ نص", title=T), _doc(278, 30, "المادة /9/ نص", title=T),
+        _doc(280, 30, "المادة 1 نص", title=T), _doc(282, 30, "المادة 6 نص", title=T),
     ]
-    g = group_parts(docs)
-    assert len(g) == 1
-    assert g[0]["head_id"] == 277
-    assert g[0]["part_ids"] == [280, 282]
-    assert g[0]["year"] == 1966  # ورثها من الجزء الوحيد الذي يحملها
+    gs = group_parts(docs)
+    parts_groups = [g for g in gs if 277 in g["part_ids"] or g["head_id"] == 277]
+    assert len(parts_groups) == 1
+    g = parts_groups[0]
+    assert set([g["head_id"]] + g["part_ids"]) == {277, 278, 280, 282}
+    assert g["year"] is None and g["identity_key"] is None   # لا اختراع
+    assert not any({4, 204} & set([x["head_id"]] + x["part_ids"]) for x in parts_groups)
 
 
-def test_large_overlap_is_duplicate_not_part():
-    docs = [_doc(1, 30, "المادة 1 … المادة 40"), _doc(2, 30, "المادة 1 … المادة 40")]
+def test_contained_fragments_fold_under_full_text():
+    # قانون الجمارك: #96 كامل (1–298) + شذرات (77–188)(196–272)(233–298) بعنوان عام
+    full = "قانون الجمارك رقم 38 لعام 2006،الجمهورية العربية السورية"
+    docs = [
+        _doc(96, 38, " ".join(f"المادة {i} ن" for i in range(1, 299)), year=2006, dt="القانون", title=full, key="القانون:38:2006"),
+        _doc(177, 38, "القانون رقم 38 " + " ".join(f"المادة {i} ن" for i in range(77, 189)), dt="القانون", title="وثيقة قانونية سورية"),
+        _doc(178, 38, "القانون رقم 38 " + " ".join(f"المادة {i} ن" for i in range(196, 273)), dt="القانون", title="وثيقة قانونية سورية"),
+    ]
+    gs = group_parts(docs)
+    assert len(gs) == 1 and gs[0]["head_id"] == 96
+    assert set(gs[0]["part_ids"]) == {177, 178}
+    assert set(gs[0]["contained"]) == {177, 178}
+    assert gs[0]["year"] == 2006 and gs[0]["identity_key"] == "القانون:38:2006"
+
+
+def test_undated_joins_dated_only_with_shared_keyword():
+    # البينات: #140 (1–159 بلا سنة) ينضم إلى #40 (359/1947) بكلمة «البينات»
+    docs = [
+        _doc(40, 359, " ".join(f"المادة {i} ن" for i in range(1, 57)), year=1947, dt="القانون", title="قانون البينات رقم 359 في المواد المدنية والتجارية", key="القانون:359:1947"),
+        _doc(140, 359, " ".join(f"المادة {i} ن" for i in range(1, 160)), dt="القانون", title="قانون البينات 359 تاريخ 10"),
+    ]
+    gs = group_parts(docs)
+    assert len(gs) == 1 and gs[0]["head_id"] == 140      # الأوسع تغطية هو الرأس
+    assert gs[0]["year"] == 1947 and gs[0]["identity_key"] == "القانون:359:1947"
+
+
+def test_undated_without_shared_keyword_stays_apart():
+    # الأحوال الشخصية 59 (بلا سنة) ≠ المرسوم التشريعي 59/2008
+    docs = [
+        _doc(121, 59, " ".join(f"المادة {i} ن" for i in range(2, 169)), year=2008, title="المرسوم التشريعي رقم 59 للعام 2008", key="المرسوم التشريعي:59:2008"),
+        _doc(147, 59, " ".join(f"المادة {i} ن" for i in range(1, 1121)), title="قانون الأحوال الشخصية الصادر بالمرسوم التشريعي رقم 59"),
+    ]
     assert group_parts(docs) == []
+
+
+def test_law_and_legislative_decree_are_compatible_types():
+    # قانون العقوبات 148/1949: «القانون» و«المرسوم التشريعي» تسميتان لصك واحد
+    docs = [
+        _doc(83, 148, "المادة 1 … المادة 756", year=1949, dt="المرسوم التشريعي", title="القانون الجنائي (الصادر بالمرسوم التشريعي رقم 148/1949)"),
+        _doc(104, 148, "المادة 1 … المادة 756", year=1949, dt="القانون", title="قانون العقوبات رقم/ 148/ لعام /1949/"),
+    ]
+    assert len(group_parts(docs)) == 1
 
 
 def test_different_years_same_number_never_grouped():
@@ -111,22 +157,23 @@ def test_single_member_not_a_group():
 
 def test_link_parts_writes_part_of_and_resets(db):
     db.execute("INSERT INTO documents(id,title,clean_content,status,nature,number,year,identity_key)"
-               " VALUES (277,'المرسوم التشريعى رقم/30','المادة/8/ نص المادة 12','active','instrument',30,NULL,NULL)")
+               " VALUES (277,'المرسوم التشريعى رقم/30 المتعلق بالمصرف الزراعي','المادة/8/ نص المادة 12','active','instrument',30,NULL,NULL)")
     db.execute("INSERT INTO documents(id,title,clean_content,status,nature,number,year,identity_key)"
-               " VALUES (280,'المرسوم التشريعى رقم/30','المادة/20/ نص المادة 25','active','instrument',30,1966,'المرسوم التشريعي:30:1966')")
+               " VALUES (280,'المرسوم التشريعي رقم 30 لعام 1966 المتعلق بالمصرف الزراعي','المادة/20/ نص المادة 25','active','instrument',30,1966,'المرسوم التشريعي:30:1966')")
     db.commit()
     rep = link_parts(db)
     assert (rep["groups"], rep["parts_linked"]) == (1, 1)
-    row = db.execute("SELECT part_of FROM documents WHERE id=280").fetchone()
-    assert row["part_of"] == 277
-    head = db.execute("SELECT year FROM documents WHERE id=277").fetchone()
-    assert head["year"] == 1966
+    # الرأس = الأوسع تغطية (280: 20–25 أوسع من 277: 8–12)
+    row = db.execute("SELECT part_of FROM documents WHERE id=277").fetchone()
+    assert row["part_of"] == 280
+    head = db.execute("SELECT year, identity_key FROM documents WHERE id=280").fetchone()
+    assert head["year"] == 1966 and head["identity_key"] == "المرسوم التشريعي:30:1966"
     # إعادة التشغيل تصفّر ثم تعيد — لا روابط يتيمة
     db.execute("UPDATE documents SET status='superseded' WHERE id=280")
     db.commit()
     rep2 = link_parts(db)
     assert rep2["parts_linked"] == 0
-    assert db.execute("SELECT part_of FROM documents WHERE id=280").fetchone()["part_of"] is None
+    assert db.execute("SELECT part_of FROM documents WHERE id=277").fetchone()["part_of"] is None
 
 
 def test_exporter_folds_parts_under_head(db, tmp_path):
@@ -157,9 +204,9 @@ def test_clash_resolved_when_preamble_has_newlines():
 def test_explain_parts_reports_overlap(db):
     from law_parts import explain_parts
     db.execute("INSERT INTO documents(id,title,clean_content,status,nature,number)"
-               " VALUES (1,'أ','المادة 1 المادة 40','active','instrument',30)")
+               " VALUES (1,'المرسوم رقم 30 التعاوني','المادة 1 المادة 40','active','instrument',30)")
     db.execute("INSERT INTO documents(id,title,clean_content,status,nature,number)"
-               " VALUES (2,'ب','المادة 2 المادة 40','active','instrument',30)")
+               " VALUES (2,'المرسوم رقم 30 التعاوني','المادة 2 المادة 40','active','instrument',30)")
     db.commit()
     txt = "\n".join(explain_parts(db))
-    assert "رقم 30: 2 وثيقة" in txt and "مكرّرات لا أجزاء" in txt
+    assert "رقم 30: 2 وثيقة" in txt and "مجموعة: رأس #1" in txt and "محتواة=[2]" in txt

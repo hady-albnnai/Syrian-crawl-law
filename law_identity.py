@@ -493,6 +493,17 @@ def reidentify_documents(conn) -> dict:
                     fb = g
             set_num = fb["law_number"] if r["number"] is None else None
             set_year = fb["law_year"] if r["year"] is None else None
+            if (fb["law_number"] and r["number"] is not None
+                    and fb["law_number"] != r["number"]
+                    and fb.get("identity_confidence") == "title_only"):
+                # رقم مخزَّن قديم يخالف رقم العنوان الصريح (قِيس 2026-09-19:
+                # #276/#281 عنوانهما «المرسوم التشريعى رقم/30» ورقمهما 29 و23
+                # من استخراج أقدم) — العنوان أصدق للعمود الجزئي، ولا مفتاح
+                # هوية يُمسّ هنا.
+                conn.execute("UPDATE documents SET number=? WHERE id=?",
+                             (fb["law_number"], r["id"]))
+                stats["corrected"] = stats.get("corrected", 0) + 1
+                continue
             if set_num is None and set_year is None:
                 stats["no_match"] += 1
                 continue

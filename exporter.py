@@ -172,11 +172,21 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
     renamed = 0
     for doc in docs:
         if has_parts:
-            articles = conn.execute(
+            raw = conn.execute(
                 """SELECT a.* FROM articles a JOIN documents d ON d.id = a.doc_id
                    WHERE (a.doc_id = ? OR d.part_of = ?) AND d.status = 'active'
-                   ORDER BY CAST(a.article_number AS INTEGER), a.id""",
-                (doc["id"], doc["id"])).fetchall()
+                   ORDER BY CAST(a.article_number AS INTEGER),
+                            (a.doc_id = ?) DESC, a.id""",
+                (doc["id"], doc["id"], doc["id"])).fetchall()
+            # الجزء المحتوى في الرأس يحمل نفس المواد — تُؤخذ مادة الرأس
+            # وتُهمل نسخة الجزء (لا تكرار في حزمة ميزان)
+            seen, articles = set(), []
+            for a in raw:
+                k = str(a["article_number"] or "").strip() or f"#{a['id']}"
+                if k in seen:
+                    continue
+                seen.add(k)
+                articles.append(a)
         else:
             articles = conn.execute(
                 "SELECT * FROM articles WHERE doc_id = ? ORDER BY id",
