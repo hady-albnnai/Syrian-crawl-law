@@ -61,3 +61,14 @@ def test_reidentify_uses_dictionary_and_never_overrides(db):
     assert st["named"] == 1
     rows = {r[0]: r[1] for r in db.execute("SELECT id, identity_key FROM documents")}
     assert rows == {105: "المرسوم التشريعي:61:1950", 9: "القانون:9:1999"}
+
+
+def test_civil_procedure_1953_vs_2016_by_marker():
+    old = "قانون أصول المحاكمات المادة 1 1- تسري قوانين الأصول على ما لم يكن قد فصل فيه من الدعاوى أو تم من الإجراءات قبل."
+    assert lookup_named_law("قانون أصول المحاكمات", old)["identity_key"] == "المرسوم التشريعي:84:1953"
+    assert lookup_named_law("قانون أصول المحاكمات", "الباب الثاني : الحجز المادة/314/") is None
+
+
+def test_traffic_law_and_extradition():
+    assert lookup_named_law("قانون السير والمركبات ـ", "قانون السير والمركبات مادة 1 تعتمد في تطبيق احكام هذا القانون التعاريف الآتية: 1 المركبة")["identity_key"] == "القانون:31:2004"
+    assert lookup_named_law("أصول تسليم المجرمين العاديين والملاحقين قضائيا بجرائم عادية رقم 53/1955  في سورية", "")["identity_key"] == "القانون:53:1955"
