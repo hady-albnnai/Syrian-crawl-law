@@ -867,11 +867,12 @@ def cmd_seed_bunud(args) -> int:
 
 def cmd_dedup_audit(args) -> int:
     import database
-    from dedup import audit_dedup
+    from dedup import audit_dedup, rebalance_suspicious
     conn = database.get_connection()
+    fixed = rebalance_suspicious(conn) if args.fix else 0
     rows = audit_dedup(conn)
     sus = [r for r in rows if r["suspicious"]]
-    lines = [f"# أزواج التكرار: {len(rows)} | مشبوه (الخاسر أكمل بوضوح): {len(sus)}"]
+    lines = [f"# أزواج التكرار: {len(rows)} | مشبوه (الخاسر أكمل بوضوح): {len(sus)} | أُعيد ميزانه: {fixed}"]
     for r in sorted(rows, key=lambda r: (not r["suspicious"], r["identity"])):
         flag = "⚠" if r["suspicious"] else " "
         lines.append(f"{flag} {r['identity']} | فائز #{r['winner_id']} ط{r['winner_tier']} {r['winner_articles']} مادة"
@@ -1085,6 +1086,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_seed_bunud)
 
     sp = sub.add_parser("dedup-audit", help="B-3: مراجعة أزواج التكرار (الفائز/الخاسر) وإعادة الميزان للمشبوه")
+    sp.add_argument("--fix", action="store_true", help="إعادة الميزان للأزواج المشبوهة الآن")
     sp.add_argument("--out", metavar="FILE")
     sp.set_defaults(fn=cmd_dedup_audit)
 

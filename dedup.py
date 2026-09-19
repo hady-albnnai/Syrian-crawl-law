@@ -49,8 +49,16 @@ def compare_candidates(new_candidate: dict, existing_candidate: dict) -> dict:
     ما يعني نسخة مطابقة حرفياً) — القاعدة الآمنة عند tie: القديمة تبقى
     (لا استبدال بلا سبب حاسم فعلي).
     """
-    # B-3: لا حارس اكتمال يتجاوز الطبقة — قاعدة المالك الصريحة: الرسمي يفوز
-    # أولاً. الأزواج التي يكون خاسرها أكمل بوضوح تُعرض في dedup-audit للقرار.
+    # B-3 (قرار المالك 2026-09-20 بعد dedup1: 9 أزواج فيها شذرة أعلى طبقة
+    # تهزم نسخة كاملة، مثل م.ت 222/1963: 3 مواد ط3 تهزم 76 مادة ط4):
+    # الاكتمال الساحق يتقدم على الطبقة — ≥3× مواد الآخر و≥20 مادة زيادة.
+    # الفارق الصغير يبقى للطبقة (الرسمي يفوز).
+    n_new = int(new_candidate.get("article_count") or 0)
+    n_old = int(existing_candidate.get("article_count") or 0)
+    for a, b, who in ((n_new, n_old, "new"), (n_old, n_new, "existing")):
+        if a >= 3 * max(b, 1) and a - b >= 20:
+            return {"winner": who, "decisive_criterion": "article_count_overwhelming",
+                    "new_value": n_new, "existing_value": n_old}
     for criterion in CRITERIA_ORDER:
         new_val = _candidate_value(new_candidate, criterion)
         old_val = _candidate_value(existing_candidate, criterion)
@@ -234,3 +242,17 @@ def audit_dedup(conn) -> list:
                     "winner_tier": r["winner_tier"], "loser_tier": r["loser_tier"],
                     "suspicious": la >= 1.5 * max(wa, 1) and la - wa >= 10})
     return out
+
+
+def rebalance_suspicious(conn) -> int:
+    """يعيد الميزان للأزواج المشبوهة: الخاسر يعود نشطاً ثم dedupe يحسم
+    بالمعايير الحالية (بما فيها الاكتمال الساحق). يعيد عدد المُعاد تنشيطهم."""
+    n = 0
+    for a in audit_dedup(conn):
+        if a["suspicious"]:
+            conn.execute("UPDATE documents SET status='active' WHERE id=?", (a["loser_id"],))
+            n += 1
+    conn.commit()
+    if n:
+        dedupe_active_by_identity(conn)
+    return n

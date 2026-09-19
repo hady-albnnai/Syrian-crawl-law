@@ -43,10 +43,11 @@ def refine_all(conn) -> dict:
     summary["regulations"] = link_regulations(conn)
     # 2-ب. تصادمات الهوية بعد القاموس (نسختان لقانون العقوبات العسكري
     # #105/#145 تصيران 61/1950 معاً): الخاسر يُؤرشف نسخاً لا حذفاً.
-    from dedup import dedupe_active_by_identity
+    from dedup import dedupe_active_by_identity, rebalance_suspicious
+    rebalanced = rebalance_suspicious(conn)   # B-3: أزواج قديمة حُسمت بقاعدة أضيق
     dd = dedupe_active_by_identity(conn)
     summary["dedup"] = {"collisions": dd.get("collisions", 0),
-                        "archived": dd.get("archived", 0)}
+                        "archived": dd.get("archived", 0), "rebalanced": rebalanced}
     # 2-ج. تاريخ الإصدار (A-2) — بعد الهوية لأنه يُقارَن بسنتها
     from issue_date import extract_issue_dates
     summary["issue_date"] = extract_issue_dates(conn)

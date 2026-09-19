@@ -23,7 +23,9 @@ def _cand(domain_tier=4, is_complete=True, quality=0.5, articles=5,
 
 def test_official_source_wins_regardless_of_lower_quality():
     # جديدة من مصدر رسمي (tier=1) لكن جودة أقل من القديمة (tier=4)
-    new = _cand(domain_tier=1, quality=0.2, articles=2)
+    # (قرار المالك 2026-09-20: الاكتمال الساحق ≥3× و≥20 يتقدم على الطبقة؛
+    #  هنا الفارق دون ذلك فالرسمي يفوز)
+    new = _cand(domain_tier=1, quality=0.2, articles=20)
     existing = _cand(domain_tier=4, quality=0.9, articles=50)
     r = dedup.compare_candidates(new, existing)
     assert r["winner"] == "new"
