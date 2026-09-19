@@ -49,6 +49,8 @@ def compare_candidates(new_candidate: dict, existing_candidate: dict) -> dict:
     ما يعني نسخة مطابقة حرفياً) — القاعدة الآمنة عند tie: القديمة تبقى
     (لا استبدال بلا سبب حاسم فعلي).
     """
+    # B-3: لا حارس اكتمال يتجاوز الطبقة — قاعدة المالك الصريحة: الرسمي يفوز
+    # أولاً. الأزواج التي يكون خاسرها أكمل بوضوح تُعرض في dedup-audit للقرار.
     for criterion in CRITERIA_ORDER:
         new_val = _candidate_value(new_candidate, criterion)
         old_val = _candidate_value(existing_candidate, criterion)
@@ -205,3 +207,30 @@ def dedupe_active_by_identity(conn) -> dict:
             archived += 1
     conn.commit()
     return {"collisions": len(collisions), "archived": archived}
+
+
+def audit_dedup(conn) -> list:
+    """B-3: مراجعة كل زوج (فائز نشط / خاسر مستبدَل أو مصدر بديل) بنفس الهوية.
+
+    يعيد صفوفاً {identity, winner_id, loser_id, winner_articles, loser_articles,
+    winner_tier, loser_tier, suspicious} — suspicious حين يملك الخاسر مواد
+    أكثر بوضوح (≥1.5× و≥10) من الفائز: مرشّح لإعادة الميزان.
+    """
+    rows = conn.execute(
+        """SELECT l.id AS loser_id, l.identity_key, l.status AS loser_status,
+                  l.source_domain_tier AS loser_tier, w.id AS winner_id,
+                  w.source_domain_tier AS winner_tier,
+                  (SELECT COUNT(*) FROM articles WHERE doc_id=l.id AND article_number!='0') AS la,
+                  (SELECT COUNT(*) FROM articles WHERE doc_id=w.id AND article_number!='0') AS wa
+           FROM documents l JOIN documents w ON w.identity_key=l.identity_key AND w.status='active'
+           WHERE l.status IN ('superseded','alternate_source') AND l.identity_key IS NOT NULL
+           ORDER BY l.identity_key""").fetchall()
+    out = []
+    for r in rows:
+        la, wa = int(r["la"] or 0), int(r["wa"] or 0)
+        out.append({"identity": r["identity_key"], "winner_id": r["winner_id"],
+                    "loser_id": r["loser_id"], "loser_status": r["loser_status"],
+                    "winner_articles": wa, "loser_articles": la,
+                    "winner_tier": r["winner_tier"], "loser_tier": r["loser_tier"],
+                    "suspicious": la >= 1.5 * max(wa, 1) and la - wa >= 10})
+    return out

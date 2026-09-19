@@ -865,6 +865,27 @@ def cmd_seed_bunud(args) -> int:
     return 0
 
 
+def cmd_dedup_audit(args) -> int:
+    import database
+    from dedup import audit_dedup
+    conn = database.get_connection()
+    rows = audit_dedup(conn)
+    sus = [r for r in rows if r["suspicious"]]
+    lines = [f"# أزواج التكرار: {len(rows)} | مشبوه (الخاسر أكمل بوضوح): {len(sus)}"]
+    for r in sorted(rows, key=lambda r: (not r["suspicious"], r["identity"])):
+        flag = "⚠" if r["suspicious"] else " "
+        lines.append(f"{flag} {r['identity']} | فائز #{r['winner_id']} ط{r['winner_tier']} {r['winner_articles']} مادة"
+                     f" | خاسر #{r['loser_id']} ط{r['loser_tier']} {r['loser_articles']} مادة ({r['loser_status']})")
+    txt = "\n".join(lines)
+    if args.out:
+        open(args.out, "w", encoding="utf-8").write(txt)
+        print(lines[0], f"→ {args.out}")
+    else:
+        print(txt)
+    conn.close()
+    return 0
+
+
 def _key_of(conn, ref: str) -> str:
     """يقبل معرف الصف أو بادئة مصدر — ويرجع source_key كاملاً."""
     cur = conn.cursor()
@@ -1062,6 +1083,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("seed-bunud", help="B-2: بذر تشريعات بنود (bunud.ai) من خريطة الموقع")
     sp.add_argument("--dry", action="store_true")
     sp.set_defaults(fn=cmd_seed_bunud)
+
+    sp = sub.add_parser("dedup-audit", help="B-3: مراجعة أزواج التكرار (الفائز/الخاسر) وإعادة الميزان للمشبوه")
+    sp.add_argument("--out", metavar="FILE")
+    sp.set_defaults(fn=cmd_dedup_audit)
 
     sp = sub.add_parser("export", help="توليد حزمة محتوى لميزان (CSV+md+JSON)")
     sp.add_argument("--out", default="export/content_package")
