@@ -18,13 +18,13 @@ def db(tmp_path, monkeypatch):
 
 def test_refine_all_runs_every_stage_in_order(db):
     import postprocess
-    T = "المرسوم التشريعى رقم/30 المتعلق بامصرف الزراعي التعاوني"
+    T = "المرسوم التشريعي رقم/44 المتعلق بالمؤسسة العامة للأعلاف"
     db.execute("INSERT INTO documents(id,title,clean_content,status) VALUES (1,?, 'المادة 1 نص','active')", (T,))
     db.execute("INSERT INTO documents(id,title,clean_content,status) VALUES (2,?, 'المادة 6 نص','active')", (T,))
     db.commit()
     s = postprocess.refine_all(db)
-    assert set(s) == {"nature", "identity", "regulations", "dedup", "parts", "amendment_links", "status"}
-    assert s["parts"]["groups"] == 1 and s["parts"]["parts_linked"] == 1
+    assert set(s) == {"excluded", "nature", "identity", "regulations", "dedup", "parts", "amendment_links", "status"}
+    assert s["excluded"] == 0 and s["parts"]["groups"] == 1 and s["parts"]["parts_linked"] == 1
     assert db.execute("SELECT COUNT(*) FROM documents WHERE part_of IS NOT NULL").fetchone()[0] == 1
 
 

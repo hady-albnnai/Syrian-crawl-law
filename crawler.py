@@ -144,6 +144,14 @@ def _handle_topic(conn, task, html, dry_run, stats):
     branch, confidence = detect_branch(clean, task["section"])
     cursor = conn.cursor()
 
+    # ف١٠: قرار مالك سابق باستبعاد هذا العنوان — لا يُعاد إدخاله بإعادة الزحف
+    from exclusions import exclusion_reason
+    _excl = exclusion_reason(title)
+    if _excl:
+        log.info(f"   ⛔ مستبعَد بقرار المالك: {title[:50]} — {_excl}")
+        stats["skipped"] += 1
+        return
+
     # هوية القانون + فئة رسمية المصدر + اكتمال النص — الاكتشاف الذاتي
     # للمصادر (DESIGN-SELF-DISCOVERY.md §2 و§4.2). حساب لا افتراض: كل
     # وثيقة تُفحص فعلياً حتى لو لم يُعثر على رقم/سنة (identity_key=None).

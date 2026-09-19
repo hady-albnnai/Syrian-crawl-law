@@ -6,6 +6,7 @@ nature، parts --link، law-status --rebuild) يجري هنا بترتيبه ا�
 نهاية كل دورة زحف فعلية، وبأمر واحد `python -m cli refine` عند الحاجة.
 
 الترتيب ملزِم (كل خطوة تعتمد على سابقتها):
+  0. استبعادات المالك (قائمة بيانات) — توسم excluded وتُنسخ، لا تُحذف
   1. الطبيعة: صك / أعمال تحضيرية / فهرس … (ما ليس صكاً لا يُطلب له شيء)
   2. الهوية: رقم/سنة/مفتاح من العنوان والديباجة، ثم قاموس الصكوك المسمّاة
      (named_laws.py)، وتصحيح المفاتيح المتناقضة، ثم أرشفة النسخ المتصادمة
@@ -29,6 +30,9 @@ def refine_all(conn) -> dict:
     from law_status import compute_legal_statuses, rebuild_links
 
     summary: dict = {}
+    # 0. استبعادات المالك (exclusions.py) — قبل كل شيء كي لا تُحسب
+    from exclusions import apply_exclusions
+    summary["excluded"] = apply_exclusions(conn)["excluded"]
     nat = reclassify_documents(conn)
     summary["nature"] = nat.get("distribution")
     ident = reidentify_documents(conn)
@@ -52,6 +56,6 @@ def refine_all(conn) -> dict:
 
 
 def format_summary(s: dict) -> str:
-    return (f"تنقيح: طبيعة={s.get('nature')} | هوية={s.get('identity')} | "
+    return (f"تنقيح: مستبعَد={s.get('excluded')} | طبيعة={s.get('nature')} | هوية={s.get('identity')} | "
             f"لوائح={s.get('regulations')} | تصادمات={s.get('dedup')} | أجزاء={s.get('parts')} | إحالات={s.get('amendment_links')} | "
             f"حالات={s.get('status')}")
