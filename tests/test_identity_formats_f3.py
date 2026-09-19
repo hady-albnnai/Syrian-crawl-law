@@ -86,3 +86,55 @@ def test_references_pick_up_new_year_words():
         "يعدل القانون رقم 28 لسنة 2001 ويلغي المرسوم رقم 9 تاريخ 1/2/1990")
     keys = {r["identity_key"] for r in refs}
     assert keys == {"القانون:28:2001", "المرسوم:9:1990"}
+
+
+# --- ف٤: هوية مركّبة آمنة (سنة العنوان + رقم الديباجة) --------------------
+def test_merge_title_year_with_preamble_number_real_case_4():
+    """قاعدة المالك #4: «قانون تنظيم مهنة المحاماة لعام 2010» + ديباجة
+    «القانون رقم 30» ⇒ القانون:30:2010 (كلٌّ وحده ناقص)."""
+    r = li.merge_title_preamble_identity(
+        "قانون تنظيم مهنة المحاماة لعام 2010",
+        "الجمهورية العربية السورية القانون رقم 30 رئيس الجمهورية بناء على")
+    assert r["identity_key"] == "القانون:30:2010"
+    assert r["identity_confidence"] == "title_year+preamble_number"
+
+
+@pytest.mark.parametrize("title,body,why", [
+    ("المرسوم التشريعي رقم 6: قانون مكافحة الإتجار بالبشر- 2010",
+     "المرسوم التشريعي رقم (3) رئيس الجمهورية",
+     "تناقض عنوان/ديباجة (#19) — للمراجعة البشرية لا الحسم الآلي"),
+    ("قانون حماية حقوق المؤلف في سورية 2001",
+     "قانون حماية حقوق المؤلف يقصد بالتعابير الآتية", "لا رقم بالديباجة"),
+    ("قانون العقوبات لعام 1949", "استناداً إلى المرسوم التشريعي رقم 148",
+     "نوع الصك بالديباجة يخالف صكّ العنوان"),
+    ("قانون التجارة رقم 33, الجمهورية العربية السورية",
+     "القانون رقم 33 / / رئيس الجمهورية", "لا سنة بالعنوان"),
+    ("مقال عن المحاماة لعام 2010", "القانون رقم 30", "العنوان لا يبدأ بصك"),
+])
+def test_merge_refuses_when_unsafe(title, body, why):
+    assert li.merge_title_preamble_identity(title, body) is None, why
+
+
+def test_reidentify_uses_merge_only_when_no_identity(tmp_path, monkeypatch):
+    import sqlite3
+    import config, database
+    p = tmp_path / "m.db"
+    monkeypatch.setattr(config, "DB_PATH", p)
+    monkeypatch.setattr(database, "DB_PATH", p)
+    database.create_tables()
+    conn = sqlite3.connect(p); conn.row_factory = sqlite3.Row
+    conn.execute("INSERT INTO documents (doc_id, title, source_url, "
+                 "clean_content) VALUES ('a', 'قانون تنظيم مهنة المحاماة لعام 2010',"
+                 " 'https://x/a', 'الجمهورية العربية السورية القانون رقم 30 رئيس')")
+    conn.execute("INSERT INTO documents (doc_id, title, source_url, clean_content,"
+                 " identity_key) VALUES ('b', 'قانون العمل لعام 2010', 'https://x/b',"
+                 " 'القانون رقم 99', 'القانون:17:2010')")
+    conn.commit()
+    stats = li.reidentify_documents(conn)
+    assert stats["merged"] == 1
+    a = conn.execute("SELECT identity_key, number, year FROM documents "
+                     "WHERE doc_id='a'").fetchone()
+    assert tuple(a) == ("القانون:30:2010", 30, 2010)
+    b = conn.execute("SELECT identity_key FROM documents WHERE doc_id='b'"
+                     ).fetchone()[0]
+    assert b == "القانون:17:2010"  # هوية قائمة لا تُداس بالدمج

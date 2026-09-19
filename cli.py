@@ -559,6 +559,31 @@ def cmd_seed_official(args):
     return 0
 
 
+def cmd_nature(args):
+    """ف٤: طبيعة الوثائق — تصنيف/توزيع (صك، أعمال تحضيرية، فهرس، مسودة…)."""
+    from database import create_tables, get_connection
+    from doc_nature import reclassify_documents
+    create_tables()
+    conn = get_connection()
+    if args.reclassify:
+        rep = reclassify_documents(conn)
+        log.info(f"التوزيع ({rep['total']} وثيقة): {rep['distribution']}")
+        if rep["travaux_by_parent"]:
+            log.info(f"الأعمال التحضيرية حسب القانون الأم: "
+                     f"{rep['travaux_by_parent']}")
+    else:
+        rows = conn.execute(
+            "SELECT COALESCE(nature,'instrument') n, COUNT(*) c FROM documents "
+            "GROUP BY n ORDER BY c DESC").fetchall()
+        log.info("التوزيع: " + ", ".join(f"{r['n']}={r['c']}" for r in rows))
+    unid = conn.execute(
+        "SELECT COUNT(*) FROM documents WHERE identity_key IS NULL AND "
+        "status='active' AND COALESCE(nature,'instrument')='instrument'"
+    ).fetchone()[0]
+    log.info(f"صكوك نشطة بلا هوية (الرقم الصادق): {unid}")
+    return 0
+
+
 def cmd_law_status(args):
     """ف١: إعادة تحديد الهوية + سلسلة الإحالات + الحالة القانونية."""
     from database import create_tables, get_connection
@@ -742,6 +767,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry", action="store_true",
                     help="عرض ما سيُبذر دون إدراجه")
     sp.set_defaults(fn=cmd_seed_community)
+
+    sp = sub.add_parser("nature",
+                        help="طبيعة الوثائق: صك/أعمال تحضيرية/فهرس/مسودة (ف٤)")
+    sp.add_argument("--reclassify", action="store_true",
+                    help="إعادة تصنيف كل الوثائق المخزَّنة وكتابة nature")
+    sp.set_defaults(fn=cmd_nature)
 
     sp = sub.add_parser("law-status",
                         help="ف١: حساب الحالة القانونية (ساري/معدَّل/ملغى)")

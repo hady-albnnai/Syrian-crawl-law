@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 import crawl_queue as taskqueue
 import dedup
 import engines
+import doc_nature
 import law_identity
 import law_status
 import source_quality
@@ -58,7 +59,8 @@ def save_document(cursor, doc_id, title, url, branch, confidence, score,
                   identity_key=None, identity_confidence=None,
                   law_number=None, law_year=None, doc_type_name=None,
                   is_complete_text=None, source_domain_tier=None,
-                  quality_score=None, status=None):
+                  quality_score=None, status=None, nature=None,
+                  travaux_article=None):
     """حفظ idempotent: فحص doc_id قبل الإدراج (P0). يعيد (row_id, created).
 
     المعاملات الجديدة (اكتشاف ذاتي للمصادر، DESIGN-SELF-DISCOVERY.md §2/§4)
@@ -77,13 +79,14 @@ def save_document(cursor, doc_id, title, url, branch, confidence, score,
          content_hash, scraped_at, clean_content, doc_type,
          content_sha256, snapshot_sha256, identity_key, identity_confidence,
          number, year, is_complete_text, source_domain_tier, quality_score,
-         status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         status, nature, travaux_article)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (doc_id, title, url, branch, confidence, score, content_hash,
           datetime.now().isoformat(), clean_text, doc_type_name or "law",
           sha256_text(clean_text), snapshot_sha256, identity_key,
           identity_confidence, law_number, law_year, is_complete_text,
-          source_domain_tier, quality_score, status or "active"))
+          source_domain_tier, quality_score, status or "active",
+          nature or "instrument", travaux_article))
     return cursor.lastrowid, True
 
 
@@ -145,6 +148,9 @@ def _handle_topic(conn, task, html, dry_run, stats):
     # للمصادر (DESIGN-SELF-DISCOVERY.md §2 و§4.2). حساب لا افتراض: كل
     # وثيقة تُفحص فعلياً حتى لو لم يُعثر على رقم/سنة (identity_key=None).
     identity = law_identity.extract_law_identity(title, clean)
+    # ف٤: طبيعة الوثيقة تُحسم عند الحفظ — الأعمال التحضيرية وصفحات الفهارس
+    # لا تُطلب لها هوية ولا تدخل حزمة ميزان كصكوك.
+    nature = doc_nature.classify_nature(title, clean)
     # الطبقة من الرابط إلا لو مرّرها المستدعي صراحة بالمهمة (استيراد HF
     # يمرر 3: نص رسمي منقول بمجموعة مجتمعية — الإسناد الصادق) — عند
     # زحف الأصل نفسه (طبقة 1) يفقده dedup فيستبدله في المكان.
@@ -193,7 +199,8 @@ def _handle_topic(conn, task, html, dry_run, stats):
         identity_confidence=identity["identity_confidence"],
         law_number=identity["law_number"], law_year=identity["law_year"],
         is_complete_text=complete, source_domain_tier=domain_tier,
-        quality_score=q_score, status=doc_status)
+        quality_score=q_score, status=doc_status,
+        nature=nature["nature"], travaux_article=nature["article_no"])
     if not created:
         # نفس الرابط زُحف سابقاً (doc_id مستقر مشتق من الرابط). محتوى
         # مطابق → تخطٍّ idempotent كما صُمم. محتوى مختلف → نفس ميزان

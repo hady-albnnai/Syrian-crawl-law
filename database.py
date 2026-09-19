@@ -74,7 +74,9 @@ def create_tables():
         is_complete_text INTEGER,
         source_domain_tier INTEGER,
         quality_score REAL,
-        legal_status TEXT
+        legal_status TEXT,
+        nature TEXT DEFAULT 'instrument',
+        travaux_article INTEGER
     )
     ''')
 

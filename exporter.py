@@ -138,9 +138,20 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
     """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    # ف٤: غير الصكوك (أعمال تحضيرية/فهارس/مسودات/غير قانوني) لا تدخل فهرس
+    # ميزان — يُبلَّغ عددها في التقرير لا يُدفن. قاعدة قديمة بلا عمود
+    # nature (قبل الهجرة 7) تُعامل كلها صكوكاً كما كانت.
+    has_nature = any(r[1] == "nature" for r in
+                     conn.execute("PRAGMA table_info(documents)").fetchall())
+    nature_filter = ("AND COALESCE(nature, 'instrument') = 'instrument' "
+                     if has_nature else "")
     docs = conn.execute(
         "SELECT * FROM documents WHERE status = 'active' "
-        "ORDER BY year, number, id").fetchall()
+        f"{nature_filter}ORDER BY year, number, id").fetchall()
+    non_instruments = conn.execute(
+        "SELECT COUNT(*) FROM documents WHERE status = 'active' "
+        "AND COALESCE(nature, 'instrument') <> 'instrument'").fetchone()[0] \
+        if has_nature else 0
     out = Path(out_dir)
     (out / "markdown").mkdir(parents=True, exist_ok=True)
     used_ids, rows, skipped = set(), [], 0
@@ -228,9 +239,10 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
     if renamed:
         log.info(f"تكرار أسماء الملفات: {renamed} وثيقة أعيدت تسميتها بلاحقة "
                  "لتجنّب الدفن (نفس الهوية من مصدرين)")
-    log.info(f"حزمة المحتوى: {len(rows)} وثيقة في {out} ({skipped} تخطي)")
+    log.info(f"حزمة المحتوى: {len(rows)} وثيقة في {out} ({skipped} تخطي"
+             f" | {non_instruments} ليست صكوكاً خارج الفهرس)")
     rep = {"docs": len(rows), "skipped": skipped,
-           "renamed": renamed,
+           "renamed": renamed, "non_instruments": non_instruments,
            "csv": str(csv_path), "out_dir": str(out)}
     if with_manifest:
         rep.update(_finalize(out, db_path, rows))

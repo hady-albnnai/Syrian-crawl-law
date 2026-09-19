@@ -159,7 +159,7 @@ def test_document_without_identity_gets_no_status(tmp_path, monkeypatch):
     row = conn.execute(
         "SELECT legal_status FROM documents WHERE doc_id='x'").fetchone()
     assert row["legal_status"] is None
-    assert counts["بلا هوية (بلا حالة)"] == 1
+    assert counts["بلا هوية (صكوك)"] == 1  # ف٤: العدّ من الصكوك فقط
 
 
 def test_rebuild_links_from_existing_documents(tmp_path, monkeypatch):

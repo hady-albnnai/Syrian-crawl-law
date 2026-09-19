@@ -32,7 +32,7 @@ py-modules = [
               "dedup", "discovery", "engines",
               "exporter", "extractor", "extractor_v4",
               "fetcher", "gap_analysis", "hf_syria_laws",
-              "law_identity", "law_status", "learning",
+              "doc_nature", "law_identity", "law_status", "learning",
               "logging_setup", "migrations", "mizan_injector",
               "official_seed", "package_manifest", "recon",
               "search", "source_matrix", "source_quality",

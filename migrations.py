@@ -233,6 +233,20 @@ def _migration_006_law_status(cursor) -> dict:
     return {"law_amendments": True, "documents.legal_status_added": added}
 
 
+def _migration_007_doc_nature(cursor) -> dict:
+    """ف٤: طبيعة الوثيقة (doc_nature.py) — قِيس على عيّنة المالك: 208 من
+    262 «بلا هوية» أعمالٌ تحضيرية لا صكوك. nature تُحسم عند الحفظ، والقاعدة
+    القائمة تُصنَّف بـ `cli nature --reclassify`. travaux_article = رقم
+    المادة المشروحة (للأعمال التحضيرية فقط)."""
+    a = _add_column_if_missing(cursor, "documents", "nature",
+                               "TEXT DEFAULT 'instrument'")
+    b = _add_column_if_missing(cursor, "documents", "travaux_article",
+                               "INTEGER")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_nature "
+                   "ON documents(nature)")
+    return {"columns_added": a + b}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
     (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
@@ -243,6 +257,8 @@ MIGRATIONS = [
      _migration_005_rejection_feedback),
     (6, "law_amendments + documents.legal_status (ف١ amendment chain)",
      _migration_006_law_status),
+    (7, "documents.nature + travaux_article (ف٤ doc_nature)",
+     _migration_007_doc_nature),
 ]
 LATEST = MIGRATIONS[-1][0]
 

@@ -309,6 +309,63 @@ def extract_law_identity(title: str, text: str) -> dict:
     return dict(_NO_IDENTITY)
 
 
+_PREAMBLE_NUM_RE = re.compile(
+    rf"({_TYPE_ALT})\s*(?:ذي\s+)?(?:ال)?رقم\s*[\u200f/(\[]?\s*(?P<num>{_NUM})")
+
+
+def merge_title_preamble_identity(title: str, text: str) -> dict | None:
+    """هوية مركّبة آمنة: السنة من العنوان + الرقم من ديباجة النص (ف٤).
+
+    الحالة المقيسة (قاعدة المالك، #4): العنوان «قانون تنظيم مهنة المحاماة
+    لعام 2010» بلا رقم، والديباجة «الجمهورية العربية السورية القانون رقم 30
+    رئيس الجمهورية…» بلا سنة. كلٌّ وحده ناقص؛ معاً هوية كاملة.
+
+    شروط القبول — كلها وإلا None (لا هوية أفضل من هوية مركّبة خاطئة):
+    - العنوان يبدأ باسم صك (_leading_type) ويحمل سنة، ولا يحمل رقم صك.
+    - أول 300 حرف من النص تذكر «<نفس نوع الصك> رقم N» — النوع مطابق لصكّ
+      العنوان (ديباجة «المرسوم التشريعي رقم 3» لا تُكمل عنوان «القانون…»).
+    - لا تناقض: إن حمل العنوان رقماً مخالفاً لرقم الديباجة (قِيس #19:
+      عنوان «المرسوم التشريعي رقم 6» وديباجة «رقم (3)») يُرفض ويُترك
+      للمراجعة البشرية.
+    """
+    t = _nfkc(title or "")
+    head = _nfkc(text or "")[:300]
+    lead = _leading_type(t)
+    if not lead or not head:
+        return None
+    tm = _TITLE_NUM_RE.search(t)
+    fb = title_only_identity(t)
+    year = fb["law_year"]
+    if year is None:
+        return None
+    pm = None
+    for m in _PREAMBLE_NUM_RE.finditer(head):
+        if _normalize_type(m.group(1)) == lead:
+            pm = m
+            break
+    if pm is None:
+        return None
+    try:
+        number = int(to_western_digits(pm.group("num")))
+    except ValueError:
+        return None
+    if number <= 0:
+        return None
+    if tm:
+        try:
+            tnum = int(to_western_digits(tm.group("n")))
+        except ValueError:
+            tnum = None
+        if tnum is not None and tnum != number:
+            return None  # تناقض عنوان/ديباجة — لا حسم آلي
+    return {
+        "doc_type": lead, "law_number": number, "law_year": year,
+        "identity_key": build_identity_key(lead, number, year),
+        "identity_confidence": "title_year+preamble_number",
+        "provenance": "merged",
+    }
+
+
 def reidentify_documents(conn) -> dict:
     """إعادة استخراج هوية الوثائق المخزَّنة — صيانة بعد تحسّن الاستخراج.
 
@@ -330,10 +387,21 @@ def reidentify_documents(conn) -> dict:
         " FROM documents"
     ).fetchall()
     stats = {"gained": 0, "updated": 0, "unchanged": 0, "no_match": 0,
-             "partial": 0, "kept_existing": 0}
+             "partial": 0, "kept_existing": 0, "merged": 0}
     for r in rows:
         ident = extract_law_identity(r["title"] or "",
                                      r["clean_content"] or "")
+        if ident["identity_key"] is None and r["identity_key"] is None:
+            merged = merge_title_preamble_identity(r["title"] or "",
+                                                   r["clean_content"] or "")
+            if merged:
+                conn.execute(
+                    "UPDATE documents SET identity_key=?, "
+                    "identity_confidence=?, number=?, year=? WHERE id=?",
+                    (merged["identity_key"], merged["identity_confidence"],
+                     merged["law_number"], merged["law_year"], r["id"]))
+                stats["merged"] = stats.get("merged", 0) + 1
+                continue
         if ident["identity_key"] is None:
             # لا هوية كاملة: يُجرَّب احتياط العنوان لملء العمود الفارغ فقط.
             # هوية قائمة لا تُمسّ، وidentity_key لا يُمسّ إطلاقاً هنا.

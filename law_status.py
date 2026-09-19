@@ -133,9 +133,21 @@ def compute_legal_statuses(conn) -> dict:
         conn.execute("UPDATE documents SET legal_status=? WHERE id=?",
                      (status, row["id"]))
         counts[status] += 1
-    counts["بلا هوية (بلا حالة)"] = conn.execute(
-        "SELECT COUNT(*) FROM documents WHERE identity_key IS NULL"
-    ).fetchone()[0]
+    # ف٤: «بلا هوية» يُحسب من الصكوك فقط — الأعمال التحضيرية وصفحات الفهارس
+    # ليست صكوكاً فلا تُطلب لها هوية (كانت تُضخّم الرقم: 208 من 262).
+    has_nature = any(r[1] == "nature" for r in
+                     conn.execute("PRAGMA table_info(documents)").fetchall())
+    if has_nature:
+        counts["بلا هوية (صكوك)"] = conn.execute(
+            "SELECT COUNT(*) FROM documents WHERE identity_key IS NULL "
+            "AND COALESCE(nature,'instrument')='instrument'").fetchone()[0]
+        counts["ليست صكوكاً (خارج العدّ)"] = conn.execute(
+            "SELECT COUNT(*) FROM documents "
+            "WHERE COALESCE(nature,'instrument')<>'instrument'").fetchone()[0]
+    else:
+        counts["بلا هوية (بلا حالة)"] = conn.execute(
+            "SELECT COUNT(*) FROM documents WHERE identity_key IS NULL"
+        ).fetchone()[0]
     conn.commit()
     return counts
 
