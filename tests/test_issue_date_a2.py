@@ -79,3 +79,20 @@ def test_real_owner_closings(tail, expect):
 def test_hijri_only_owner_style():
     r = extract_issue_date("دمشق في 12/1/1430 ه رئيس الجمهورية")
     assert r["issue_date"] is None and r["issue_date_hijri"] == "12/1/1430"
+
+
+def test_yusdir_is_not_an_anchor():
+    t = "المادة 25 ريثما يصدر وزير التموين القرارات 12/3/2007 المشار اليها. المادة 26 ينشر"
+    assert extract_issue_date(t, 1960)["conflict"] is False
+
+
+def test_heading_reference_after_first_article_ignored():
+    t = "المرسوم التشريعي رقم 276 المادة 1 نص. 18. يلغى القرار رقم (1327 / ن) تاريخ 22/12/1966 وتلغى"
+    r = extract_issue_date(t, 1969)
+    assert r["issue_date"] is None and r["conflict"] is False
+
+
+def test_conflict_kept_when_closing_truly_contradicts():
+    # #162: ختام حقيقي 22/11/2000 وهوية 13/1981 → يُرفض بصدق (شذرة مختلطة)
+    r = extract_issue_date("المادة 6 ينشر. دمشق 25/8/1421 ه 22/11/2000 رئيس الجمهورية", 1981)
+    assert r["conflict"] is True

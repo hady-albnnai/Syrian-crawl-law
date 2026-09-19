@@ -41,7 +41,10 @@ _NAMED_RE = re.compile(
     r"(?P<d>\d{1,2})\s+(?P<mon>" + "|".join(sorted(map(re.escape, _MONTHS), key=len, reverse=True))
     + r")\s+(?:سنة\s+|عام\s+)?(?P<y>\d{4})")
 # مرساة الختام: «دمشق في» / «دمشق» / «صدر في» / «صادر في» / «بتاريخ» — ثم نافذة قصيرة
-_ANCHOR_RE = re.compile(r"(?:دمشق|صدر|صدرت|صادر)\s*(?:في|فى|بتاريخ|تاريخ)?\s*:?")
+# «صدر» يجب أن يكون كلمة مستقلة (لا «يصدر وزير…» ولا «مصدر») ويليه «في/بتاريخ»؛
+# «دمشق» وحدها تكفي (قِيس issue_dates2: «دمشق 25/8/1421 ه 22/11/2000»)
+_ANCHOR_RE = re.compile(
+    r"(?<![\u0621-\u064A])(?:دمشق\s*(?:في|فى|بتاريخ|تاريخ)?|(?:صدر|صدرت|صادر)\s+(?:في|فى|بتاريخ))\s*:?")
 _HEADING_RE = re.compile(r"(?:رقم|الرقم)\s*[/(]?\s*\d{1,4}\s*[/)]?\s*(?:و)?(?:ب)?تاريخ\s*[/(:]?\s*")
 _WINDOW = 90
 
@@ -119,7 +122,12 @@ def extract_issue_date(text: str, identity_year: int | None = None) -> dict:
         if r:
             best = r
     if best is None:
+        # الرأس فقط قبل أول «المادة» (بعدها «رقم N تاريخ D» إحالة لا هوية —
+        # قِيس issue_dates2: #28/#107 التقطا تاريخ قرار ملغى داخل المتن)
         head = t[:600]
+        cut = re.search(r"(?:^|\s)ال?مادة\s*[\d(/]", head)
+        if cut:
+            head = head[:cut.start()]
         for a in _HEADING_RE.finditer(head):
             found = _dates_in(head[a.end():a.end() + 40])
             r = _pick(found, identity_year, "heading")
