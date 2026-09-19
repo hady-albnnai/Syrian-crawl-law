@@ -497,7 +497,9 @@ def extract_law_references(text: str) -> list:
             "context": text[start:end].strip(),
             # ف٥: ما قبل الإشارة وما بعدها منفصلَين — فعل الإلغاء يجب أن
             # يسبق الصك المستهدَف؛ جملة ختامية لاحقة لا تلغيه.
-            "before": text[start:m.start()],
+            # before أوسع (160) من السياق المعروض (60): قائمة مرقّمة تحكمها
+            # جملة قبل بنود عدة («ويلغى أيضا:\n1- …\n2- …»)
+            "before": text[max(0, m.start() - 160):m.start()],
             "after": text[m.end():end],
         })
     return out
