@@ -229,32 +229,61 @@ def compute_legal_statuses(conn) -> dict:
     # (قِيس 2026-09-19: «ملغى» 19 بالعدّ و3 بالتقرير — 16 يتيمة من حساب
     # سابق على وثائق فقدت دليلها أو هويتها).
     conn.execute("UPDATE documents SET legal_status=NULL")
-    has_nature = any(r[1] == "nature" for r in
-                     conn.execute("PRAGMA table_info(documents)").fetchall())
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    has_nature = "nature" in cols
+    has_reason = "legal_status_reason" in cols
+    has_issue = "issue_date" in cols
+    if has_reason:
+        conn.execute("UPDATE documents SET legal_status_reason=NULL")
     nature_ok = ("AND COALESCE(d.nature,'instrument')='instrument' "
                  if has_nature else "")
+    # A-3: الزمن بالتاريخ الكامل حين يتوفر للطرفين، وإلا بالسنة (سنة مجهولة
+    # تُقبل). الصك المستبعَد/المستبدَل لا يُعدّ دليلاً.
+    issue_sel = ", d.issue_date AS a_issue" if has_issue else ", NULL AS a_issue"
     rows = conn.execute(
-        "SELECT id, identity_key, year FROM documents "
-        "WHERE identity_key IS NOT NULL").fetchall()
+        "SELECT id, identity_key, year" + (", issue_date" if has_issue else ", NULL AS issue_date")
+        + " FROM documents WHERE identity_key IS NOT NULL"
+        " AND status IN ('active','superseded')").fetchall()
     for row in rows:
-        # حارسان (ف٥ 2026-09-19) — من دونهما يُعلَّم قانون نافذ «ملغى»:
-        # 1) المعدِّل صكٌّ (لا أعمال تحضيرية ولا مقال يذكر «يلغى»).
-        # 2) الزمن: صكٌّ أقدم لا يعدّل أحدث — سنة المعدِّل ≥ سنة المستهدَف
-        #    (سنة مجهولة تُقبل: لا نرفض بالجهل بل نُبقي الدليل).
-        actions = {r["action"] for r in conn.execute(
-            f"""SELECT a.action FROM law_amendments a
+        evid = conn.execute(
+            f"""SELECT a.action, a.context, d.identity_key AS a_key, d.year AS a_year,
+                       d.title AS a_title{issue_sel}
+                FROM law_amendments a
                 JOIN documents d ON d.id = a.amending_doc_id
                 WHERE a.target_identity=? {nature_ok}
+                AND d.status='active'
                 AND (d.year IS NULL OR ? IS NULL OR d.year >= ?)""",
-            (row["identity_key"], row["year"], row["year"])).fetchall()}
+            (row["identity_key"], row["year"], row["year"])).fetchall()
+        # حارس التاريخ الكامل: معدِّل صدر قبل المستهدَف بتاريخ يقيني يُستبعد
+        # (نفس السنة لا تكفي للترتيب — قِيس A-3)
+        t_issue = row["issue_date"]
+        kept = [e for e in evid
+                if not (t_issue and e["a_issue"] and e["a_issue"] < t_issue)]
+        actions = {e["action"] for e in kept}
         if "repeal" in actions:
             status = "ملغى"
         elif "amend" in actions:
             status = "معدَّل"
         else:
             status = "ساري"
-        conn.execute("UPDATE documents SET legal_status=? WHERE id=?",
-                     (status, row["id"]))
+        reason = None
+        if kept:
+            def _fmt(e):
+                when = e["a_issue"] or (str(e["a_year"]) if e["a_year"] else "؟")
+                verb = "أُلغي" if e["action"] == "repeal" else "عُدّل"
+                who = e["a_key"] or (e["a_title"] or "")[:40]
+                return f"{verb} بـ {who} ({when})"
+            top = sorted(kept, key=lambda e: (e["action"] != "repeal",
+                                              e["a_issue"] or "", e["a_year"] or 0))
+            reason = "؛ ".join(dict.fromkeys(_fmt(e) for e in top[:3]))
+        elif status == "ساري":
+            reason = "لا دليل تعديل أو إلغاء في المتن المحصود"
+        if has_reason:
+            conn.execute("UPDATE documents SET legal_status=?, legal_status_reason=?"
+                         " WHERE id=?", (status, reason, row["id"]))
+        else:
+            conn.execute("UPDATE documents SET legal_status=? WHERE id=?",
+                         (status, row["id"]))
         counts[status] += 1
     # ف٤: «بلا هوية» يُحسب من الصكوك فقط — الأعمال التحضيرية وصفحات الفهارس
     # ليست صكوكاً فلا تُطلب لها هوية (كانت تُضخّم الرقم: 208 من 262).
@@ -283,5 +312,5 @@ def law_chain(conn, identity_key: str) -> list:
            FROM law_amendments a
            JOIN documents d ON d.id = a.amending_doc_id
            WHERE a.target_identity = ?
-           ORDER BY d.year, d.number""",
+           ORDER BY COALESCE(d.issue_date, ''), d.year, d.number""",
         (identity_key,)).fetchall()

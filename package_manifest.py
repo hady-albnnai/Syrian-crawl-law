@@ -93,7 +93,8 @@ def enrich_doc_json(package_dir: Path, db_path, docs_index: list[dict]) -> dict:
             "SELECT id, identity_key, identity_confidence, legal_status,"
             " review_status, status, source_domain_tier, quality_score,"
             " is_complete_text, branch, doc_type, number, year,"
-            " content_sha256, snapshot_sha256 FROM documents WHERE source_url = ?",
+            " content_sha256, snapshot_sha256, legal_status_reason, issue_date,"
+            " issue_date_hijri, parent_identity FROM documents WHERE source_url = ?",
             (doc_url,)).fetchone()
         if row is None:
             continue
@@ -101,6 +102,10 @@ def enrich_doc_json(package_dir: Path, db_path, docs_index: list[dict]) -> dict:
         data["identity_key"] = row["identity_key"]
         data["identity_confidence"] = row["identity_confidence"]
         data["legal_status"] = row["legal_status"]
+        data["legal_status_reason"] = row["legal_status_reason"]
+        data["issue_date"] = row["issue_date"]
+        data["issue_date_hijri"] = row["issue_date_hijri"]
+        data["parent_identity"] = row["parent_identity"]
         data["review_status"] = row["review_status"]
         data["document_status"] = row["status"]
         data["domain_tier"] = row["source_domain_tier"]

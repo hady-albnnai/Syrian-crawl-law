@@ -800,6 +800,10 @@ def cmd_law_status(args):
             for m in mentions:
                 log.info(f"    #{m['id']} {m['title'][:70]} (سنة={m['year']})")
     if args.law:
+        st = conn.execute("SELECT legal_status, legal_status_reason, issue_date FROM documents"
+                          " WHERE identity_key=? AND status='active'", (args.law,)).fetchone()
+        if st:
+            log.info(f"  الحالة: {st['legal_status']} | صدر: {st['issue_date']} | السبب: {st['legal_status_reason']}")
         chain = law_chain(conn, args.law)
         if not chain:
             log.info(f"لا إحالات مسجلة تستهدف {args.law}")

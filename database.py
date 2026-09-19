@@ -81,7 +81,8 @@ def create_tables():
         parent_identity TEXT,
         issue_date TEXT,
         issue_date_hijri TEXT,
-        issue_date_confidence TEXT
+        issue_date_confidence TEXT,
+        legal_status_reason TEXT
     )
     ''')
 

@@ -273,6 +273,12 @@ def _migration_010_issue_date(cursor) -> dict:
     return {"columns_added": a}
 
 
+def _migration_011_status_reason(cursor) -> dict:
+    """A-3: documents.legal_status_reason — نص الدليل (من أي صك، بأي تاريخ)."""
+    a = _add_column_if_missing(cursor, "documents", "legal_status_reason", "TEXT")
+    return {"columns_added": a}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
     (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
@@ -291,6 +297,7 @@ MIGRATIONS = [
      _migration_009_parent_identity),
     (10, "documents.issue_date/_hijri/_confidence (A-2 issue_date)",
      _migration_010_issue_date),
+    (11, "documents.legal_status_reason (A-3)", _migration_011_status_reason),
 ]
 LATEST = MIGRATIONS[-1][0]
 
