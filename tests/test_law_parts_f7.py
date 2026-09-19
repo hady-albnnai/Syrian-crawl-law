@@ -210,3 +210,47 @@ def test_explain_parts_reports_overlap(db):
     db.commit()
     txt = "\n".join(explain_parts(db))
     assert "رقم 30: 2 وثيقة" in txt and "مجموعة: رأس #1" in txt and "محتواة=[2]" in txt
+
+
+# --- جولة parts_explain2.txt (2026-09-19، بعد d99558e) --------------------------
+def test_same_number_year_different_subjects_not_grouped():
+    # 15/2008: #44 إحداث مؤسسة عامة (2–14) و#100 التطوير العقاري (1–92) صكّان
+    docs = [
+        _doc(44, 15, " ".join(f"المادة {i} ن" for i in range(2, 15)), year=2008,
+             title="المرسوم التشريعي 15 لعام 2008 إحداث المؤسسة العامة للإسكان", key="المرسوم التشريعي:15:2008"),
+        _doc(100, 15, " ".join(f"المادة {i} ن" for i in range(1, 93)), year=2008, dt="القانون",
+             title="القانون رقم 15 لعام 2008 بشأن التطوير والاستثمار العقاري", key="القانون:15:2008"),
+    ]
+    assert group_parts(docs) == []
+
+
+def test_executive_regulation_never_heads_its_law():
+    # 24/2003: التعليمات التنفيذية (#101، 12–921) لا ترأس قانون ضريبة الدخل (#102)
+    docs = [
+        _doc(101, 24, " ".join(f"المادة {i} ن" for i in range(12, 922)), year=2003, dt="القانون",
+             title="التعليمات التنفيذية لقانون الضريبة على الدخل رقم /24/ لعام 2003"),
+        _doc(102, 24, " ".join(f"المادة {i} ن" for i in range(1, 566)), year=2003, dt="القانون",
+             title="القانون رقم 24 لعام 2003 بشأن ضريبة الدخل", key="القانون:24:2003"),
+    ]
+    assert group_parts(docs) == []
+
+
+def test_two_copies_same_title_same_year_still_grouped():
+    # التبغ 16/1935: #22 (1–31) و#103 (1–95) عنوان واحد → نسختان لصك واحد
+    T = "نظام احتكار التبغ والتنباك الصادر بالقرار رقم 16 لعام 1935"
+    docs = [_doc(22, 16, " ".join(f"المادة {i} ن" for i in range(1, 32)), year=1935, title=T),
+            _doc(103, 16, " ".join(f"المادة {i} ن" for i in range(1, 96)), title=T)]
+    gs = group_parts(docs)
+    assert len(gs) == 1 and gs[0]["head_id"] == 103 and gs[0]["contained"] == [22]
+
+
+def test_reidentify_clears_key_contradicting_explicit_title_number(db):
+    # #281: عنوان «رقم/30 … المصرف الزراعي» ومفتاح مخزَّن 23/2002 من إحالة
+    from law_identity import reidentify_documents
+    db.execute("INSERT INTO documents(id,title,clean_content,status,nature,number,year,identity_key,identity_confidence)"
+               " VALUES (281,'المرسوم التشريعى رقم/30 المتعلق بامصرف الزراعي التعاوني',"
+               "'المادة 3 وفق القانون رقم 23 لعام 2002 المادة 100','active','instrument',23,2002,'القانون:23:2002','body')")
+    st = reidentify_documents(db)
+    r = db.execute("SELECT number, year, identity_key FROM documents WHERE id=281").fetchone()
+    assert st.get("corrected_key") == 1
+    assert (r["number"], r["year"], r["identity_key"]) == (30, None, None)

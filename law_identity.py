@@ -463,8 +463,8 @@ def reidentify_documents(conn) -> dict:
     الشركات 3/2008) فيكون التوسيع اختطافاً للهوية وإفساداً للمنقّح.
     """
     rows = conn.execute(
-        "SELECT id, title, clean_content, identity_key, number, year"
-        " FROM documents"
+        "SELECT id, title, clean_content, identity_key, number, year,"
+        " identity_confidence FROM documents"
     ).fetchall()
     stats = {"gained": 0, "updated": 0, "unchanged": 0, "no_match": 0,
              "partial": 0, "kept_existing": 0, "merged": 0}
@@ -481,6 +481,22 @@ def reidentify_documents(conn) -> dict:
                     (merged["identity_key"], merged["identity_confidence"],
                      merged["law_number"], merged["law_year"], r["id"]))
                 stats["merged"] = stats.get("merged", 0) + 1
+                continue
+        if (r["identity_confidence"] != "preamble_over_title"
+                and ident.get("provenance") in ("preamble", "body")
+                and not _ENACTING_HEAD_RE.search((r["clean_content"] or "")[:600])):
+            # رقم مستخرَج من المتن يخالف رقم العنوان الصريح، ولا رأس إصدار رسمي
+            # في المتن (قِيس 2026-09-19: #281 عنوانه «المرسوم التشريعى رقم/30 …
+            # المصرف الزراعي» ومتنه يحيل إلى «القانون 23 لعام 2002» فاستُخرج
+            # 23/2002 وانطوى خطأً تحت قانون النقد). الإحالة ليست هوية؛ يُمحى
+            # المفتاح المتناقض ويُثبت رقم العنوان — لا يُخترع مفتاح بديل.
+            fb = title_only_identity(r["title"] or "")
+            if fb["law_number"] and fb["law_number"] != ident["law_number"]:
+                conn.execute(
+                    "UPDATE documents SET identity_key=NULL, number=?, year=?,"
+                    " identity_confidence='title_only' WHERE id=?",
+                    (fb["law_number"], fb["law_year"], r["id"]))
+                stats["corrected_key"] = stats.get("corrected_key", 0) + 1
                 continue
         if ident["identity_key"] is None:
             # لا هوية كاملة: يُجرَّب احتياط العنوان لملء العمود الفارغ فقط.

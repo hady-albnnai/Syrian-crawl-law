@@ -631,12 +631,19 @@ def cmd_law_status(args):
                       substr(clean_content, 1, 300) AS head
                FROM documents WHERE identity_key IS NULL
                AND status='active' AND COALESCE(nature,'instrument')='instrument'
+               AND part_of IS NULL
                ORDER BY id LIMIT ?""",
             (args.unidentified,)).fetchall()
         total = conn.execute(
             "SELECT COUNT(*) FROM documents WHERE identity_key IS NULL "
             "AND status='active' AND COALESCE(nature,'instrument')='instrument'"
+            " AND part_of IS NULL"
         ).fetchone()[0]
+        folded = conn.execute(
+            "SELECT COUNT(*) FROM documents WHERE identity_key IS NULL "
+            "AND status='active' AND part_of IS NOT NULL").fetchone()[0]
+        # ف٧: الجزء المربوط برأسه ليس «بلا هوية» — هويته هوية رأسه عند التصدير
+        log.info(f"أجزاء مطوية تحت رأس (مستثناة من العدّ): {folded}")
         log.info(f"صكوك نشطة بلا هوية: {total} (عرض {len(rows)})")
         by_cat: dict = {}
         lines = []

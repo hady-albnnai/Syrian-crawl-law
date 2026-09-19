@@ -75,6 +75,55 @@ def _types_compatible(types: set) -> bool:
     return len(ts) <= 1 or frozenset(ts) in _COMPATIBLE
 
 
+_REGULATION_RE = re.compile(r"^\s*(التعليمات|اللائحة|النظام)\s+التنفيذي")
+
+
+def _is_regulation(title: str) -> bool:
+    """لائحة/تعليمات تنفيذية: صك تابع لا يُطوى تحت قانونه ولا يرأسه
+    (قِيس: #101 التعليمات التنفيذية لضريبة الدخل رُئّست فوق القانون 24/2003)."""
+    return bool(_REGULATION_RE.match(title or ""))
+
+
+def _near_identical(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    """نصّان كاملان بالنطاق ذاته تقريباً (نسختان لصك واحد بعنوانين)."""
+    span_a, span_b = a[1] - a[0], b[1] - b[0]
+    if min(span_a, span_b) < 20:
+        return False
+    inter = min(a[1], b[1]) - max(a[0], b[0])
+    return inter >= 0.8 * max(span_a, span_b)
+
+
+def _related(a: dict, b: dict) -> bool:
+    """دليل أن الوثيقتين لصك واحد (بعد اشتراك الرقم والسنة): كلمة جوهرية
+    مشتركة، أو عنوان عام بلا كلمات (وثيقة قانونية سورية)، أو جذع عنوان
+    متطابق، أو نطاقان كاملان متطابقان تقريباً. قِيس 2026-09-19: #44
+    (إحداث مؤسسة 15/2008) و#100 (التطوير العقاري 15/2008) رقمٌ وسنةٌ
+    واحدان لصكّين مختلفين — لا يُجمعان."""
+    ta, tb = _tokens(a.get("title") or ""), _tokens(b.get("title") or "")
+    if not ta or not tb or ta & tb:
+        return True
+    if _title_stem(a.get("title") or "") == _title_stem(b.get("title") or ""):
+        return True
+    return bool(a.get("year") and a.get("year") == b.get("year")
+                and _near_identical(a["range"], b["range"]))
+
+
+def _components(members: list[dict]) -> list[list[dict]]:
+    """مكوّنات الترابط وفق _related داخل عنقود واحد."""
+    rest, comps = list(members), []
+    while rest:
+        comp, queue = [], [rest.pop(0)]
+        while queue:
+            m = queue.pop()
+            comp.append(m)
+            linked = [r for r in rest if _related(m, r)]
+            for r in linked:
+                rest.remove(r)
+            queue.extend(linked)
+        comps.append(comp)
+    return comps
+
+
 def _accept_cluster(members: list[dict]) -> dict | None:
     """يقبل عنقوداً (نفس الرقم، سنة واحدة أو غائبة، أنواع متوافقة) ويعيد
     المجموعة: الرأس = الأوسع تغطيةً (ثم الأصغر مادةً أولى)؛ الباقي أجزاء —
@@ -113,10 +162,12 @@ def group_parts(docs: list[dict]) -> list[dict]:
          الأحوال الشخصية 59 (بلا سنة) مع المرسوم 59/2008.
       3. ما بقي بلا سنة يتعنقد بتطابق جذع العنوان (المرسوم 30 ×4).
       4. الأنواع: متوافقة إن كانت واحدة أو {القانون، المرسوم التشريعي}.
+      5. داخل العنقود لا تُجمع وثيقتان إلا بدليل ترابط (_related): رقم وسنة
+         واحدان قد يجمعان صكّين مختلفين. اللوائح التنفيذية تُستبعد كلياً.
     """
     buckets: dict[int, list[dict]] = {}
     for d in docs:
-        if not d.get("number"):
+        if not d.get("number") or _is_regulation(d.get("title") or ""):
             continue
         rng = article_range(d.get("text") or "")
         if rng is None:
@@ -159,9 +210,11 @@ def group_parts(docs: list[dict]) -> list[dict]:
         for cl in clusters:
             if not _types_compatible({c.get("doc_type") for c in cl}):
                 continue
-            g = _accept_cluster(cl)
-            if g:
-                groups.append(g)
+            # 5) داخل العنقود: مكوّنات مترابطة بدليل عنوان/نطاق
+            for comp in _components(cl):
+                g = _accept_cluster(comp)
+                if g:
+                    groups.append(g)
     return groups
 
 
