@@ -637,6 +637,25 @@ def cmd_law_status(args):
     if links is not None:
         summary = f"إحالات مُعاد بناؤها: {links} | " + summary
     log.info(summary)
+    if getattr(args, "repealed_report", None):
+        # ف٥: كل صك عُلِّم «ملغى» مع دليله (المعدِّل + السياق) — للمراجعة
+        # البشرية قبل الوثوق؛ إلى ملف لأن المخرجات طويلة.
+        rows = conn.execute(
+            """SELECT d.identity_key, d.title, d.year,
+                      m.title AS by_title, m.year AS by_year, a.context
+               FROM documents d
+               JOIN law_amendments a ON a.target_identity = d.identity_key
+               JOIN documents m ON m.id = a.amending_doc_id
+               WHERE d.legal_status = 'ملغى' AND a.action = 'repeal'
+               ORDER BY d.year, d.identity_key""").fetchall()
+        with open(args.repealed_report, "w", encoding="utf-8",
+                  newline="\n") as fh:
+            fh.write("# صكوك معلَّمة «ملغى» — راجع الدليل قبل الاعتماد\n\n")
+            for r in rows:
+                fh.write(f"## {r['identity_key']} — {r['title']} ({r['year']})\n")
+                fh.write(f"- ألغاه: {r['by_title']} ({r['by_year']})\n")
+                fh.write(f"- السياق: …{' '.join((r['context'] or '').split())}…\n\n")
+        log.info(f"تقرير الملغى: {len(rows)} دليلاً → {args.repealed_report}")
     if args.law:
         chain = law_chain(conn, args.law)
         if not chain:
@@ -786,6 +805,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="إعادة بناء جدول الإحالات من كل الوثائق أولاً")
     sp.add_argument("--list", action="store_true",
                     help="عرض كل الإحالات المستخرجة (تعديل/إلغاء) ومستهدفاتها")
+    sp.add_argument("--repealed-report", metavar="FILE",
+                    help="كتابة كل صك «ملغى» مع دليله إلى ملف للمراجعة")
     sp.add_argument("--law", metavar="IDENTITY",
                     help="طباعة سلسلة تعديلات صك (مثل القانون:17:2010)")
     sp.set_defaults(fn=cmd_law_status)

@@ -32,20 +32,45 @@ from law_identity import extract_law_identity, extract_law_references
 # «يلغي وينسخ ويعوض» تُحتسب إلغاءً لأن الأثر الغالب للمستهدف هو الزوال.
 # ملاحظة صرفية (ف١): الفعل يرد بالألف المقصورة (يلغى) كما بالياء (يلغي)
 # — النمط يشمل الصورتين وإلا انزلق الإلغاء إلى استشهاد محايد.
+_TASHKEEL = re.compile(r"[\u064B-\u0652\u0670\u0640]")  # حركات + شدّة + تطويل
+
+
+def _strip(s: str) -> str:
+    return _TASHKEEL.sub("", s or "")
+
+
 AMEND_RE = re.compile(
-    r"يُعد[َّ]?ل|يعّدل|يعدل|تعديل|تعدل|استبدال|يستبدل|استُبدل|"
-    r"تتميم|إضاف[ةى] مواد|إضافة المادة")
+    r"يعدل|تعدل|تعديل|معدل|استبدال|يستبدل|تستبدل|استبدل|يستعاض|تستعاض|"
+    r"تتميم|اضاف[ةى]|إضاف[ةى]|يضاف|تضاف|يحذف|تحذف")
 REPEAL_RE = re.compile(
-    r"يُ?لغ[يى]|إلغ[اءٍ]+|لإلغ[اءٍ]+|أُ?لغ[يى]|الغاء|ينسخ")
+    r"يلغ[يى]|تلغ[يى]|الغ[يى]|ألغ[يى]|إلغاء|الغاء|لإلغاء|ينسخ|تنسخ|"
+    r"يوقف العمل|توقف العمل|ينهى العمل")
+# إلغاء **جزئي**: الفعل يقع على مادة/فقرة/بند/فصل لا على الصك كله —
+# «تلغى المادة 5 من القانون 28/2001» تعديلٌ للقانون 28 لا إلغاؤه.
+# قِيس 2026-09-19: النمط القديم كان يعلّم القانون كله «ملغى» فيمنع
+# الاستشهاد بقانون نافذ — أخطر خطأ ممكن على المحامي.
+PARTIAL_OBJECT_RE = re.compile(
+    r"(?:يلغ[يى]|تلغ[يى]|الغ[يى]|ألغ[يى]|إلغاء|الغاء|ينسخ|تنسخ)\s*"
+    r"(?:نص\s+|أحكام\s+|احكام\s+)?"
+    r"(?:ال)?(?:مادة|مواد|فقرة|فقرات|بند|بنود|فصل|فصول|باب|جدول|عبارة)")
 
 
 def classify_context(context: str) -> str:
-    """تصنيف نية الإحالة من سياقها النصي الخام."""
-    if not context:
+    """تصنيف نية الإحالة من سياقها النصي الخام.
+
+    repeal = زوال الصك كله («يلغى القانون رقم…»، «يلغى العمل بأحكام…»).
+    amend  = تعديل، أو إلغاء جزئي (مواد/فقرات) — الصك يبقى نافذاً معدَّلاً.
+    cite   = استشهاد محايد.
+    التشكيل يُزال قبل المطابقة («تُلغى»، «يُعدَّل»).
+    """
+    c = _strip(context)
+    if not c:
         return "cite"
-    if REPEAL_RE.search(context):
+    if PARTIAL_OBJECT_RE.search(c):
+        return "amend"
+    if REPEAL_RE.search(c):
         return "repeal"
-    if AMEND_RE.search(context):
+    if AMEND_RE.search(c):
         return "amend"
     return "cite"
 
@@ -117,13 +142,24 @@ def compute_legal_statuses(conn) -> dict:
     الأولوية: ملغى > معدَّل > ساري. الوثيقة بلا هوية لا تُمس (بلا حالة).
     """
     counts = {"ملغى": 0, "معدَّل": 0, "ساري": 0}
+    has_nature = any(r[1] == "nature" for r in
+                     conn.execute("PRAGMA table_info(documents)").fetchall())
+    nature_ok = ("AND COALESCE(d.nature,'instrument')='instrument' "
+                 if has_nature else "")
     rows = conn.execute(
-        "SELECT id, identity_key FROM documents "
+        "SELECT id, identity_key, year FROM documents "
         "WHERE identity_key IS NOT NULL").fetchall()
     for row in rows:
+        # حارسان (ف٥ 2026-09-19) — من دونهما يُعلَّم قانون نافذ «ملغى»:
+        # 1) المعدِّل صكٌّ (لا أعمال تحضيرية ولا مقال يذكر «يلغى»).
+        # 2) الزمن: صكٌّ أقدم لا يعدّل أحدث — سنة المعدِّل ≥ سنة المستهدَف
+        #    (سنة مجهولة تُقبل: لا نرفض بالجهل بل نُبقي الدليل).
         actions = {r["action"] for r in conn.execute(
-            "SELECT action FROM law_amendments WHERE target_identity=?",
-            (row["identity_key"],)).fetchall()}
+            f"""SELECT a.action FROM law_amendments a
+                JOIN documents d ON d.id = a.amending_doc_id
+                WHERE a.target_identity=? {nature_ok}
+                AND (d.year IS NULL OR ? IS NULL OR d.year >= ?)""",
+            (row["identity_key"], row["year"], row["year"])).fetchall()}
         if "repeal" in actions:
             status = "ملغى"
         elif "amend" in actions:
