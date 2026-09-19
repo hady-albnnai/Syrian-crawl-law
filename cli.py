@@ -484,6 +484,20 @@ def cmd_law_status(args):
     if args.reidentify:
         stats = reidentify_documents(conn)
         log.info(f"إعادة تحديد الهوية: {stats}")
+    if getattr(args, "unidentified", 0):
+        # ف٣: عيّنة «بلا هوية» لتحسين المستخرج بالدليل (عناوين حقيقية)
+        rows = conn.execute(
+            """SELECT id, title, substr(clean_content, 1, 160) AS head
+               FROM documents WHERE identity_key IS NULL
+               AND status='active' ORDER BY id LIMIT ?""",
+            (args.unidentified,)).fetchall()
+        total = conn.execute(
+            "SELECT COUNT(*) FROM documents WHERE identity_key IS NULL "
+            "AND status='active'").fetchone()[0]
+        log.info(f"وثائق نشطة بلا هوية: {total} (عرض {len(rows)})")
+        for r in rows:
+            head = " ".join((r["head"] or "").split())
+            log.info(f"  #{r['id']} | {r['title']}\n      ↳ {head}")
     links = rebuild_links(conn) if args.rebuild else None
     if args.list:
         rows = conn.execute(
@@ -637,6 +651,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("law-status",
                         help="ف١: حساب الحالة القانونية (ساري/معدَّل/ملغى)")
+    sp.add_argument("--unidentified", type=int, default=0, metavar="N",
+                    help="عرض N وثيقة نشطة بلا هوية (عنوان + مطلع النص) "
+                         "لتحسين المستخرج بالدليل")
     sp.add_argument("--reidentify", action="store_true",
                     help="إعادة استخراج هوية الوثائق المخزَّنة بالكود الحالي أولاً")
     sp.add_argument("--rebuild", action="store_true",
