@@ -23,6 +23,7 @@ import law_identity
 import law_status
 import source_quality
 import wipo_source
+import bunud_source
 from config import (BASE_URL, CIRCUIT_BREAKER_CONSECUTIVE_FAILURES,
                     MAX_CLEAN_CONTENT_CHARS, SAVE_RAW_HTML)
 from database import get_connection
@@ -411,6 +412,17 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
                                                     result["html"])
             if not result.get("ok"):
                 err = result.get("error", "wipo_transform_failed")
+                taskqueue.mark(conn, task["id"], "failed", err)
+                stats["failures"] += 1
+                log.info(f"   ❌ {err}")
+                continue
+
+        # B-2: صفحة تشريع في «بنود» — تُحوَّل إلى HTML مصنّع بنفس عقد ويبو
+        # (مادة لكل فقرة + سطر هوية) وتمشي بنفس بوابات الأنبوب.
+        if bunud_source.is_bunud_law(task["url"]):
+            result = bunud_source.as_pipeline_result(task["url"], result["html"])
+            if not result.get("ok"):
+                err = result.get("error", "bunud_transform_failed")
                 taskqueue.mark(conn, task["id"], "failed", err)
                 stats["failures"] += 1
                 log.info(f"   ❌ {err}")

@@ -123,3 +123,32 @@ def seed_moj(conn, http_get=None, post_types: dict = None,
     log.info(f"بذر moj: عُثر على {stats['found']}، أُضيف {added}، "
              f"موجود سابقاً {skipped}")
     return stats
+
+
+def seed_bunud(conn, http_get=None, dry_run: bool = False) -> dict:
+    """B-2: بذر تشريعات «بنود» من خريطة الموقع (~1486 رابطاً).
+
+    الرابط لا يحمل الهوية (slug إنجليزي) فلا تصفية قبل الجلب؛ التصفية
+    بعده في الأنبوب: تصادم الهوية → dedup يُبقي الأكمل ويؤرشف الآخر.
+    """
+    import crawl_queue as taskqueue
+    import bunud_source
+
+    http_get = http_get or (lambda u: _real_get(u)[1])
+    try:
+        index_xml = http_get(bunud_source.SITEMAP_INDEX)
+    except Exception as exc:
+        log.warning(f"خريطة بنود غير متاحة: {exc}")
+        return {"found": 0, "added": 0, "skipped": 0}
+    urls = bunud_source.sitemap_law_urls(index_xml, http_get)
+    added = skipped = 0
+    for url in urls:
+        if dry_run:
+            continue
+        if taskqueue.enqueue(conn, url, bunud_source.SECTION, "topic"):
+            added += 1
+        else:
+            skipped += 1
+    stats = {"found": len(urls), "added": added, "skipped": skipped}
+    log.info(f"بذر بنود: خريطة {len(urls)} — أُضيف {added}، موجود سابقاً {skipped}")
+    return stats

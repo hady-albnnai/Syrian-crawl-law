@@ -243,10 +243,41 @@ def hierarchy_at(nodes, pos):
 
 # ═══════════════════ 4/6/7) الاستخراج الكامل ═══════════════════
 
-def extract_articles_v4(text: str):
+# علامة يضعها مصدر مهيكل (بنود) في أول HTML المصنّع: «المواد عندي على أول
+# السطر دائماً» — فلا يُقطع عند ذكر داخلي. لا تُستنتج من النص العام: جُرّب
+# ذلك كاستدلال عام فكسر قانون العمل 17/2010 من tss (88 → 72 مادة).
+LINE_ANCHORED_MARK = 'data-articles="line-anchored"' 
+
+
+def _prefer_line_anchored(text: str, matches: list) -> list:
+    """مصدر يضع كل «المادة N» في أول سطر: الإشارات داخل المتن («وفق المادة 5
+    من القانون…») ليست حدود مواد.
+
+    قِيس B-2 (2026-09-19): خدمة العلم 115/1953 = 93 مادة حقيقية، والمستخرج
+    أخرج 122 لأنه قطع عند كل ذكر داخلي. حراسة: ≥5 مطابقات على أول السطر،
+    ≥70% من الكل، وتسلسل صاعد في الغالب — وإلا السلوك القديم."""
+    if len(matches) < 5:
+        return matches
+    anchored = [m for m in matches if m.start() == 0 or text[m.start() - 1] == "\n"]
+    if len(anchored) < 5 or len(anchored) / len(matches) < 0.7:
+        return matches
+    nums = []
+    for m in anchored:
+        raw = m.group(1)
+        n = int(to_western_digits(raw)) if raw else verbal_to_int(m.group(2))
+        nums.append(n)
+    ascending = sum(1 for a, b in zip(nums, nums[1:]) if b >= a)
+    if ascending / max(1, len(nums) - 1) < 0.8:
+        return matches
+    return anchored
+
+
+def extract_articles_v4(text: str, line_anchored: bool = False):
     """يعيد (preamble, articles) — المكررة/المعدلة محفوظة، الفقرات مقسمة."""
     nodes = scan_hierarchy(text)
     matches = list(ARTICLE_RE.finditer(text))
+    if line_anchored:
+        matches = _prefer_line_anchored(text, matches)
     articles, seen = [], set()
     preamble = None
 
@@ -373,7 +404,7 @@ def extract_main_content(html: str, url: str = "") -> dict:
     }
 
     raw_matches = len(ARTICLE_RE.findall(clean))
-    preamble, articles = extract_articles_v4(clean)
+    preamble, articles = extract_articles_v4(clean, LINE_ANCHORED_MARK in html)
     skipped = max(0, raw_matches - len([a for a in articles if not a["is_preamble"]]))
     quality, reasons = quality_report(info, articles, preamble, skipped)
 

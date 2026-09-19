@@ -549,11 +549,12 @@ def cmd_hf_import(args):
 def cmd_seed_official(args):
     """ف١/ف١-ب: بذر المصادر الرسمية — moj من sitemap + قوانين ويبو."""
     from database import create_tables, get_connection
-    from official_seed import seed_moj, seed_wipo
+    from official_seed import seed_moj, seed_wipo, seed_bunud
     create_tables()
     conn = get_connection()
     stats = {"moj": seed_moj(conn, dry_run=args.dry),
-             "wipo": seed_wipo(conn, dry_run=args.dry)}
+             "wipo": seed_wipo(conn, dry_run=args.dry),
+             "bunud": seed_bunud(conn, dry_run=args.dry)}
     conn.close()
     log.info(f"خلاصة البذر: {stats}")
     return 0
@@ -853,6 +854,17 @@ def cmd_missing(args) -> int:
     return 0
 
 
+def cmd_seed_bunud(args) -> int:
+    from database import create_tables, get_connection
+    from official_seed import seed_bunud
+    create_tables()
+    conn = get_connection()
+    st = seed_bunud(conn, dry_run=args.dry)
+    conn.close()
+    print(f"بنود: {st}")
+    return 0
+
+
 def _key_of(conn, ref: str) -> str:
     """يقبل معرف الصف أو بادئة مصدر — ويرجع source_key كاملاً."""
     cur = conn.cursor()
@@ -1046,6 +1058,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=100)
     sp.add_argument("--out", metavar="FILE")
     sp.set_defaults(fn=cmd_missing)
+
+    sp = sub.add_parser("seed-bunud", help="B-2: بذر تشريعات بنود (bunud.ai) من خريطة الموقع")
+    sp.add_argument("--dry", action="store_true")
+    sp.set_defaults(fn=cmd_seed_bunud)
 
     sp = sub.add_parser("export", help="توليد حزمة محتوى لميزان (CSV+md+JSON)")
     sp.add_argument("--out", default="export/content_package")
