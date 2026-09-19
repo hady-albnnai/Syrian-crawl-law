@@ -218,6 +218,7 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
     conn.close()
 
     replaced, kept = 0, 0
+    kept_titles = []
     if reconcile:
         existing_path = out / "laws_decrees_index.csv"
         existing = _read_index(existing_path)
@@ -233,6 +234,7 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
                 fp = (r.get("local_path") or "").strip()
                 if fp and (out / fp).exists():
                     kept += 1  # غير مغطّى + ملفه موجود — إبقاء لسلامة المكتبة
+                    kept_titles.append(r.get("title") or "")
                     final.append(r)
                 else:
                     replaced += 1  # غير مغطّى لكن ملفه مفقود — لا فائدة منه
@@ -247,5 +249,9 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
 
     log.info(f"حزمة المحتوى: {len(rows)} صف في {out} "
              f"(تخطّي {skipped} | استبدال يدوي {replaced} | إبقاء يدوي {kept})")
+    if kept_titles:
+        log.info("قوانين يدوية أُبقيت (غير مغطّاة في الزاحف — تأكيد المالك): "
+                 + " | ".join(t for t in kept_titles if t))
     return {"docs": len(rows), "skipped": skipped, "replaced": replaced,
-            "kept": kept, "csv": str(csv_path), "out_dir": str(out)}
+            "kept": kept, "kept_titles": kept_titles,
+            "csv": str(csv_path), "out_dir": str(out)}

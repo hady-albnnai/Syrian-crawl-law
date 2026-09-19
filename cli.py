@@ -150,9 +150,12 @@ def cmd_export(args):
     if rep["replaced"] or rep["kept"]:
         print(f"  دمج آمن مع فهرس قائم: استبدال يدوي {rep['replaced']} "
               f"| إبقاء يدوي {rep['kept']}")
-        if rep["kept"]:
-            print("  ⚠️ بقيت قوانين يدوية غير مغطّاة في الزاحف — أُبقيت لسلامة "
-                  "المكتبة (راجع التقرير).")
+        kept = [t for t in rep.get("kept_titles", []) if t]
+        if kept:
+            print("  ⚠️ قوانين يدوية غير مغطّاة في الزاحف — أُبقيت لسلامة "
+                  "المكتبة:")
+            for t in kept:
+                print(f"    • {t}")
     return 0
 
 
