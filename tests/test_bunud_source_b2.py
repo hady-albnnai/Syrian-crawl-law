@@ -44,3 +44,15 @@ def test_sitemap_walk():
     sub = "<loc>https://www.bunud.ai/sy/laws/customs-law</loc><loc>https://www.bunud.ai/sy/laws/categories/x</loc>"
     got = b.sitemap_law_urls(idx, lambda u: sub if u.endswith("/laws/sy/1") else "")
     assert got == ["https://www.bunud.ai/sy/laws/customs-law"]
+
+
+def test_article_rows_without_al_and_hierarchy_headings():
+    # crawl_bunud 2026-09-19: «1 · مادة 1» بلا أل + عناوين الباب/الفصل بين المواد → كانت تُرفض
+    h = (Path(__file__).parent / "fixtures" / "bunud_accounting_system.html").read_text(encoding="utf-8")
+    p = b.parse_law_page(h)
+    assert (p["doc_type"], p["number"], p["year"]) == ("المرسوم التشريعي", 488, 2007)
+    real = [a for a in p["articles"] if a[0].startswith("المادة")]
+    assert len(real) == 50 and real[0][0] == "المادة 1"
+    e = extract_main_content(b.as_pipeline_result("u", h)["html"], "u")
+    assert len(e["articles"]) == 50
+    assert any(a.get("hierarchy_path") for a in e["articles"])

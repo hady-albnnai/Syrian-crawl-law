@@ -23,7 +23,10 @@ _LAW_URL_RE = re.compile(r"^https://www\.bunud\.ai/sy/laws/(?!categories/)[a-z0-
 _LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>")
 _TITLE_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.S)
 # صف «N · المادة N» ثم «#» ثم نص المادة حتى الصف التالي
-_ART_ROW_RE = re.compile(r"(\d+)\s*·\s*(المادة\s+[^\n]+)")
+# «N · المادة N» أو «N · مادة 1» (قِيس crawl_bunud 2026-09-19: النظام المحاسبي
+# يكتبها بلا أل — كانت الصفحة تُرفض bunud_not_a_law_page). تُوحَّد إلى «المادة».
+_ART_ROW_RE = re.compile(r"(\d+)\s*·\s*(?:ال)?(ماد[ةه]\s+[^\n]+)")
+_HIER_RE = re.compile(r"^(الكتاب|الباب|الفصل|المبحث|المطلب)\s")
 _TYPE_MAP = {"قانون": "القانون", "مرسوم تشريعي": "المرسوم التشريعي",
              "مرسوم": "المرسوم", "قرار": "القرار", "تعميم": "التعميم"}
 
@@ -77,12 +80,17 @@ def parse_law_page(page_html: str) -> dict:
             break
         r = _ART_ROW_RE.fullmatch(ln)
         if r:
-            cur = [r.group(2).strip(), []]
+            cur = ["ال" + r.group(2).strip(), []]
             arts.append(cur)
+            continue
+        if _HIER_RE.match(ln):
+            # عنوان هرمي بين المواد: يُحفظ كمادة-عنوان فيلتقطه scan_hierarchy
+            arts.append([ln, []])
+            cur = None
             continue
         if cur is not None:
             cur[1].append(ln)
-    if not arts:
+    if not any(not _HIER_RE.match(a[0]) for a in arts):
         return {}
     doc_type = _TYPE_MAP.get(meta.get("نوع التشريع", ""), None)
     num = int(meta["الرقم"]) if meta.get("الرقم", "").isdigit() else None
@@ -111,6 +119,9 @@ def to_pipeline_html(parsed: dict) -> str:
     if head_line:
         paras.append(f"<p>{_html.escape(head_line)}</p>")
     for label, body in parsed["articles"]:
+        if _HIER_RE.match(label):
+            paras.append(f"<h3>{_html.escape(label)}</h3>")
+            continue
         paras.append(f"<p>{_html.escape(label)}</p>")
         for ln in body.split("\n"):
             paras.append(f"<p>{_html.escape(ln)}</p>")
