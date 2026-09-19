@@ -97,3 +97,14 @@ def test_repealed5_local_segment_forms():
     # القانون المدني موصوف لا ملغى
     t = "يلغى القانون رقم 3 لعام 1986 المتضمن تعديل المادة 790 من القانون المدني الصادر بموجب المرسوم التشريعي رقم 84 تاريخ 18/5/1949"
     assert classify_reference(extract_law_references(t)[-1]) != "repeal"
+
+
+def test_deemed_amended_after_repeal_is_amend():
+    from law_status import classify_reference
+    from law_identity import extract_law_references
+    t = ("يلغى القانون رقم 429 لعام 1948 وتعديلاته ويعد المرسوم التشريعي رقم 44 لعام 2005، "
+         "والقانون رقم 35 لعام 2007 معدلين حكما بما يتوافق مع أحكام هذا القانون")
+    got = {r["identity_key"]: classify_reference(r) for r in extract_law_references(t)}
+    assert got["القانون:429:1948"] == "repeal"
+    assert got["المرسوم التشريعي:44:2005"] == "amend"
+    assert got["القانون:35:2007"] == "amend"
