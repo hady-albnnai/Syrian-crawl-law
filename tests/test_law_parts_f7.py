@@ -254,3 +254,20 @@ def test_reidentify_clears_key_contradicting_explicit_title_number(db):
     r = db.execute("SELECT number, year, identity_key FROM documents WHERE id=281").fetchone()
     assert st.get("corrected_key") == 1
     assert (r["number"], r["year"], r["identity_key"]) == (30, None, None)
+
+
+# --- جولة parts_explain3.txt -----------------------------------------------------
+def test_sparse_wide_range_is_not_containment_evidence():
+    # #281: مادتان فقط (3 و100) بلا سنة، عنوان المصرف الزراعي — لا ينطوي تحت 30/2012 (1–146)
+    T = "المرسوم التشريعى رقم/30 المتعلق بامصرف الزراعي التعاوني"
+    docs = [
+        _doc(204, 30, " ".join(f"المادة {i} ن" for i in range(1, 147)), year=2012,
+             title="المرسوم التشريعي رقم 30 للعام 2012", key="المرسوم التشريعي:30:2012"),
+        _doc(281, 30, "المادة 3 نص المادة 100 نص", title=T),
+        _doc(282, 30, "المادة 6 نص يشير إلى المرسوم التشريعي 30 للعام 2012 القاضي بالتنظيم", title=T),
+        _doc(280, 30, "المادة 1 نص", title=T),
+    ]
+    gs = group_parts(docs)
+    assert len(gs) == 1
+    assert set([gs[0]["head_id"]] + gs[0]["part_ids"]) == {280, 281, 282}
+    assert gs[0]["year"] is None

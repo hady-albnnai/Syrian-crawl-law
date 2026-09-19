@@ -172,7 +172,9 @@ def group_parts(docs: list[dict]) -> list[dict]:
         rng = article_range(d.get("text") or "")
         if rng is None:
             continue
-        buckets.setdefault(int(d["number"]), []).append({**d, "range": rng})
+        n_art = sum(1 for _ in ARTICLE_RE.finditer(d.get("text") or ""))
+        buckets.setdefault(int(d["number"]), []).append(
+            {**d, "range": rng, "n_art": n_art})
 
     groups = []
     for number, members in buckets.items():
@@ -185,7 +187,11 @@ def group_parts(docs: list[dict]) -> list[dict]:
         # 2) ضمّ بلا-سنة إلى عنقود سنة بدليل كلمة جوهرية
         still: list[dict] = []
         for u in undated:
-            u_tok = _tokens((u.get("title") or "") + " " + (u.get("text") or "")[:300])
+            u_title_tok = _tokens(u.get("title") or "")
+            # دليل الكلمة من العنوان إن كان موضوعياً؛ ومن مطلع النص فقط حين
+            # يكون العنوان عاماً (قِيس #282 «المصرف الزراعي» انضم إلى 30/2012
+            # بكلمة عابرة في متنه رغم أن عنوانه يقول غير ذلك)
+            u_tok = u_title_tok or _tokens((u.get("text") or "")[:300])
             joined = None
             for y, cl in by_year.items():
                 if not _types_compatible({u.get("doc_type")} | {c.get("doc_type") for c in cl}):
@@ -195,8 +201,13 @@ def group_parts(docs: list[dict]) -> list[dict]:
                     break
                 # دليل ثانٍ: نطاق مواد الشذرة محتوى كلياً في نطاق نصٍّ كامل
                 # مؤرَّخ (قِيس: الجمارك #177 (77–188) داخل #96 (1–298))
-                # يشترط: الشذرة ≥ 5 مواد (لا مادة مفردة) والكامل ≥ 20 مادة
-                if (u["range"][1] - u["range"][0]) >= 4 and any(
+                # يشترط: الشذرة ≥ 5 مواد فعلية (لا نطاقاً واسعاً بمادتين:
+                # قِيس #281 «المادة 3 … المادة 100» بمادتين فقط انطوى خطأً
+                # تحت 30/2012)، ولا عنوان موضوعي مخالف، والكامل ≥ 20 مادة
+                c_tok = set().union(*(_tokens(c.get("title") or "") for c in cl))
+                if u_title_tok and c_tok and not (u_title_tok & c_tok):
+                    continue
+                if u["n_art"] >= 5 and (u["range"][1] - u["range"][0]) >= 4 and any(
                         _contains(c["range"], u["range"]) and
                         (c["range"][1] - c["range"][0]) >= 20 for c in cl):
                     joined = y
