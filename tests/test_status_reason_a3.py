@@ -64,3 +64,16 @@ def test_repeal_reason_listed_before_amend(db):
     compute_legal_statuses(db)
     r = db.execute("SELECT legal_status_reason FROM documents WHERE id=1").fetchone()[0]
     assert r.startswith("أُلغي بـ القانون:9:2010 (2010)") and "عُدّل بـ القانون:5:2000 (2000)" in r
+
+
+def test_partial_repeal_forms_from_bunud_corpus_are_amend():
+    # repealed4 (2026-09-19): ثلاث صيغ حقيقية كانت تعلّم الصك كله «ملغى»
+    from law_status import classify_reference
+    from law_identity import extract_law_references
+    for t in ("المادة 1 تلغى نصوص المواد / 7 و 14 و 23 / من المرسوم التشريعي رقم / 81 / المؤرخ في 5/5/1947 وتستبدل",
+              "المادة 4 ينهى العمل بأحكام المادتين /1 و 2/ من القانون رقم /4/ تاريخ 7/1/2001 م.",
+              "ويلغى كل نص مخالف في المرسوم التشريعي رقم 35 لعام 2001"):
+        refs = extract_law_references(t)
+        assert refs and classify_reference(refs[0]) == "amend", t
+    refs = extract_law_references("المادة 20 يلغى المرسوم التشريعي رقم 59 لعام 2003")
+    assert classify_reference(refs[0]) == "repeal"
