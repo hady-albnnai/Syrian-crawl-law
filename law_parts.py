@@ -126,3 +126,46 @@ def link_parts(conn) -> dict:
     return {"groups": len(groups), "parts_linked": n,
             "detail": [(g["head_id"], g["number"], g["year"], g["part_ids"])
                        for g in groups]}
+
+
+def explain_parts(conn) -> list[str]:
+    """تشخيص قابل للإرفاق: كل رقم تشترك فيه ≥2 وثيقة، بنطاق مواد كل واحدة
+    وسبب عدم التجميع إن وُجد (قِيس 2026-09-19: `parts --link` أعاد 0 على قاعدة
+    المالك رغم 4 نسخ للمرسوم 30 — لا يُصلَح ما لا يُرى)."""
+    rows = conn.execute(
+        """SELECT id, title, number, year, identity_key, clean_content
+           FROM documents WHERE status='active'
+           AND COALESCE(nature,'instrument')='instrument' AND number IS NOT NULL
+           ORDER BY number, id""").fetchall()
+    by_num: dict[int, list] = {}
+    for r in rows:
+        by_num.setdefault(int(r["number"]), []).append(r)
+    out = []
+    for num, rs in by_num.items():
+        if len(rs) < 2:
+            continue
+        years = {r["year"] for r in rs if r["year"]}
+        types = {(r["identity_key"] or "").split(":")[0] for r in rs if r["identity_key"]}
+        out.append(f"رقم {num}: {len(rs)} وثيقة | سنوات={sorted(years) or '؟'} "
+                   f"| أنواع={sorted(types) or '؟'}")
+        for r in rs:
+            rng = article_range(r["clean_content"] or "")
+            n_art = len(list(ARTICLE_RE.finditer(r["clean_content"] or "")))
+            out.append(f"   #{r['id']} نطاق={rng} مواد={n_art} سنة={r['year']} "
+                       f"| {(r['title'] or '')[:50]}")
+        if len(years) > 1:
+            out.append("   ⇒ مرفوض: سنتان مختلفتان (صكّان)")
+        elif len(types) > 1:
+            out.append("   ⇒ مرفوض: نوعان مختلفان")
+        else:
+            rngs = [article_range(r["clean_content"] or "") for r in rs]
+            rngs = [x for x in rngs if x]
+            if len(rngs) < 2:
+                out.append("   ⇒ مرفوض: أقل من وثيقتين بمواد مرقّمة")
+            else:
+                rngs.sort()
+                ov = max(_overlap(rngs[i], rngs[j]) for i in range(len(rngs))
+                         for j in range(i + 1, len(rngs)))
+                out.append(f"   ⇒ أكبر تداخل بين نطاقين = {ov} مادة "
+                           f"({'مكرّرات لا أجزاء' if ov > _MAX_OVERLAP else 'قابلة للتجميع'})")
+    return out or ["لا رقم مشترك بين وثيقتين"]

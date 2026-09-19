@@ -375,7 +375,7 @@ def extract_law_identity(title: str, text: str) -> dict:
 
 
 _ENACTING_HEAD_RE = re.compile(
-    r"رئيس\s+الجمهورية.{0,80}?(?:يرسم|يصدر|يقرر)\s+ما\s+يلي")
+    r"رئيس\s+الجمهورية.{0,80}?(?:يرسم|يصدر|يقرر)\s+ما\s+يلي", re.S)
 _PREAMBLE_NUM_RE = re.compile(
     rf"({_TYPE_ALT})\s*(?:ذي\s+)?(?:ال)?رقم\s*[\u200f/(\[]?\s*(?P<num>{_NUM})")
 

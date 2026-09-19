@@ -145,3 +145,21 @@ def test_exporter_folds_parts_under_head(db, tmp_path):
     assert rep["folded_parts"] == 1
     md = next((tmp_path / "pkg" / "markdown").glob("*.md")).read_text(encoding="utf-8")
     assert md.index("نص 1") < md.index("نص 2") < md.index("نص 3") < md.index("نص 4")
+
+
+def test_clash_resolved_when_preamble_has_newlines():
+    got = merge_title_preamble_identity(
+        "المرسوم التشريعي رقم 6: قانون مكافحة الإتجار بالبشر- 2010",
+        "المرسوم التشريعي رقم (3)\nرئيس الجمهورية\nبناء على أحكام الدستور\nيرسم ما يلي")
+    assert got and got["identity_key"] == "المرسوم التشريعي:3:2010"
+
+
+def test_explain_parts_reports_overlap(db):
+    from law_parts import explain_parts
+    db.execute("INSERT INTO documents(id,title,clean_content,status,nature,number)"
+               " VALUES (1,'أ','المادة 1 المادة 40','active','instrument',30)")
+    db.execute("INSERT INTO documents(id,title,clean_content,status,nature,number)"
+               " VALUES (2,'ب','المادة 2 المادة 40','active','instrument',30)")
+    db.commit()
+    txt = "\n".join(explain_parts(db))
+    assert "رقم 30: 2 وثيقة" in txt and "مكرّرات لا أجزاء" in txt

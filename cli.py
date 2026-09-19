@@ -565,6 +565,11 @@ def cmd_parts(args):
     from law_parts import link_parts
     create_tables()
     conn = get_connection()
+    if getattr(args, "explain", False):
+        from law_parts import explain_parts
+        for line in explain_parts(conn):
+            log.info(line)
+        return 0
     if args.link:
         rep = link_parts(conn)
         log.info(f"مجموعات الأجزاء: {rep['groups']}، أجزاء مربوطة: "
@@ -621,7 +626,8 @@ def cmd_law_status(args):
         # ليست «بلا هوية» بل بلا حاجة إليها؛ وكل صك يُفرز إلى فئة علاج.
         from law_identity import triage_unidentified
         rows = conn.execute(
-            """SELECT id, title, substr(clean_content, 1, 300) AS head
+            """SELECT id, title, number, year, part_of,
+                      substr(clean_content, 1, 300) AS head
                FROM documents WHERE identity_key IS NULL
                AND status='active' AND COALESCE(nature,'instrument')='instrument'
                ORDER BY id LIMIT ?""",
@@ -640,7 +646,8 @@ def cmd_law_status(args):
             lines.append(f"## {cat} ({len(items)})")
             for r, tri in items:
                 head = " ".join((r["head"] or "").split())[:160]
-                lines.append(f"#{r['id']} | {r['title']}\n    hint={tri['hint']}"
+                lines.append(f"#{r['id']} | {r['title']}\n    db=(number={r['number']},"
+                             f" year={r['year']}, part_of={r['part_of']}) hint={tri['hint']}"
                              f"\n    ↳ {head}")
         summary = ", ".join(f"{c}={len(v)}" for c, v in sorted(by_cat.items()))
         log.info(f"الفرز: {summary}")
@@ -880,6 +887,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="ف٧: ربط أجزاء الصك الواحد المشتّتة (part_of)")
     sp.add_argument("--link", action="store_true",
                     help="حساب المجموعات وكتابة documents.part_of")
+    sp.add_argument("--explain", action="store_true",
+                    help="تشخيص: لكل رقم مكرر، نطاق مواد كل وثيقة وسبب القبول/الرفض")
     sp.set_defaults(fn=cmd_parts)
 
     sp = sub.add_parser("law-status",
