@@ -110,3 +110,15 @@ def test_regulations_link_to_parent(db):
     assert r[137] == ("القرار:188:1926", "القرار:189:1926")
     assert r[111] == ("المرسوم التشريعي:55:2004", None)
     assert r[1] == (None, None)
+
+
+def test_dictionary_wins_over_body_reference_contradicting_title(db):
+    # #162: العنوان «رقم 13»، المتن يحيل إلى «قانون العفو العام 17» (رأس إصدار غائب)
+    from law_identity import reidentify_documents
+    db.execute("INSERT INTO documents(id,title,clean_content,status,nature) VALUES "
+               "(162,'المادة 5 ـ قانون الجمعيات التعاونية السكنية رقم 13',"
+               "'المادة 5 قانون الجمعيات التعاونية السكنية رقم 13 قانون العفو العام رقم 17 لعام 1985 نص','active','instrument')")
+    db.commit()
+    reidentify_documents(db)
+    r = db.execute("SELECT identity_key FROM documents WHERE id=162").fetchone()
+    assert r["identity_key"] == "القانون:13:1981"

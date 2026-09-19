@@ -492,6 +492,19 @@ def reidentify_documents(conn) -> dict:
             # المفتاح المتناقض ويُثبت رقم العنوان — لا يُخترع مفتاح بديل.
             fb = title_only_identity(r["title"] or "")
             if fb["law_number"] and fb["law_number"] != ident["law_number"]:
+                # بعد محو المفتاح المتناقض يُستشار القاموس (قِيس unidentified10:
+                # #162 «الجمعيات التعاونية السكنية رقم 13» متنه يذكر «العفو
+                # العام 17» فكان يُصحَّح ثم يُترك بلا مفتاح رغم أن 13/1981 معلوم)
+                from named_laws import lookup_named_law
+                nl = lookup_named_law(r["title"] or "", r["clean_content"] or "")
+                if nl:
+                    conn.execute(
+                        "UPDATE documents SET identity_key=?, identity_confidence=?,"
+                        " number=?, year=? WHERE id=?",
+                        (nl["identity_key"], nl["identity_confidence"],
+                         nl["law_number"], nl["law_year"], r["id"]))
+                    stats["named"] = stats.get("named", 0) + 1
+                    continue
                 conn.execute(
                     "UPDATE documents SET identity_key=NULL, number=?, year=?,"
                     " identity_confidence='title_only' WHERE id=?",
