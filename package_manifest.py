@@ -115,8 +115,11 @@ def enrich_doc_json(package_dir: Path, db_path, docs_index: list[dict]) -> dict:
         for a in data.get("articles", []):
             txt = a.get("text") or ""
             a["text_sha256"] = hashlib.sha256(txt.encode("utf-8")).hexdigest()
+        # newline="\n": ويندوز يحوّل \n إلى \r\n في write_text الافتراضي
+        # فتنفصل بصمة/حجم الجانبي بين المنصتين (قِيس بفشل اختبار على
+        # جهاز المالك 2026-09-19).
         js.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                      encoding="utf-8")
+                      encoding="utf-8", newline="\n")
         touched += 1
     conn.close()
     return {"enriched": touched, "amendments_out": sum(len(v) for v in out_by_doc.values())}
@@ -170,7 +173,8 @@ def build_manifest(db_path, package_dir, corpus_stats: dict | None = None) -> di
         "files": files,
     }
     (package_dir / MANIFEST_NAME).write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8",
+        newline="\n")
     log.info(f"مانيفست الحزمة: {n_docs} وثيقة | {n_articles} مادة | "
              f"{len(files)} ملف → {package_dir / MANIFEST_NAME}")
     return manifest
