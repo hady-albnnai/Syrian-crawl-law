@@ -264,6 +264,15 @@ def _migration_009_parent_identity(cursor) -> dict:
     return {"columns_added": a}
 
 
+def _migration_010_issue_date(cursor) -> dict:
+    """A-2: تاريخ الإصدار (issue_date.py) — ميلادي ISO، هجري نصاً، وثقة."""
+    a = 0
+    for col, decl in (("issue_date", "TEXT"), ("issue_date_hijri", "TEXT"),
+                      ("issue_date_confidence", "TEXT")):
+        a += _add_column_if_missing(cursor, "documents", col, decl)
+    return {"columns_added": a}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
     (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
@@ -280,6 +289,8 @@ MIGRATIONS = [
      _migration_008_law_parts),
     (9, "documents.parent_identity (ف٩ regulations: الصك التابع → الأم)",
      _migration_009_parent_identity),
+    (10, "documents.issue_date/_hijri/_confidence (A-2 issue_date)",
+     _migration_010_issue_date),
 ]
 LATEST = MIGRATIONS[-1][0]
 

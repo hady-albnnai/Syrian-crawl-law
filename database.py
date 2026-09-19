@@ -78,7 +78,10 @@ def create_tables():
         nature TEXT DEFAULT 'instrument',
         travaux_article INTEGER,
         part_of INTEGER,
-        parent_identity TEXT
+        parent_identity TEXT,
+        issue_date TEXT,
+        issue_date_hijri TEXT,
+        issue_date_confidence TEXT
     )
     ''')
 

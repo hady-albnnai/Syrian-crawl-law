@@ -23,7 +23,7 @@ def test_refine_all_runs_every_stage_in_order(db):
     db.execute("INSERT INTO documents(id,title,clean_content,status) VALUES (2,?, 'المادة 6 نص','active')", (T,))
     db.commit()
     s = postprocess.refine_all(db)
-    assert set(s) == {"excluded", "nature", "identity", "regulations", "dedup", "parts", "amendment_links", "status"}
+    assert set(s) == {"excluded", "nature", "identity", "issue_date", "regulations", "dedup", "parts", "amendment_links", "status"}
     assert s["excluded"] == 0 and s["parts"]["groups"] == 1 and s["parts"]["parts_linked"] == 1
     assert db.execute("SELECT COUNT(*) FROM documents WHERE part_of IS NOT NULL").fetchone()[0] == 1
 

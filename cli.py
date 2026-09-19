@@ -586,6 +586,35 @@ def cmd_parts(args):
     return 0
 
 
+def cmd_issue_dates(args):
+    """A-2: تقرير تاريخ الإصدار — عيّنة بلا تاريخ/متعارضة للفحص."""
+    from database import create_tables, get_connection
+    create_tables()
+    conn = get_connection()
+    from issue_date import extract_issue_dates
+    st = extract_issue_dates(conn)
+    lines = [f"# تاريخ الإصدار: {st}"]
+    rows = conn.execute(
+        """SELECT id, title, identity_key, year, issue_date, issue_date_hijri,
+                  issue_date_confidence, substr(clean_content, -220) AS tail
+           FROM documents WHERE status='active'
+           AND COALESCE(nature,'instrument')='instrument'
+           AND (issue_date IS NULL OR issue_date_confidence LIKE '%conflict%')
+           ORDER BY id LIMIT ?""", (args.limit,)).fetchall()
+    for r in rows:
+        lines.append(f"#{r['id']} | {(r['title'] or '')[:70]} | {r['identity_key']} "
+                     f"| hijri={r['issue_date_hijri']} conf={r['issue_date_confidence']}")
+        lines.append("    ⌐ " + " ".join((r["tail"] or "").split())[-200:])
+    text = "\n".join(lines)
+    if args.out:
+        from pathlib import Path
+        Path(args.out).write_text(text, encoding="utf-8")
+        log.info(f"{lines[0]} — كُتب إلى {args.out}")
+    else:
+        log.info(text)
+    conn.close()
+
+
 def cmd_refine(args):
     """تنقيح شامل بأمر واحد (يجري آلياً أيضاً في نهاية كل دورة زحف)."""
     from database import create_tables, get_connection
@@ -895,6 +924,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="عرض ما سيُبذر دون إدراجه")
     sp.set_defaults(fn=cmd_seed_community)
 
+    sp = sub.add_parser("issue-dates", help="A-2: استخراج تاريخ الإصدار + عيّنة ما لم يُستخرج")
+    sp.add_argument("--limit", type=int, default=60)
+    sp.add_argument("--out", default=None)
+    sp.set_defaults(fn=cmd_issue_dates)
     sp = sub.add_parser(
         "refine", help="تنقيح شامل: طبيعة → هوية → أجزاء → إحالات وحالة النفاذ")
     sp.set_defaults(fn=cmd_refine)

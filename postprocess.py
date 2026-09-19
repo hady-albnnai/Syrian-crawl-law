@@ -10,6 +10,7 @@ nature، parts --link، law-status --rebuild) يجري هنا بترتيبه ا�
   1. الطبيعة: صك / أعمال تحضيرية / فهرس … (ما ليس صكاً لا يُطلب له شيء)
   2. الهوية: رقم/سنة/مفتاح من العنوان والديباجة، ثم قاموس الصكوك المسمّاة
      (named_laws.py)، وتصحيح المفاتيح المتناقضة، ثم أرشفة النسخ المتصادمة
+  2-ج. تاريخ الإصدار من ختام الصك/رأسه (ميلادي؛ الهجري لا يُحوَّل)
   3. الأجزاء: طيّ الصك المشتّت على عدة وثائق تحت رأس واحد (part_of)
   4. الإحالات + حالة النفاذ: ملغى / معدَّل / ساري
 
@@ -46,6 +47,9 @@ def refine_all(conn) -> dict:
     dd = dedupe_active_by_identity(conn)
     summary["dedup"] = {"collisions": dd.get("collisions", 0),
                         "archived": dd.get("archived", 0)}
+    # 2-ج. تاريخ الإصدار (A-2) — بعد الهوية لأنه يُقارَن بسنتها
+    from issue_date import extract_issue_dates
+    summary["issue_date"] = extract_issue_dates(conn)
     parts = link_parts(conn)
     summary["parts"] = {"groups": parts["groups"],
                         "parts_linked": parts["parts_linked"]}
@@ -57,5 +61,5 @@ def refine_all(conn) -> dict:
 
 def format_summary(s: dict) -> str:
     return (f"تنقيح: مستبعَد={s.get('excluded')} | طبيعة={s.get('nature')} | هوية={s.get('identity')} | "
-            f"لوائح={s.get('regulations')} | تصادمات={s.get('dedup')} | أجزاء={s.get('parts')} | إحالات={s.get('amendment_links')} | "
+            f"تاريخ الإصدار={s.get('issue_date')} | لوائح={s.get('regulations')} | تصادمات={s.get('dedup')} | أجزاء={s.get('parts')} | إحالات={s.get('amendment_links')} | "
             f"حالات={s.get('status')}")
