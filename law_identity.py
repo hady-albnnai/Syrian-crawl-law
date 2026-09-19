@@ -87,10 +87,33 @@ def _gap_crosses_other_instrument(gap: str) -> bool:
     return any(head in g for head in _TYPE_HEADS)
 
 
+# السنة تُلتقط بإحدى صيغ رسمية واقعية (ف٣ — 2026-09-19، لتقليص «بلا
+# هوية» 291/513 بقاعدة المالك؛ وثيقة بلا هوية لا يُستشهد بها ولا تُحسب
+# لها حالة نفاذ):
+#   «لعام 2010» / «للعام 2010» / «لسنة 2011» / «عام 2001» / «سنة 2001»
+#   «تاريخ 22/6/1949» أو «تاريخ 1949/6/22»  ← السنة مقطع رباعي بالتاريخ
+#   «148/1949»                               ← صيغة الإسناد المائلة
+_YEAR_WORD = r"(?:لل?عام|لل?سنة|عام|سنة)"
+_DATE_DMY = r"\d{1,2}\s*/\s*\d{1,2}\s*/\s*(?P<year_dmy>\d{4})"
+_DATE_YMD = r"(?P<year_ymd>\d{4})\s*/\s*\d{1,2}\s*/\s*\d{1,2}"
+_YEAR_PART = (
+    rf"(?:[^\d]{{0,20}}{_YEAR_WORD}\s*/?\s*(?P<year_full>{_NUM})"
+    rf"|[^\d]{{0,20}}(?:ب?تاريخ|المؤرخ\s+في)\s*(?:{_DATE_DMY}|{_DATE_YMD})"
+    rf"|/\s*(?P<year_slash>{_NUM}))"
+)
+
 LAW_ID_RE = re.compile(
     rf"({_TYPE_ALT})"
     rf"(?P<gap>[^\d]{{0,30}})رقم\s*[/\(]?\s*(?P<num>{_NUM})\s*[/\)]?"
-    rf"(?:[^\d]{{0,20}}لعام\s*/?\s*(?P<year_full>{_NUM})|/\s*(?P<year_slash>{_NUM}))",
+    rf"{_YEAR_PART}",
+)
+
+# صيغة بلا كلمة «رقم» لكن بكلمة سنة صريحة — العنوان فقط: «الصادر
+# بالمرسوم التشريعي 148 لعام 1949»، «القانون 10 لعام 2015».
+LAW_ID_NO_RAQM_RE = re.compile(
+    rf"({_TYPE_ALT})"
+    rf"[^\d]{{0,20}}?(?P<num>{_NUM})\s*"
+    rf"[^\d]{{0,6}}{_YEAR_WORD}\s*(?P<year_full>{_NUM})"
 )
 
 # صيغة مائلة بلا كلمة «رقم» — قِيس بعناوين أرشيف مجلس الشعب (ف٢):
@@ -107,7 +130,9 @@ def _year_of(m) -> int:
     """سنة الصك من المطابقة: صيغة «لعام» أو الصيغة المائلة — مع أي من
     تعبيري الهوية (الاحتياطي بلا مجموعة year_full)."""
     d = m.groupdict()
-    return int(to_western_digits(d.get("year_full") or d.get("year_slash")))
+    raw = (d.get("year_full") or d.get("year_dmy") or d.get("year_ymd")
+           or d.get("year_slash"))
+    return int(to_western_digits(raw))
 
 # نطاق سنوات معقول للتشريع السوري الحديث — يستبعد مطابقات زائفة (مثلاً
 # "رقم 5 لعام 12" من عبارة غير قانونية التقطها التعبير عرضاً).
@@ -270,7 +295,11 @@ def extract_law_identity(title: str, text: str) -> dict:
         if idx == 0:
             # احتياط الصيغة المائلة بلا «رقم» — العنوان حصراً (النص يحمل
             # إحالات صليبية فتكون هوية زائفة)
-            m = LAW_ID_SLASH_RE.search(haystack)
+            # نفس حارس الصدر: «قانون العقوبات المعدل بالمرسوم 12 لعام
+            # 2001» صكّه القانون، والمرسوم إحالة — لا يسرق هويته.
+            m = next((mm for mm in LAW_ID_NO_RAQM_RE.finditer(haystack)
+                      if not lead or lead == _normalize_type(mm.group(1))),
+                     None) or LAW_ID_SLASH_RE.search(haystack)
             if m:
                 got = _accept(m)
                 if got:
