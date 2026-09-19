@@ -604,6 +604,12 @@ def cmd_issue_dates(args):
     for r in rows:
         lines.append(f"#{r['id']} | {(r['title'] or '')[:70]} | {r['identity_key']} "
                      f"| hijri={r['issue_date_hijri']} conf={r['issue_date_confidence']}")
+        if r["issue_date_confidence"] and "conflict" in r["issue_date_confidence"]:
+            from issue_date import extract_issue_date
+            ev = extract_issue_date(conn.execute(
+                "SELECT clean_content FROM documents WHERE id=?", (r["id"],)
+            ).fetchone()[0] or "", r["year"])
+            lines.append(f"    ⚠ الدليل: {ev.get('evidence')}")
         lines.append("    ⌐ " + " ".join((r["tail"] or "").split())[-200:])
     text = "\n".join(lines)
     if args.out:

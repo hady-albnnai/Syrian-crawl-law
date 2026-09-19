@@ -95,7 +95,7 @@ def _pick(found, identity_year, conf):
         if iso is None:
             return None
         if identity_year and abs(y - int(identity_year)) > 1:
-            return {"conflict": True}
+            return {"conflict": True, "evidence": iso}
         h = hij[-1] if hij else None
         return {"issue_date": iso, "issue_date_confidence": conf,
                 "issue_date_hijri": f"{h[1] or ''}/{h[2] or ''}/{h[3]}" if h else None}
@@ -109,7 +109,7 @@ def _pick(found, identity_year, conf):
 def extract_issue_date(text: str, identity_year: int | None = None) -> dict:
     """يعيد {issue_date, issue_date_hijri, issue_date_confidence, conflict}."""
     out = {"issue_date": None, "issue_date_hijri": None,
-           "issue_date_confidence": None, "conflict": False}
+           "issue_date_confidence": None, "conflict": False, "evidence": None}
     t = to_western_digits(_nfkc(text or ""))
     if not t:
         return out
@@ -117,9 +117,11 @@ def extract_issue_date(text: str, identity_year: int | None = None) -> dict:
     # الختام: آخر مرساة يليها تاريخ (التوقيع في نهاية الصك)
     best = None
     for a in _ANCHOR_RE.finditer(tail):
-        found = _dates_in(tail[a.end():a.end() + _WINDOW])
+        win = tail[a.end():a.end() + _WINDOW]
+        found = _dates_in(win)
         r = _pick(found, identity_year, "closing")
         if r:
+            r["evidence"] = " ".join((tail[max(0, a.start() - 40):a.end()] + win).split())
             best = r
     if best is None:
         # الرأس فقط قبل أول «المادة» (بعدها «رقم N تاريخ D» إحالة لا هوية —
@@ -136,6 +138,7 @@ def extract_issue_date(text: str, identity_year: int | None = None) -> dict:
                 break
     if best is None:
         return out
+    out["evidence"] = best.get("evidence")
     if best.get("conflict"):
         out["conflict"] = True
         return out
