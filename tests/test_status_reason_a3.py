@@ -77,3 +77,23 @@ def test_partial_repeal_forms_from_bunud_corpus_are_amend():
         assert refs and classify_reference(refs[0]) == "amend", t
     refs = extract_law_references("المادة 20 يلغى المرسوم التشريعي رقم 59 لعام 2003")
     assert classify_reference(refs[0]) == "repeal"
+
+
+def test_repealed5_local_segment_forms():
+    """repealed5 (متن بنود): الفعل لا يمتد عبر وصف صك آخر أو جزء منه."""
+    from law_status import classify_reference
+    from law_identity import extract_law_references
+    cases = [
+        ("ينهى العمل بالمرسوم التشريعي رقم 27 لعام 2010 والفقرة ب من المادة 12 من القانون رقم 30 لعام 1991 وبكافة الأحكام", "amend"),
+        ("ينهى العمل بالأحكام المخالفة له أينما وردت ولا سيما المادة 18 من القانون رقم 8 لعام 2010.", "amend"),
+        ("يلغى القرار بقانون رقم 182 لعام 1960 وتعديلاته والمادة الرابعة من المرسوم التشريعي رقم 13 لعام 1974 وجميع", "amend"),
+        ("ينهى العمل بالمرسوم التشريعي رقم 15 تاريخ 19/1/2011 ويعاد العمل بالمرسوم التشريعي رقم 190 تاريخ 8/9/1970 القاضي", "cite"),
+        ("يلغى مصرف التسليف، وتنتقل كافة مهامه المذكورة في المرسوم التشريعي رقم 208 لعام 1952 والقوانين", "cite"),
+        ("المادة 20 يلغى المرسوم التشريعي رقم 59 لعام 2003 والقانون رقم 3 لعام 1995.", "repeal"),
+    ]
+    for t, exp in cases:
+        refs = extract_law_references(t)
+        assert classify_reference(refs[-1]) == exp, t
+    # القانون المدني موصوف لا ملغى
+    t = "يلغى القانون رقم 3 لعام 1986 المتضمن تعديل المادة 790 من القانون المدني الصادر بموجب المرسوم التشريعي رقم 84 تاريخ 18/5/1949"
+    assert classify_reference(extract_law_references(t)[-1]) != "repeal"
