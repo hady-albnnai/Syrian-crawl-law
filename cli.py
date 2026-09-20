@@ -222,6 +222,67 @@ def cmd_inject(args):
     return 0
 
 
+def cmd_sync(args):
+    """C-2: أمر ميزان الواحد — تنقيح → تصدير → حقن، وسطر JSON أخير للآلة.
+
+    ميزان يشغّله كعملية خلفية (زر «تحديث من الزاحف») ويقرأ السطر الأخير فقط؛
+    كل خطوة تفشل تُسجَّل في `steps` ولا تُسقط الأمر باستثناء غير معالج.
+    """
+    import json as _json
+    from config import DB_PATH, MIZAN_ROOT
+    result = {"ok": False, "steps": {}, "mizan_root": None}
+    # 1) تنقيح
+    if not args.no_refine:
+        try:
+            from database import create_tables, get_connection
+            import postprocess
+            create_tables()
+            conn = get_connection()
+            result["steps"]["refine"] = postprocess.refine_all(conn)
+            conn.close()
+        except Exception as exc:  # noqa: BLE001 — يُبلَّغ لا يُخفى
+            result["steps"]["refine"] = {"error": str(exc)}
+    # 2) تصدير
+    try:
+        from exporter import build_package
+        rep = build_package(db_path=DB_PATH, out_dir=args.out)
+        result["steps"]["export"] = {
+            "docs": rep["docs"], "articles": rep.get("articles_in_package"),
+            "gate_ok": rep.get("gate_ok", True),
+            "gate_failed": rep.get("gate_failed", [])}
+        if not rep.get("gate_ok", True):
+            result["error"] = "بوابة ميزان حمراء عند التصدير"
+            print(_json.dumps(result, ensure_ascii=False))
+            return 1
+    except Exception as exc:  # noqa: BLE001
+        result["steps"]["export"] = {"error": str(exc)}
+        result["error"] = f"التصدير فشل: {exc}"
+        print(_json.dumps(result, ensure_ascii=False))
+        return 1
+    # 3) حقن
+    import mizan_injector as inj
+    root = args.mizan_root or MIZAN_ROOT or inj.default_mizan_root()
+    result["mizan_root"] = root
+    if not root:
+        result["error"] = "جذر ميزان غير معروف"
+        print(_json.dumps(result, ensure_ascii=False))
+        return 2
+    try:
+        rec = inj.apply(args.out, root)
+        result["steps"]["inject"] = {
+            "added": rec["rows"]["added"],
+            "files": rec["files_written"],
+            "index_rows": rec["rows"]["index_rows_after"],
+            "updated_same_path": rec["rows"]["updated_same_path"],
+            "verify_ok": rec["verify_our_rows"]["ok"]}
+        result["ok"] = bool(rec["verify_our_rows"]["ok"])
+    except (inj.GateError, FileNotFoundError, OSError) as exc:
+        result["steps"]["inject"] = {"error": str(exc)}
+        result["error"] = f"الحقن فشل: {exc}"
+    print(_json.dumps(result, ensure_ascii=False))
+    return 0 if result["ok"] else 1
+
+
 def cmd_stats(_args):
     from database import get_connection
     conn = get_connection()
@@ -910,6 +971,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("init", help="إنشاء الجداول والمجلدات")
     sp.set_defaults(fn=cmd_init)
 
+    sp = sub.add_parser("sync",
+                        help="C-2: تنقيح → تصدير → حقن في ميزان؛ آخر سطر JSON")
+    sp.add_argument("--out", default="export/content_package")
+    sp.add_argument("--mizan-root", default=None)
+    sp.add_argument("--no-refine", action="store_true")
+    sp.set_defaults(fn=cmd_sync)
     sp = sub.add_parser("stats", help="أعداد قاعدة البيانات")
     sp.set_defaults(fn=cmd_stats)
 

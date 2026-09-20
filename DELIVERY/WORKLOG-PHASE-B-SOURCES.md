@@ -48,3 +48,9 @@
 - **ميزان** (`bfd5731`): `LegalLibraryRepository.resolveContentRoot()` — إن وُجد `content/legal_library` في `StorageLocationService.activeRoot` (`Documents/LawOffice`) فهو الجذر؛ وإلا مجلد التشغيل. `LawSidecar` يقرأ `X.json` بجوار `X.md` ويُسقط: `lawKind`←`document_type`، `lastAmendment`←«الحالة — السبب»، `notes`←«الهوية | صدر | تابع لـ | N مادة». تقرير الاستيراد يذكر «بغلاف غني: N». اختبار headless `test/law_sidecar_test.dart`. **بوابة ميزان = المالك يبني ويختبر على ويندوز** (لا Dart هنا).
 - **الزاحف**: `cli inject` بلا `--mizan-root` يختار `~/Documents/LawOffice` إن وُجد (`mizan_injector.default_mizan_root`). الحاقن كان ينسخ `.json` الجانبي أصلاً.
 - الخطوة التالية C-2: ميزان يستدعي الزاحف مباشرة (زر «تحديث من الزاحف» يشغّل `refine → export → inject` كعملية خلفية) — بعد أن يثبت C-1 على ويندوز.
+
+## C-2 (2026-09-20): أمر `sync` لميزان
+- `python -m cli sync [--mizan-root R] [--no-refine] [--out DIR]` = تنقيح → تصدير → حقن، ويطبع **آخر سطر JSON**: `{"ok", "steps": {"refine","export","inject"}, "mizan_root", "error"?}`. رموز الخروج: 0 نجاح، 1 فشل خطوة/بوابة حمراء، 2 جذر ميزان مجهول.
+- كل خطوة تفشل تُسجَّل في `steps` ولا تُسقط الأمر (قاعدة «لا استثناء غير معالج في مسار حرج»).
+- ميزان (`crawler_sync_service.dart`) يشغّله بـ Process.run ويقرأ السطر الأخير فقط. اختبار: `tests/test_cli_sync.py`.
+- إضافة sync لا تغيّر أوامر export/inject القائمة.
