@@ -185,11 +185,12 @@ def cmd_inject(args):
     """حقن الحزمة في جذر ميزان: دمج فهرس، نسخ ملفات، إيصالية — بلا لمس DBهم."""
     import mizan_injector as inj
     from config import MIZAN_ROOT
-    args.mizan_root = args.mizan_root or MIZAN_ROOT
+    args.mizan_root = args.mizan_root or MIZAN_ROOT or inj.default_mizan_root()
     if not args.mizan_root:
-        log.error("يلزم --mizan-root <جذر مستودع lawyer-office2> (المجلد الذي "
-                  "يحتوي content/)، أو اضبط MIZAN_ROOT في config.py/المحيط")
+        log.error("يلزم --mizan-root <جذر ميزان> (المجلد الذي يحتوي content/)، "
+                  "أو اضبط MIZAN_ROOT في config.py/المحيط")
         return 2
+    log.info(f"جذر ميزان: {args.mizan_root}")
     try:
         plan = inj.plan(args.pkg, args.mizan_root,
                         replace_index=args.replace_index)

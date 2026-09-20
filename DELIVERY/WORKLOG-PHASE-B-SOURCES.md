@@ -43,3 +43,8 @@
 ## المتبقي
 - B-2 ✔ مكتوب — بانتظار قياس الحصاد. ثم: مقارنة `source_status` بنود مع `legal_status` عندنا كتقرير اختلافات (لا اعتماد).
 - B-3: إزالة التكرار الدلالي (نسختان لنص واحد بصياغة/ترميز مختلف).
+
+## المرحلة C-1 (2026-09-20) — التوحيد: ميزان يقرأ من جذره الفعّال
+- **ميزان** (`bfd5731`): `LegalLibraryRepository.resolveContentRoot()` — إن وُجد `content/legal_library` في `StorageLocationService.activeRoot` (`Documents/LawOffice`) فهو الجذر؛ وإلا مجلد التشغيل. `LawSidecar` يقرأ `X.json` بجوار `X.md` ويُسقط: `lawKind`←`document_type`، `lastAmendment`←«الحالة — السبب»، `notes`←«الهوية | صدر | تابع لـ | N مادة». تقرير الاستيراد يذكر «بغلاف غني: N». اختبار headless `test/law_sidecar_test.dart`. **بوابة ميزان = المالك يبني ويختبر على ويندوز** (لا Dart هنا).
+- **الزاحف**: `cli inject` بلا `--mizan-root` يختار `~/Documents/LawOffice` إن وُجد (`mizan_injector.default_mizan_root`). الحاقن كان ينسخ `.json` الجانبي أصلاً.
+- الخطوة التالية C-2: ميزان يستدعي الزاحف مباشرة (زر «تحديث من الزاحف» يشغّل `refine → export → inject` كعملية خلفية) — بعد أن يثبت C-1 على ويندوز.

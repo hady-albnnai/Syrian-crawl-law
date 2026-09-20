@@ -60,6 +60,20 @@ class GateError(RuntimeError):
 
 
 # ─────────────────────────────────────────────── أدوات المسارات
+def default_mizan_root() -> str:
+    """المرحلة C: جذر التخزين الفعّال لميزان على هذا الجهاز —
+    `Documents/LawOffice` (StorageLocationService.defaultRoot). ميزان صار
+    يقرأ `content/` من هناك أولاً، فالحقن إليه لا يحتاج مستودع المصدر.
+    يُعاد فارغاً إن لم يوجد المجلد (لا نخترع جذراً)."""
+    import os
+    home = Path(os.path.expanduser("~"))
+    for docs in (home / "Documents", home / "OneDrive" / "Documents", home / "المستندات"):
+        cand = docs / "LawOffice"
+        if cand.is_dir():
+            return str(cand)
+    return ""
+
+
 def library_dir(mizan_root) -> Path:
     """مجلد المحتوى في ميزان (حيث الفهرس ومجلد markdown)."""
     return Path(mizan_root).joinpath(*LIB_SUBPATH)
