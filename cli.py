@@ -231,8 +231,13 @@ def cmd_sync(args):
     import json as _json
     from config import DB_PATH, MIZAN_ROOT
     result = {"ok": False, "steps": {}, "mizan_root": None}
+
+    def stage(msg):  # سطر تقدّم على stdout يقرأه ميزان مباشرة
+        print(f"المرحلة: {msg}", flush=True)
+
     # 1) تنقيح
     if not args.no_refine:
+        stage("1/3 تنقيح (طبيعة → هوية → إحالات → حالة النفاذ)…")
         try:
             from database import create_tables, get_connection
             import postprocess
@@ -243,6 +248,7 @@ def cmd_sync(args):
         except Exception as exc:  # noqa: BLE001 — يُبلَّغ لا يُخفى
             result["steps"]["refine"] = {"error": str(exc)}
     # 2) تصدير
+    stage("2/3 تصدير الحزمة (ملفات md/json + الفهرس)…")
     try:
         from exporter import build_package
         rep = build_package(db_path=DB_PATH, out_dir=args.out)
@@ -267,6 +273,7 @@ def cmd_sync(args):
         result["error"] = "جذر ميزان غير معروف"
         print(_json.dumps(result, ensure_ascii=False))
         return 2
+    stage(f"3/3 حقن في ميزان: {root}…")
     try:
         rec = inj.apply(args.out, root)
         result["steps"]["inject"] = {
