@@ -1006,7 +1006,10 @@ def cmd_precedents_bar(args) -> int:
     rep = ds.harvest_damascusbar(conn, get_bytes, get_text, limit=args.limit, dry_run=args.dry,
                                  refresh_threads=args.refresh)
     pages = rep.pop("pages")
+    aborted = rep.pop("aborted", None)
     print("منتدى محامي سوريا (Wayback):", rep)
+    if aborted:
+        print("!!", aborted)
     for st in pages:
         if st["citations"]:
             print("  ", st["thread"], st["citations"], st.get("title", "")[:60])

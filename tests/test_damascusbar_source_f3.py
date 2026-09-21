@@ -76,3 +76,19 @@ def test_dry_run_writes_nothing(db):
     assert rep["fetched"] == 1
     assert db.execute("SELECT count(*) FROM decisions").fetchone()[0] == 0
     assert not ds._done_file().exists()
+
+
+def test_aborts_after_consecutive_connection_failures(db, monkeypatch):
+    calls = []
+
+    def dead(url):
+        if "cdx/search" in url:
+            return CDX.encode()
+        calls.append(url)
+        return None
+    big = "\n".join(f"http://www.damascusbar.org/AlMuntada/showthread.php?t={i} 2020010100000{i%10}" for i in range(20))
+    monkeypatch.setattr(ds, "thread_map", lambda txt: {str(i): ["20200101000000", f"http://x/?t={i}"] for i in range(20)})
+    rep = ds.harvest_damascusbar(db, dead)
+    assert rep["failed"] == ds.MAX_CONSECUTIVE_FAILURES and len(calls) == ds.MAX_CONSECUTIVE_FAILURES
+    assert "غير قابل للوصول" in rep["aborted"]
+    assert not ds._done_file().exists()          # لا شيء يُسجَّل كمُنجَز عند الفشل

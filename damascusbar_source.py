@@ -27,6 +27,7 @@ from precedent_source import ingest_page
 log = get_log("damascusbar")
 
 SOURCE_SITE = "damascusbar.org"
+MAX_CONSECUTIVE_FAILURES = 5
 ORIGINAL = "http://www.damascusbar.org/AlMuntada/showthread.php?t={t}"
 CDX_URL = ("https://web.archive.org/cdx/search/cdx?url=damascusbar.org/AlMuntada/showthread.php*"
            "&filter=statuscode:200&fl=original,timestamp&limit=100000")
@@ -134,6 +135,7 @@ def harvest_damascusbar(conn, http_get_bytes, http_get_text=None, limit: int | N
               "with_precedents": 0, "citations": 0, "new_decisions": 0, "new_principles": 0,
               "unsourced": 0, "pages": []}
     n = 0
+    consecutive = 0
     for t in sorted(threads, key=int):
         if limit is not None and n >= limit:
             break
@@ -146,7 +148,14 @@ def harvest_damascusbar(conn, http_get_bytes, http_get_text=None, limit: int | N
         n += 1
         if not raw:
             report["failed"] += 1
+            consecutive += 1
+            if consecutive >= MAX_CONSECUTIVE_FAILURES:
+                report["aborted"] = ("توقف: %d فشل متتالٍ — أرشيف الإنترنت (web.archive.org) غير قابل للوصول "
+                                     "من هذه الشبكة أو يحدّ المعدل؛ أعد المحاولة لاحقاً أو عبر شبكة أخرى" % consecutive)
+                log.error(report["aborted"])
+                break
             continue
+        consecutive = 0
         page = decode_snapshot(raw)
         report["fetched"] += 1
         text = thread_text(page)
