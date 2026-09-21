@@ -17,6 +17,8 @@
     python -m cli gaps                      # فجوات فروع القانون + استعلامات مقترحة
 """
 import argparse
+import shutil
+from pathlib import Path
 import sys
 
 from logging_setup import get_log
@@ -286,6 +288,22 @@ def cmd_sync(args):
     except (inj.GateError, FileNotFoundError, OSError) as exc:
         result["steps"]["inject"] = {"error": str(exc)}
         result["error"] = f"الحقن فشل: {exc}"
+    # 4) الاجتهادات (ف٣): المعتمَد فقط ⇒ content/legal_library/precedents/precedents.csv
+    #    طبقة إضافية لا تُسقط المزامنة إن فشلت (تُبلَّغ).
+    try:
+        import precedent_export as pe
+        from database import get_connection
+        conn = get_connection()
+        pm = pe.build_package(conn, out_dir=str(Path(args.out).parent / "precedents"))
+        conn.close()
+        dest = Path(root) / "content" / "legal_library" / "precedents"
+        dest.mkdir(parents=True, exist_ok=True)
+        for name in ("precedents.csv", "precedents.json", "manifest.json"):
+            shutil.copyfile(Path(pm["out_dir"]) / name, dest / name)
+        result["steps"]["precedents"] = {"count": pm["count"], "overruled": pm["overruled"],
+                                         "dest": str(dest)}
+    except Exception as exc:  # noqa: BLE001 — يُبلَّغ لا يُخفى
+        result["steps"]["precedents"] = {"error": str(exc)}
     print(_json.dumps(result, ensure_ascii=False))
     return 0 if result["ok"] else 1
 

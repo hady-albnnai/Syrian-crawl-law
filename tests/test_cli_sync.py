@@ -32,3 +32,27 @@ def test_sync_success_shape(monkeypatch, capsys, tmp_path):
     data = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert rc == 0 and data["ok"] and data["steps"]["inject"]["added"] == 1
     assert data["steps"]["export"]["docs"] == 3
+
+
+def test_sync_writes_precedents_layer(monkeypatch, capsys, tmp_path):
+    """ف٣: المزامنة تُسقط حزمة الاجتهادات المعتمدة في content/legal_library/precedents."""
+    import config, database
+    p = tmp_path / "s.db"
+    monkeypatch.setattr(config, "DB_PATH", p)
+    monkeypatch.setattr(database, "DB_PATH", p)
+    database.create_tables()
+
+    class A:
+        no_refine = True
+        out = str(tmp_path / "content_package")
+        mizan_root = str(tmp_path / "mizan")
+    monkeypatch.setattr("exporter.build_package",
+                        lambda **kw: {"docs": 3, "articles_in_package": 9, "gate_ok": True})
+    import mizan_injector as inj
+    monkeypatch.setattr(inj, "apply", lambda pkg, root, **kw: {
+        "rows": {"added": 1, "index_rows_after": 3, "updated_same_path": 0},
+        "files_written": 2, "verify_our_rows": {"ok": True}})
+    rc = cli.cmd_sync(A())
+    data = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == 0 and data["steps"]["precedents"]["count"] == 0
+    assert (tmp_path / "mizan" / "content" / "legal_library" / "precedents" / "precedents.csv").exists()
