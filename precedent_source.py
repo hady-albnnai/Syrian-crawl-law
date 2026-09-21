@@ -22,7 +22,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from logging_setup import get_log
 from precedent_parser import (Citation, parse_text, extract_article_refs,
-                              authority_rank, _principle_ok)
+                              extract_overrulings, authority_rank, _principle_ok)
 
 log = get_log(__name__)
 
@@ -185,8 +185,81 @@ def ingest_page(conn, url: str, page_html: str, source_site: str = SOURCE_SITE,
         st["written"] += 1
         st["new_decisions"] += int(r["new_decision"])
         st["new_principles"] += int(r["new_principle"])
+    st["relations"] = write_overrulings(conn, text, cs)
     conn.commit()
     return st
+
+
+def _find_decision_id(conn, target: Citation) -> int | None:
+    """يطابق هدف العدول بقرار موجود: بالهوية الكاملة، أو رقم القرار + الأساس، أو التاريخ + الرقم."""
+    key = target.identity_key()
+    if key:
+        r = conn.execute("SELECT id FROM decisions WHERE identity_key=?", (key,)).fetchone()
+        if r:
+            return r[0]
+    if target.decision_number and target.basis_number:
+        r = conn.execute("SELECT id FROM decisions WHERE court='نقض' AND decision_number=? AND basis_number=?"
+                         + (" AND decision_date=?" if target.decision_date else ""),
+                         (target.decision_number, target.basis_number)
+                         + ((target.decision_date,) if target.decision_date else ())).fetchone()
+        if r:
+            return r[0]
+    if target.decision_date:
+        q = "SELECT id FROM decisions WHERE decision_date=?"
+        args: tuple = (target.decision_date,)
+        if target.decision_number:
+            q += " AND decision_number=?"
+            args += (target.decision_number,)
+        rows = conn.execute(q, args).fetchall()
+        if len(rows) == 1:
+            return rows[0][0]
+    return None
+
+
+def _ensure_stub_decision(conn, target: Citation) -> int | None:
+    """قرار مُعدول عنه غير موجود بعد: يُنشأ صفاً هيكلياً (pending) إن حمل هوية كافية
+    (رقم قرار + أساس، أو تاريخ + رقم) كي تُحفظ العلاقة ويُستكمل لاحقاً من مصدر آخر."""
+    if not ((target.decision_number and target.basis_number)
+            or (target.decision_date and target.decision_number)):
+        return None
+    key = target.identity_key() or f"نقض|{target.decision_number}|{(target.decision_date or '')[:4] or '?'}|{target.basis_number or ''}"
+    r = conn.execute("SELECT id FROM decisions WHERE identity_key=?", (key,)).fetchone()
+    if r:
+        return r[0]
+    cur = conn.execute(
+        "INSERT INTO decisions(court,division,case_kind,decision_number,decision_year,basis_number,"
+        "decision_date,identity_key,authority_rank,review_status,created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,'pending',?)",
+        ("نقض", target.division, target.case_kind, target.decision_number,
+         int((target.decision_date or "0000")[:4]) or None, target.basis_number,
+         target.decision_date, key, authority_rank(target), _now()))
+    return cur.lastrowid
+
+
+def write_overrulings(conn, text: str, cs: list[Citation]) -> int:
+    """يكتب علاقات «عدول» من نص هيئة عامة إلى `decision_relations`.
+
+    المصدر (from) = قرار الهيئة العامة الوحيد في الصفحة (وإلا لا تُكتب علاقة —
+    لا تخمين)؛ الهدف (to) = القرار المعدول عنه، يُطابَق أو يُنشأ هيكلياً."""
+    targets = extract_overrulings(text)
+    if not targets:
+        return 0
+    srcs = [c for c in cs if c.court in ("هيئة_عامة_نقض", "توحيد_مبادئ") and c.identity_key()]
+    if len(srcs) != 1:
+        return 0
+    from_id = conn.execute("SELECT id FROM decisions WHERE identity_key=?", (srcs[0].identity_key(),)).fetchone()
+    if not from_id:
+        return 0
+    n = 0
+    for tg in targets:
+        to_id = _find_decision_id(conn, tg) or _ensure_stub_decision(conn, tg)
+        if not to_id or to_id == from_id[0]:
+            continue
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO decision_relations(from_decision_id,to_decision_id,relation,evidence_text,created_at)"
+            " VALUES (?,?,'عدول',?,?)", (from_id[0], to_id, tg.citation_raw[:300], _now()))
+        n += cur.rowcount
+    return n
 
 
 def already_ingested(conn, url: str) -> bool:
@@ -240,4 +313,5 @@ def stats(conn) -> dict:
         "multi_source": q("SELECT COUNT(*) FROM (SELECT decision_id FROM citations GROUP BY decision_id HAVING COUNT(DISTINCT source_url)>1)"),
         "by_court": dict(conn.execute("SELECT court, COUNT(*) FROM decisions GROUP BY court").fetchall()),
         "article_links": q("SELECT COUNT(*) FROM principle_articles"),
+        "relations": q("SELECT COUNT(*) FROM decision_relations"),
     }

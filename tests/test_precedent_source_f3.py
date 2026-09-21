@@ -96,3 +96,41 @@ def test_harvest_end_to_end_dry_then_write(db):
     assert rep["new_decisions"] >= 19
     rep2 = ps.harvest_mohamah(db, fake_get)
     assert rep2["skipped_done"] == 1 and rep2["fetched"] == 0
+
+
+# ---------------------------------------------------------------- علاقات العدول
+GA_HTML = ("<article><p>نقض سوري هيئة عامة أساس 328 قرار 167 تاريخ 6/11/1994 – المصدر : مجلة المحامون العددان 11 – 12 لعام 1994</p>"
+           "<p>إن توقيف المدعى عليه بجرم الشيك بدون رصيد لا يحول دون ملاحقته بالجرم ذاته إذا ثبت تعدد الشيكات .</p>"
+           "<p>لذلك تقرر بالاجماع الحكم بما يلي: 1 ـ العدول عن الاجتهاد الوارد في القرار 773 / 512 جناية تاريخ 8 / 7 / 1965 "
+           "والقرار رقم 2197 / 1881 جنحة تاريخ 30 تموز 1977 على الوجه المبين في الأسباب. 2 ـ تعميم هذا القرار</p></article>")
+
+
+def test_overruling_relations_written_with_stub_targets(db):
+    st = ps.ingest_page(db, "https://example.org/ga", GA_HTML)
+    assert st["relations"] == 2
+    rows = db.execute("SELECT f.court, f.decision_number, t.decision_number, t.basis_number, t.case_kind, t.review_status, r.relation"
+                      " FROM decision_relations r JOIN decisions f ON f.id=r.from_decision_id JOIN decisions t ON t.id=r.to_decision_id"
+                      " ORDER BY t.decision_number").fetchall()
+    assert [tuple(r) for r in rows] == [("هيئة_عامة_نقض", "167", "2197", "1881", "جنحة", "pending", "عدول"),
+                                        ("هيئة_عامة_نقض", "167", "773", "512", "جناية", "pending", "عدول")]
+    # إعادة الإدخال لا تكرر العلاقات
+    assert ps.ingest_page(db, "https://example.org/ga2", GA_HTML)["relations"] == 0
+    assert ps.stats(db)["relations"] == 2
+
+
+def test_overruling_target_matched_to_existing_decision(db):
+    old = ("<article><p>مبدأ قديم يقول إن توقيف المدعى عليه بجرم الشيك يحول دون ملاحقته مرة أخرى .</p>"
+           "<p>(نقض سوري – الغرفة الجنائية – قرار 773 – أساس 512 – تاريخ 8/7/1965 – سجلات محكمة النقض)</p></article>")
+    ps.ingest_page(db, "https://example.org/old", old)
+    before = db.execute("SELECT count(*) FROM decisions").fetchone()[0]
+    ps.ingest_page(db, "https://example.org/ga", GA_HTML)
+    # القرار 773/512 لم يُنشأ مرة ثانية؛ أُنشئ الهيكل لـ 2197 فقط + قرار الهيئة
+    assert db.execute("SELECT count(*) FROM decisions").fetchone()[0] == before + 2
+    r = db.execute("SELECT t.identity_key FROM decision_relations r JOIN decisions t ON t.id=r.to_decision_id WHERE t.decision_number='773'").fetchone()
+    assert r[0] == "نقض|773|1965|512"
+
+
+def test_no_relation_when_source_ambiguous(db):
+    two = GA_HTML.replace("</article>", "<p>(هيئة عامة أساس 100 قرار 5 تاريخ 1/1/1990)</p><p>مبدأ آخر طويل بما يكفي ليُحفظ في الجدول كما هو .</p></article>")
+    st = ps.ingest_page(db, "https://example.org/amb", two)
+    assert st["relations"] == 0 and ps.stats(db)["relations"] == 0

@@ -996,6 +996,31 @@ def cmd_precedents_bar(args) -> int:
     return 0
 
 
+def cmd_precedents_export(args) -> int:
+    """ف٣: حزمة الاجتهادات لميزان (approved فقط افتراضياً)."""
+    import precedent_export as pe
+    from database import create_tables, get_connection
+    create_tables()
+    conn = get_connection()
+    m = pe.build_package(conn, out_dir=args.out, include_pending=args.include_pending)
+    print("حزمة الاجتهادات:", m)
+    conn.close()
+    return 0
+
+
+def cmd_precedents_approve(args) -> int:
+    """ف٣: اعتماد جماعي بقرار المالك (ثقة ≥ حد، واختيارياً مصدران مستقلان)."""
+    import precedent_export as pe
+    from database import create_tables, get_connection
+    create_tables()
+    conn = get_connection()
+    r = pe.approve_bulk(conn, min_confidence=args.min_confidence, multi_source_only=args.multi_source,
+                        courts=tuple(args.court) if args.court else None, dry_run=args.dry)
+    print("الاعتماد الجماعي:", r)
+    conn.close()
+    return 0
+
+
 def cmd_dedup_audit(args) -> int:
     import database
     from dedup import audit_dedup, rebalance_suspicious
@@ -1233,6 +1258,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry", action="store_true", help="جلب وتحليل بلا كتابة")
     sp.add_argument("--refresh", action="store_true", help="إعادة بناء قائمة الخيوط من CDX")
     sp.set_defaults(fn=cmd_precedents_bar)
+
+    sp = sub.add_parser("precedents-export", help="ف٣: حزمة الاجتهادات لميزان (export/precedents)")
+    sp.add_argument("--out", default="export/precedents")
+    sp.add_argument("--include-pending", action="store_true", help="إضافة غير المراجَع بوسمه (لشاشة المراجعة)")
+    sp.set_defaults(fn=cmd_precedents_export)
+
+    sp = sub.add_parser("precedents-approve", help="ف٣: اعتماد جماعي للقرارات عالية الثقة")
+    sp.add_argument("--min-confidence", type=float, default=0.85)
+    sp.add_argument("--multi-source", action="store_true", help="فقط ما ورد في مصدرين مستقلين")
+    sp.add_argument("--court", action="append", help="حصر بجهة (نقض، هيئة_عامة_نقض…) — يتكرر")
+    sp.add_argument("--dry", action="store_true", help="عدّ فقط بلا تعديل")
+    sp.set_defaults(fn=cmd_precedents_approve)
 
     sp = sub.add_parser("dedup-audit", help="B-3: مراجعة أزواج التكرار (الفائز/الخاسر) وإعادة الميزان للمشبوه")
     sp.add_argument("--fix", action="store_true", help="إعادة الميزان للأزواج المشبوهة الآن")
