@@ -279,6 +279,91 @@ def _migration_011_status_reason(cursor) -> dict:
     return {"columns_added": a}
 
 
+def _migration_012_precedents_v2(cursor) -> dict:
+    """ف٣ (أ-2): الاجتهادات — خمسة جداول (docs/PRECEDENTS-RESEARCH-2026-09-21.md §9).
+
+    decisions: هوية القرار (محكمة/دائرة/غرفة/أرقام) — سجل واحد لكل قرار حقيقي.
+    principles: المبدأ المستخلص ← قرار (قد يتعدد).
+    citations: كل ظهور منشور (المصدر + السطر حرفياً + الثقة).
+    decision_relations: عدول/تأكيد/إحالة/تعارض.
+    principle_articles: ربط المبدأ بمادة تشريع موجود في documents.
+    جدول precedents القديم يبقى (إضافة فقط) ولا يُستعمل بعد الآن.
+    """
+    cursor.executescript("""
+    CREATE TABLE IF NOT EXISTS decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        court TEXT NOT NULL,
+        division TEXT,
+        chamber_raw TEXT,
+        case_kind TEXT,
+        decision_number TEXT,
+        decision_year INTEGER,
+        basis_number TEXT,
+        basis_year INTEGER,
+        appeal_number TEXT,
+        decision_date TEXT,
+        identity_key TEXT UNIQUE,
+        full_text TEXT,
+        full_text_sha256 TEXT,
+        authority_rank INTEGER,
+        review_status TEXT DEFAULT 'pending',
+        reviewed_by TEXT,
+        reviewed_at TEXT,
+        created_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS principles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        decision_id INTEGER NOT NULL REFERENCES decisions(id),
+        title_keywords TEXT,
+        text TEXT NOT NULL,
+        text_sha256 TEXT UNIQUE,
+        review_status TEXT DEFAULT 'pending',
+        created_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_principles_decision ON principles(decision_id);
+    CREATE TABLE IF NOT EXISTS citations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        decision_id INTEGER NOT NULL REFERENCES decisions(id),
+        principle_id INTEGER REFERENCES principles(id),
+        source_site TEXT,
+        source_url TEXT,
+        snapshot_ts TEXT,
+        publication TEXT,
+        pub_year INTEGER,
+        pub_issue TEXT,
+        pub_page TEXT,
+        rule_number TEXT,
+        citation_raw TEXT,
+        parse_confidence REAL,
+        scraped_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_citations_decision ON citations(decision_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_citations_url_raw ON citations(source_url, citation_raw);
+    CREATE TABLE IF NOT EXISTS decision_relations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_decision_id INTEGER NOT NULL REFERENCES decisions(id),
+        to_decision_id INTEGER NOT NULL REFERENCES decisions(id),
+        relation TEXT NOT NULL,
+        evidence_text TEXT,
+        created_at TEXT,
+        UNIQUE(from_decision_id, to_decision_id, relation)
+    );
+    CREATE TABLE IF NOT EXISTS principle_articles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        principle_id INTEGER NOT NULL REFERENCES principles(id),
+        document_id INTEGER,
+        law_alias TEXT,
+        article_number TEXT NOT NULL,
+        article_numbering_scheme TEXT DEFAULT 'as_cited',
+        match_method TEXT,
+        confidence REAL,
+        UNIQUE(principle_id, law_alias, article_number)
+    );
+    """)
+    return {"tables": ["decisions", "principles", "citations",
+                       "decision_relations", "principle_articles"]}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
     (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
@@ -298,6 +383,8 @@ MIGRATIONS = [
     (10, "documents.issue_date/_hijri/_confidence (A-2 issue_date)",
      _migration_010_issue_date),
     (11, "documents.legal_status_reason (A-3)", _migration_011_status_reason),
+    (12, "precedents v2: decisions/principles/citations/relations/articles (ف٣)",
+     _migration_012_precedents_v2),
 ]
 LATEST = MIGRATIONS[-1][0]
 

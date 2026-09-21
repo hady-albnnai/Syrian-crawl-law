@@ -298,6 +298,10 @@ def create_tables():
     )
     ''')
 
+    # ف٣: جداول الاجتهادات v2 — نفس دالة الهجرة 012 (مصدر واحد للمخطط)
+    from migrations import _migration_012_precedents_v2
+    _migration_012_precedents_v2(cursor)
+
     # قاعدة جديدة تُبنى بالمخطط الحالي مباشرة ⇒ إصدارها = آخر هجرة
     from migrations import LATEST
     conn.execute(f"PRAGMA user_version = {LATEST}")
