@@ -131,13 +131,21 @@ class Citation:
         return f"{self.court}|{self.decision_number}|{year or ''}|{self.basis_number or ''}"
 
     def is_exportable(self) -> bool:
-        return (self.identity_key() is not None
-                and bool(self.principle_text) and len(self.principle_text) >= 40)
+        return self.identity_key() is not None and _principle_ok(self)
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["identity_key"] = self.identity_key()
         return d
+
+
+MIN_PRINCIPLE = 40          # مبدأ حر
+MIN_PRINCIPLE_TITLED = 15   # مبدأ تحت سطر كلمات مفتاحية (المحامون: «الشك يفسر لمصلحة المتهم .»)
+
+
+def _principle_ok(c: "Citation") -> bool:
+    t = (c.principle_text or "").strip()
+    return len(t) >= (MIN_PRINCIPLE_TITLED if c.title_keywords else MIN_PRINCIPLE)
 
 
 def _year(v: str | None) -> int | None:
@@ -235,7 +243,13 @@ def parse_citation(raw: str) -> Citation:
     m = _ISSUE_RE.search(t)
     if m:
         c.pub_issue = re.sub(r"\s*[-–ـ]\s*", "-", m.group("i"))
-    tail = t[t.find("المصدر"):] if "المصدر" in t else t
+    if "المصدر" in t:
+        tail = t[t.find("المصدر"):]
+    elif "الصفحة" in t:                       # سطر «الصفحة : N محامون العدد … لعام Y» (المحامون)
+        tail = t[t.find("الصفحة"):]
+        tail = re.split(r"\n|القاعدة|القضية", tail, maxsplit=1)[0]
+    else:
+        tail = t
     ys = [_year(y) for y in _PUBYEAR_RE.findall(tail)]
     ys = [y for y in ys if y]
     if ys and c.publication:
@@ -279,10 +293,25 @@ _INLINE_RE = re.compile(
     r"\(\s*(?:نقض\s+سوري|جنحة|جناية|احداث|عسكرية|امن\s+اقتصادي|هيئة\s+عامة|القرار\s+رقم)[^()\n]{8,240}\)")
 
 
+_PAGE_LINE_RE = re.compile(r"(?m)^\s*الصفحة\s*:[^\n]*$")
+
+
 def _block_spans(t: str) -> list[tuple[int, int]]:
     has_rule = "القاعدة" in t
-    starts = [m.start() for m in _BLOCK_START_RE.finditer(t)
-              if not (has_rule and m.group(0).strip().startswith("القضية"))]
+    starts = []
+    for m in _BLOCK_START_RE.finditer(t):
+        if has_rule and m.group(0).strip().startswith("القضية"):
+            continue
+        s = m.start()
+        if m.group(0).strip().startswith("القاعدة"):
+            # سطر «الصفحة : N محامون العدد … لعام …» يسبق «القاعدة» — إسناد المنشور، يُضم
+            prev = t[:s].rstrip()
+            pm = None
+            for pm in _PAGE_LINE_RE.finditer(prev[-300:]):
+                pass
+            if pm and prev[len(prev) - 300 + pm.end():].strip() == "":
+                s = max(0, len(prev) - 300) + pm.start()
+        starts.append(s)
     return [(s, starts[i + 1] if i + 1 < len(starts) else len(t)) for i, s in enumerate(starts)]
 
 
@@ -321,13 +350,21 @@ def parse_text(text: str, min_confidence: float = 0.4) -> list[Citation]:
     for bs, be in _block_spans(t):
         b, nb = orig[bs:be].strip(), t[bs:be].strip()
         first_line, _, rest = b.partition("\n")
-        if nb.startswith(("القاعدة", "القضية")):
+        if nb.startswith(("القاعدة", "القضية", "الصفحة")):
             # الشكل 1: الرأس = السطور حتى «المبدأ:»، المبدأ = ما بعده
             i = nb.find("المبدا")
             head = b[:i] if i >= 0 else b
             body, nbody = (b[i:], nb[i:]) if i >= 0 else ("", "")
             c = parse_citation(head.replace("\n", " "))
             c.citation_raw = head.strip()
+            if i < 0:
+                # بعض القواعد بلا لصيقة «المبدأ:» — سطر كلمات مفتاحية بفواصل «–» بعد «تاريخ»
+                km = re.search(r"\n\s*(?P<t>[^\n]{3,80}\s[–-]\s[^\n]{3,120})\s*\n", nb[nb.find("تاريخ"):] if "تاريخ" in nb else "")
+                if km:
+                    off = nb.find("تاريخ") + km.start()
+                    head, body, nbody = b[:off], "المبدأ: " + b[off:].lstrip("\n"), "المبدا: " + nb[off:].lstrip("\n")
+                    c = parse_citation(head.replace("\n", " "))
+                    c.citation_raw = head.strip()
             pm = _PRINCIPLE_LINE_RE.search(nbody)
             if pm:
                 c.title_keywords = body[pm.start("t"):pm.end("t")].strip(" .")

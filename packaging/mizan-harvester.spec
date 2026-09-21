@@ -32,7 +32,7 @@ hiddenimports = collect_submodules("app") + [
     # فPyInstaller لا يراها. غيابها كان يجعل البوابة والحقن يفشلان في النسخة
     # المجمَّدة فقط، والشاشة تبتلع الخطأ وتعرض نصّه بدل أن تسقط.
     "verify_package", "package_manifest", "mizan_injector", "official_seed",
-    "community_seed", "doc_nature", "law_parts", "postprocess", "named_laws", "regulations", "exclusions", "issue_date", "precedent_parser", "article_links", "missing_targets", "bunud_source", "law_status", "chunker", "source_matrix",
+    "community_seed", "doc_nature", "law_parts", "postprocess", "named_laws", "regulations", "exclusions", "issue_date", "precedent_parser", "precedent_source", "article_links", "missing_targets", "bunud_source", "law_status", "chunker", "source_matrix",
     # أوامر CLI تُستورد داخل دوالها — كانت غائبة فـ`hf-import` و`wayback-crawl`
     # يفشلان في النسخة المجمَّدة وحدها (كشفها حارس tests/test_packaging_drift.py)
     "hf_syria_laws", "wayback_source", "wipo_source", "answer", "search",

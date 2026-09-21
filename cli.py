@@ -934,6 +934,33 @@ def cmd_seed_bunud(args) -> int:
     return 0
 
 
+def cmd_precedents(args) -> int:
+    """ف٣: جمع الاجتهادات من mohamah.net إلى الجداول الجديدة (pending)."""
+    from database import create_tables, get_connection
+    from fetcher import fetch
+    import precedent_source as ps
+    create_tables()
+    conn = get_connection()
+    if args.stats:
+        print(ps.stats(conn))
+        conn.close()
+        return 0
+
+    def http_get(url):
+        r = fetch(url)
+        return r["html"] if r.get("ok") else None
+
+    rep = ps.harvest_mohamah(conn, http_get, limit=args.limit, dry_run=args.dry)
+    pages = rep.pop("pages")
+    print("الاجتهادات (mohamah.net):", rep)
+    for st in pages[-10:]:
+        print("  ", st)
+    if not args.dry:
+        print("الحالة الآن:", ps.stats(conn))
+    conn.close()
+    return 0
+
+
 def cmd_dedup_audit(args) -> int:
     import database
     from dedup import audit_dedup, rebalance_suspicious
@@ -1159,6 +1186,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("seed-bunud", help="B-2: بذر تشريعات بنود (bunud.ai) من خريطة الموقع")
     sp.add_argument("--dry", action="store_true")
     sp.set_defaults(fn=cmd_seed_bunud)
+
+    sp = sub.add_parser("precedents", help="ف٣: جمع الاجتهادات (mohamah.net) بحالة بانتظار المراجعة")
+    sp.add_argument("--limit", type=int, default=None, help="عدد الصفحات الجديدة كحد أقصى")
+    sp.add_argument("--dry", action="store_true", help="جلب وتحليل بلا كتابة")
+    sp.add_argument("--stats", action="store_true", help="أعداد الجداول فقط")
+    sp.set_defaults(fn=cmd_precedents)
 
     sp = sub.add_parser("dedup-audit", help="B-3: مراجعة أزواج التكرار (الفائز/الخاسر) وإعادة الميزان للمشبوه")
     sp.add_argument("--fix", action="store_true", help="إعادة الميزان للأزواج المشبوهة الآن")
