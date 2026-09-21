@@ -961,6 +961,41 @@ def cmd_precedents(args) -> int:
     return 0
 
 
+def cmd_precedents_bar(args) -> int:
+    """ف٣: منتدى محامي سوريا (damascusbar) عبر أرشيف Wayback — قابل للاستئناف."""
+    import requests
+
+    import damascusbar_source as ds
+    import fetcher
+    from config import USER_AGENT
+    from database import create_tables, get_connection
+    create_tables()
+    conn = get_connection()
+
+    def get_bytes(url):
+        fetcher.polite_sleep()
+        try:
+            r = requests.get(url, timeout=90, headers={"User-Agent": USER_AGENT})
+        except requests.RequestException as e:
+            print("  فشل:", url[-60:], e.__class__.__name__)
+            return None
+        return r.content if r.status_code == 200 else None
+
+    def get_text(url):
+        b = get_bytes(url)
+        return b.decode("utf-8", "replace") if b else None
+
+    rep = ds.harvest_damascusbar(conn, get_bytes, get_text, limit=args.limit, dry_run=args.dry,
+                                 refresh_threads=args.refresh)
+    pages = rep.pop("pages")
+    print("منتدى محامي سوريا (Wayback):", rep)
+    for st in pages:
+        if st["citations"]:
+            print("  ", st["thread"], st["citations"], st.get("title", "")[:60])
+    conn.close()
+    return 0
+
+
 def cmd_dedup_audit(args) -> int:
     import database
     from dedup import audit_dedup, rebalance_suspicious
@@ -1192,6 +1227,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry", action="store_true", help="جلب وتحليل بلا كتابة")
     sp.add_argument("--stats", action="store_true", help="أعداد الجداول فقط")
     sp.set_defaults(fn=cmd_precedents)
+
+    sp = sub.add_parser("precedents-bar", help="ف٣: منتدى محامي سوريا عبر Wayback (يُستأنف تلقائياً)")
+    sp.add_argument("--limit", type=int, default=None, help="عدد الخيوط الجديدة كحد أقصى")
+    sp.add_argument("--dry", action="store_true", help="جلب وتحليل بلا كتابة")
+    sp.add_argument("--refresh", action="store_true", help="إعادة بناء قائمة الخيوط من CDX")
+    sp.set_defaults(fn=cmd_precedents_bar)
 
     sp = sub.add_parser("dedup-audit", help="B-3: مراجعة أزواج التكرار (الفائز/الخاسر) وإعادة الميزان للمشبوه")
     sp.add_argument("--fix", action="store_true", help="إعادة الميزان للأزواج المشبوهة الآن")

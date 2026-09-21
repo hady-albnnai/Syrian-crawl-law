@@ -293,11 +293,14 @@ _INLINE_RE = re.compile(
     r"\(\s*(?:نقض\s+سوري|جنحة|جناية|احداث|عسكرية|امن\s+اقتصادي|هيئة\s+عامة|القرار\s+رقم)[^()\n]{8,240}\)")
 
 
+_REASONING_RE = re.compile(
+    r"\n\s*(?:أسباب\s+(?:ال)?طعن|اسباب\s+(?:ال)?طعن|في\s+القضاء\s+والقانون|النظر\s+في\s+الطعن|"
+    r"(?:ال)?وقائع|من\s+حيث\s+الشكل|في\s+الشكل)")
 _PAGE_LINE_RE = re.compile(r"(?m)^\s*الصفحة\s*:[^\n]*$")
 
 
 def _block_spans(t: str) -> list[tuple[int, int]]:
-    has_rule = "القاعدة" in t
+    has_rule = re.search(r"(?m)^\s*القاعدة\s*:", t) is not None   # الكلمة وحدها قد ترد داخل مبدأ
     starts = []
     for m in _BLOCK_START_RE.finditer(t):
         if has_rule and m.group(0).strip().startswith("القضية"):
@@ -370,6 +373,8 @@ def parse_text(text: str, min_confidence: float = 0.4) -> list[Citation]:
                 c.title_keywords = body[pm.start("t"):pm.end("t")].strip(" .")
                 after = body[pm.end():].strip()
                 after = re.split(r"\n\s*(?:الصفحة|القاعدة)\s*:", after)[0].strip()
+                # الحكم الكامل (منتديات): المبدأ ينتهي حيث تبدأ أسباب الطعن/الوقائع/التعليل
+                after = _REASONING_RE.split(after, maxsplit=1)[0].strip()
                 c.principle_text = after or None
             if c.title_keywords and not c.principle_text:
                 c.principle_text = c.title_keywords

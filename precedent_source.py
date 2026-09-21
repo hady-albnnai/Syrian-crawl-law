@@ -171,8 +171,9 @@ def upsert_citation(conn, c: Citation, source_url: str, snapshot_ts: str | None 
 
 
 def ingest_page(conn, url: str, page_html: str, source_site: str = SOURCE_SITE,
-                snapshot_ts: str | None = None) -> dict:
-    text = article_text(page_html)
+                snapshot_ts: str | None = None, text_fn=None) -> dict:
+    """`text_fn(html) -> str` يُحقن لمصادر أخرى (المنتديات)؛ الافتراضي مقالة mohamah."""
+    text = (text_fn or article_text)(page_html)
     cs = parse_text(text)
     st = {"url": url, "citations": len(cs), "new_decisions": 0, "new_principles": 0,
           "unsourced": 0, "written": 0}

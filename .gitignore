@@ -38,3 +38,6 @@ Thumbs.db
 mizan_harvester.egg-info/
 *.egg-info/
 .pytest_cache/
+
+# ف٣: تقدّم محرك damascusbar (بيانات تشغيلية)
+data/damascusbar_*.json
