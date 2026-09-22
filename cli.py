@@ -633,6 +633,23 @@ def cmd_hf_import(args):
     return 0
 
 
+def cmd_syrialaw(args):
+    """ف٤: استيراد قوانين syria-law.com عبر REST (كل قانون = تصنيف، كل مادة = منشور)."""
+    from database import create_tables, get_connection
+    from syrialaw_api import import_laws, list_laws
+    create_tables()
+    if args.list:
+        for t in list_laws(args.type):
+            log.info(f"[{t['id']}] {t['count']:>5} مادة  {t['name']}")
+        return 0
+    conn = get_connection()
+    rep = import_laws(conn, post_type=args.type, only_names=args.only, dry_run=args.dry, limit=args.limit)
+    log.info(f"syria-law: قوانين {rep['laws']} | حُفظ {rep['imported']} | بديل {rep['alternate']} | "
+             f"مطابق {rep['skipped']} | مراجعة {rep['needs_review']} | فشل {rep['failed']} | فارغ {rep['empty']}")
+    conn.close()
+    return 0
+
+
 def cmd_seed_official(args):
     """ف١/ف١-ب: بذر المصادر الرسمية — moj من sitemap + قوانين ويبو."""
     from database import create_tables, get_connection
@@ -1290,6 +1307,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("article-links", help="A-4: تقرير التعديلات على مستوى المادة")
     sp.add_argument("--out", metavar="FILE")
     sp.set_defaults(fn=cmd_article_links)
+
+    sp = sub.add_parser("syrialaw", help="ف٤: استيراد قوانين syria-law.com عبر واجهة REST (193 قانوناً + 211 خاصاً)")
+    sp.add_argument("--type", choices=("laws", "splaws"), default="laws")
+    sp.add_argument("--only", nargs="*", metavar="اسم", help="أسماء (جزئية) لقوانين بعينها")
+    sp.add_argument("--limit", type=int)
+    sp.add_argument("--list", action="store_true", help="عرض القوانين المتاحة فقط")
+    sp.add_argument("--dry", action="store_true")
+    sp.set_defaults(fn=cmd_syrialaw)
 
     sp = sub.add_parser("core", help="فحص القائمة الأساسية لمكتب المحاماة: مفقود/ناقص المواد/مكتمل")
     sp.add_argument("--out", metavar="FILE")
