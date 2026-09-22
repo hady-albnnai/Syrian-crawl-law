@@ -927,6 +927,20 @@ def cmd_article_links(args) -> int:
     return 0
 
 
+def cmd_core(args) -> int:
+    import database
+    from core_laws import check_core, format_core_report
+    conn = database.get_connection()
+    txt = format_core_report(check_core(conn))
+    conn.close()
+    if args.out:
+        open(args.out, "w", encoding="utf-8").write(txt)
+        print(txt.splitlines()[0], f"→ {args.out}")
+    else:
+        print(txt)
+    return 0
+
+
 def cmd_missing(args) -> int:
     import database
     from missing_targets import missing_targets, format_report
@@ -1276,6 +1290,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("article-links", help="A-4: تقرير التعديلات على مستوى المادة")
     sp.add_argument("--out", metavar="FILE")
     sp.set_defaults(fn=cmd_article_links)
+
+    sp = sub.add_parser("core", help="فحص القائمة الأساسية لمكتب المحاماة: مفقود/ناقص المواد/مكتمل")
+    sp.add_argument("--out", metavar="FILE")
+    sp.set_defaults(fn=cmd_core)
 
     sp = sub.add_parser("missing", help="B-1: الصكوك غير المحصودة التي تستهدفها الإحالات، بالأهمية")
     sp.add_argument("--limit", type=int, default=100)
