@@ -643,7 +643,8 @@ def cmd_syrialaw(args):
             log.info(f"[{t['id']}] {t['count']:>5} مادة  {t['name']}")
         return 0
     conn = get_connection()
-    rep = import_laws(conn, post_type=args.type, only_names=args.only, dry_run=args.dry, limit=args.limit)
+    rep = import_laws(conn, post_type=args.type, only_names=args.only, dry_run=args.dry, limit=args.limit,
+                      force=args.force)
     log.info(f"syria-law: قوانين {rep['laws']} | حُفظ {rep['imported']} | بديل {rep['alternate']} | "
              f"مطابق {rep['skipped']} | مراجعة {rep['needs_review']} | فشل {rep['failed']} | فارغ {rep['empty']}")
     conn.close()
@@ -1313,6 +1314,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--only", nargs="*", metavar="اسم", help="أسماء (جزئية) لقوانين بعينها")
     sp.add_argument("--limit", type=int)
     sp.add_argument("--list", action="store_true", help="عرض القوانين المتاحة فقط")
+    sp.add_argument("--force", action="store_true", help="إعادة معالجة قوانين حُفظت سابقاً (عبر ميزان التكرار)")
     sp.add_argument("--dry", action="store_true")
     sp.set_defaults(fn=cmd_syrialaw)
 

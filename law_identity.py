@@ -92,6 +92,10 @@ def _gap_crosses_other_instrument(gap: str) -> bool:
     لا للقانون — أخذُه سرقة هوية تُفقد المنقّح ثقةً لا تُستعاد، فيُرفض.
     """
     g = gap or ""
+    if _ISSUED_BY_TYPE_RE.search(g):
+        # «القانون المدني الصادر بالمرسوم رقم 84 لعام 1949»: صيغة إصدار لا
+        # إحالة — الرقم رقمنا (قِيس 2026-09-22 على عناوين syria-law).
+        return False
     return any(head in g for head in _TYPE_HEADS)
 
 
@@ -321,6 +325,13 @@ def _accept(m, gap_guard: bool = False) -> dict | None:
             return None
     d = m.groupdict()
     doc_type = _normalize_type(m.group(1))
+    gap = d.get("gap") or ""
+    im = _ISSUED_BY_TYPE_RE.search(gap)
+    if im:
+        # هوية القانون = صك إصداره (المرسوم/المرسوم التشريعي) كما في الصيغة الكاملة
+        it = re.search(_TYPE_ALT, im.group(0))
+        if it:
+            doc_type = _normalize_type(it.group(0))
     try:
         number = int(to_western_digits(d["num"]))
         year = _year_of(m)

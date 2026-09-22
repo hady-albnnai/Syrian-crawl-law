@@ -28,6 +28,23 @@ def test_list_and_fetch_sorted():
     assert arts[0]["text"] == "البينة على من ادعى."
 
 
+def test_inner_head_wins_over_title_and_splits():
+    """متن يبدأ بعنوان فصل ثم «المادة 3»؛ ومنشور عنوانه 204 لكن متنه «المادة 205»؛
+    ورأس داخلي ثانٍ يُقطع."""
+    arts = [{"num": 3, "title": "المادة 3", "text": "الفصل الثاني\nالاختصاص العام\nالمادة 3\nتختص المحاكم السورية."},
+            {"num": 204, "title": "المادة 204", "text": "المادة 205\nأ. إذا نطق بالحكم.\nالمادة 206\nنص آخر"}]
+    h = sl.to_import_html("قانون", arts)
+    assert "<h3>الفصل الثاني</h3>" in h and "المادة 3<br/>تختص المحاكم السورية." in h
+    assert "المادة 205<br/>أ. إذا نطق بالحكم." in h and "المادة 206" not in h and "المادة 204" not in h
+    assert 'data-articles="line-anchored"' in h
+
+
+def test_normalize_law_name_gets_identity():
+    import law_identity
+    n = sl.normalize_law_name("القانون المدني ـ المرسوم رقم 84 لعام 1949")
+    assert law_identity.extract_law_identity(n, "")["identity_key"] == "المرسوم:84:1949"
+
+
 def test_import_html_has_article_lines():
     arts = sl.fetch_articles(12, http_get=_fake)
     h = sl.to_import_html("بينات ـ المرسوم رقم 359 لعام 1947", arts)
@@ -67,3 +84,19 @@ def test_import_saves_document_and_articles(db, monkeypatch):
     # إعادة التشغيل لا تكرر
     rep2 = sl.import_laws(db, dry_run=False, http_get=_fake_big)
     assert rep2["skipped"] == 1 and db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+
+
+def test_force_reparse_replaces_same_source(db, monkeypatch):
+    monkeypatch.setattr(sl, "POLITE_DELAY", 0)
+    sl.import_laws(db, dry_run=False, http_get=_fake_big)
+
+    def smaller(url):  # نفس المصدر بعد إصلاح المحلّل: 30 مادة بدل 40 (أقل عدداً لكنها الصحيحة)
+        st, body, h = _fake_big(url)
+        if "laws?lawss=12" in url:
+            body = json.dumps(json.loads(body)[:30])
+        return st, body, h
+    rep = sl.import_laws(db, dry_run=False, http_get=smaller, force=True)
+    assert rep["imported"] == 1
+    assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+    assert db.execute("SELECT COUNT(*) FROM articles").fetchone()[0] == 30
+    assert db.execute("SELECT COUNT(*) FROM document_versions").fetchone()[0] == 1

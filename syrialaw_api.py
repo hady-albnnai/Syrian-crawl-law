@@ -34,6 +34,7 @@ SECTION = "syria-law.com (واجهة REST — ف٤)"
 POLITE_DELAY = 1.0
 TAXONOMIES = {"laws": "lawss", "splaws": "splawss"}
 _ART_RE = re.compile(r"(?:المادة|مادة)\s*\(?\s*(\d+)\s*\)?")
+_INNER_HEAD_RE = re.compile(r"(?m)^\s*(?:المادة|مادة)\s*\(?\s*(\d+)\s*\)?\s*[-ـ:–]?\s*$")
 
 
 RETRIES = 4
@@ -66,7 +67,7 @@ def list_laws(post_type: str = "laws", http_get=None) -> list[dict]:
         if st != 200:
             break
         rows = json.loads(body)
-        out.extend({"id": r["id"], "name": _html.unescape(r["name"]).strip(),
+        out.extend({"id": r["id"], "name": normalize_law_name(_html.unescape(r["name"])),
                     "count": r["count"], "link": r["link"]} for r in rows)
         total_pages = int((hdr or {}).get("X-WP-TotalPages") or (hdr or {}).get("x-wp-totalpages") or 1)
         if page >= total_pages or not rows:
@@ -102,24 +103,53 @@ def fetch_articles(term_id: int, post_type: str = "laws", http_get=None) -> list
     return out
 
 
+def normalize_law_name(name: str) -> str:
+    """عناوين الموقع «القانون المدني ـ المرسوم رقم 84 لعام 1949»: الفاصل «ـ»
+    يعني «الصادر بـ» — بدونه يرفض منقّح الهوية الرقم (صك الصدر «القانون»
+    ≠ صك الرقم «المرسوم» فيُعدّ إحالة). قِيس 2026-09-22: المدني 1129
+    مادة حُفظ بلا هوية فلم يظهر بتقرير core."""
+    return re.sub(r"\s+ـ+\s+(?=(?:ال)?مرسوم|(?:ال)?قانون|(?:ال)?قرار)",
+                  " الصادر ب", name).strip()
+
+
 def to_import_html(law_name: str, articles: list[dict]) -> str:
-    """HTML بنمط الأنبوب: سطر «المادة N» ثم نصها (بلا عناوين أبواب)."""
+    """HTML بنمط الأنبوب: سطر «المادة N» ثم نصها؛ عناوين الأبواب المضمّنة بمتن المادة تسبقها."""
     paras = []
     for a in articles:
         if a["num"] is None:
             # عناوين الأبواب تأتي بلا ترتيب موثوق من الواجهة — تُهمل حتى لا
             # تلتصق بنص آخر مادة (قِيس: «الباب السابع» ذُيّل بالمادة 159).
             continue
-        body = a["text"] or ""
-        if not re.match(r"^\s*(المادة|مادة)\s*\(?\s*\d+", body):
-            body = f"المادة {a['num']}\n{body}"
-        paras.append("<p>" + body.replace("\n", "<br/>") + "</p>")
-    return (f'<html><body><article><div class="entry-content"><h1>{law_name}</h1>\n'
+        body = (a["text"] or "").strip()
+        num = a["num"]
+        # متن المنشور قد يبدأ بعناوين الباب/الفصل ثم «المادة N» ثم النص
+        # (قِيس: 1/2016 المادة 3 «الفصل الثاني\nالاختصاص…\nالمادة 3\nتختص…»).
+        # وفي 1/2016 عناوين المنشورات مُزاحة (عنوان «المادة 1» متنه «المادة
+        # 203 …») — فالرأس الصريح داخل المتن هو الحقيقة ويتقدم على العنوان.
+        m_head = _INNER_HEAD_RE.search(body)
+        heads = []
+        if m_head:
+            heads = [l.strip() for l in body[:m_head.start()].splitlines() if l.strip()]
+            num = int(m_head.group(1))
+            body = body[m_head.end():]
+            m_other = _INNER_HEAD_RE.search(body)
+            if m_other:  # رأس مادة ثانية بنفس المنشور — تُقطع (تأتي بمنشورها)
+                body = body[:m_other.start()]
+        body = body.strip()
+        if not body:
+            continue
+        for hd in heads:
+            paras.append(f"<h3>{hd}</h3>")
+        paras.append(f"<p>المادة {num}<br/>" + body.replace("\n", "<br/>") + "</p>")
+    from extractor_v4 import LINE_ANCHORED_MARK
+    # كل رأس مادة في أول سطر ⇒ الإشارات الداخلية («وفق المادة 5») ليست حدوداً
+    return (f'<html><body>{LINE_ANCHORED_MARK}<article><div class="entry-content"><h1>{law_name}</h1>\n'
             + "\n".join(paras) + "\n</div></article></body></html>")
 
 
 def import_laws(conn, post_type: str = "laws", only_names: list[str] | None = None,
-                dry_run: bool = False, http_get=None, limit: int | None = None) -> dict:
+                dry_run: bool = False, http_get=None, limit: int | None = None,
+                force: bool = False) -> dict:
     """تبنٍّ مرحلي لكل قوانين الموقع عبر البوابات. يعيد أعداد المصير."""
     import crawl_queue as taskqueue
     import crawler
@@ -138,7 +168,7 @@ def import_laws(conn, post_type: str = "laws", only_names: list[str] | None = No
         done = conn.execute(
             "SELECT 1 FROM crawl_tasks WHERE url=? AND status='success'",
             (canonicalize_url(url),)).fetchone()
-        if done and not dry_run:
+        if done and not dry_run and not force:
             stats["skipped"] += 1  # استئناف: قانون حُفظ بدورة سابقة
             continue
         try:
@@ -155,8 +185,10 @@ def import_laws(conn, post_type: str = "laws", only_names: list[str] | None = No
         key = canonicalize_url(url)
         taskqueue.enqueue(conn, url, SECTION, "topic")
         row = conn.execute("SELECT id FROM crawl_tasks WHERE url=?", (key,)).fetchone()
+        if force:
+            conn.execute("UPDATE crawl_tasks SET status='pending' WHERE id=?", (row["id"],))
         task = {"id": row["id"], "url": url, "section": SECTION, "kind": "topic",
-                "domain_tier": domain_tier_for_url(url)}
+                "domain_tier": domain_tier_for_url(url), "reparse": bool(force)}
         cs = {"pages": 0, "docs": 0, "articles": 0, "skipped": 0, "failures": 0}
         if dry_run:
             cs["pages"] = 1

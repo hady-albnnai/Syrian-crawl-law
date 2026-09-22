@@ -171,6 +171,10 @@ def _handle_topic(conn, task, html, dry_run, stats):
 
     existing_row = dedup.find_existing_by_identity(
         cursor, identity["identity_key"])
+    if existing_row is not None and existing_row["doc_id"] == make_doc_id(task["url"]):
+        # الصف النشط بنفس الهوية هو صفنا نفسه (إعادة زحف/تحليل نفس الرابط)
+        # — لا يُقارَن بنفسه؛ يُحسم أدناه بمسار «نفس الرابط».
+        existing_row = None
 
     doc_status = None  # None → الافتراضي 'active' في save_document
     if existing_row is not None:
@@ -234,6 +238,12 @@ def _handle_topic(conn, task, html, dry_run, stats):
                 dedup.build_existing_candidate(cursor, old_row))
             better = upgrade_decision["winner"] == "new"
             upgrade_reason = upgrade_decision["decisive_criterion"]
+        # ف٤: إعادة تحليل نفس المصدر بعد إصلاح المحلّل (task["reparse"]) —
+        # الجديدة تحلّ محل القديمة دائماً (قِيس 2026-09-22: المدني من
+        # syria-law حُفظ بلا هوية وبمواد منشطرة؛ النسخة المصلحة أقل عدداً
+        # فتخسر بميزان العدد رغم أنها الصحيحة). القديمة تُؤرشف نسخة.
+        if task.get("reparse") and old_row is not None and not same_content:
+            better, upgrade_reason = True, "reparse_same_source"
         if old_row is None or same_content or not better:
             conn.commit()
             taskqueue.mark(conn, task["id"], "success")
