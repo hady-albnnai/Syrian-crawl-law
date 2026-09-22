@@ -58,7 +58,7 @@ def check_core(conn) -> list[dict]:
         rows = conn.execute(
             """SELECT d.id, d.identity_key, d.title, d.status, d.legal_status, d.is_complete_text,
                       (SELECT COUNT(*) FROM articles a WHERE a.doc_id = d.id) AS n
-               FROM documents d WHERE d.number = ? AND d.year = ? ORDER BY d.status = 'active' DESC, n DESC""",
+               FROM documents d WHERE d.number = ? AND d.year = ? ORDER BY d.status = 'active' DESC, COALESCE(d.is_complete_text, 0) DESC, n DESC""",
             (law["number"], law["year"])).fetchall()
         active = [r for r in rows if r[3] == "active"]
         best = active[0] if active else (rows[0] if rows else None)
