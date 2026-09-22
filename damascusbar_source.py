@@ -31,6 +31,8 @@ MAX_CONSECUTIVE_FAILURES = 5
 ORIGINAL = "http://www.damascusbar.org/AlMuntada/showthread.php?t={t}"
 CDX_URL = ("https://web.archive.org/cdx/search/cdx?url=damascusbar.org/AlMuntada/showthread.php*"
            "&filter=statuscode:200&fl=original,timestamp&limit=100000")
+CDX_YEAR_URL = ("https://web.archive.org/cdx/search/cdx?url=damascusbar.org/AlMuntada/showthread.php*"
+                "&from={y}&to={y}&filter=statuscode:200&fl=original,timestamp&limit=50000")
 SNAPSHOT = "https://web.archive.org/web/{ts}id_/{orig}"
 
 
@@ -79,7 +81,18 @@ def load_threads(http_get_text, refresh: bool = False) -> dict[str, str]:
     """يقرأ خريطة الخيوط من الملف أو يبنيها من CDX ويخزّنها."""
     if _threads_file().exists() and not refresh:
         return json.loads(_threads_file().read_text(encoding="utf-8"))
+    bundled = Path(__file__).parent / "data" / "damascusbar_threads.json"   # مرفقة بالمستودع (قياس 2026-09-21)
+    if bundled.exists() and not refresh:
+        return json.loads(bundled.read_text(encoding="utf-8"))
     body = http_get_text(CDX_URL)
+    if not body or "Temporarily Offline" in body[:400]:
+        # الاستعلام الكامل يردّ 503 كثيراً؛ شرائح سنوية أصغر تنجح غالباً
+        parts = []
+        for y in range(2008, 2025):
+            b = http_get_text(CDX_YEAR_URL.format(y=y))
+            if b and "Temporarily Offline" not in b[:400]:
+                parts.append(b)
+        body = "\n".join(parts)
     m = thread_map(body or "")
     if m:
         _data_dir().mkdir(parents=True, exist_ok=True)
