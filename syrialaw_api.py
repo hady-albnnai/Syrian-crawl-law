@@ -36,11 +36,25 @@ TAXONOMIES = {"laws": "lawss", "splaws": "splawss"}
 _ART_RE = re.compile(r"(?:المادة|مادة)\s*\(?\s*(\d+)\s*\)?")
 
 
+RETRIES = 4
+
+
 def _get(url: str, http_get=None):
+    """جلب مع إعادة محاولة متدرجة (الموقع بطيء أحياناً: مهلة قراءة 40 ث قُيست)."""
     if http_get:
         return http_get(url)
-    r = requests.get(url, timeout=40, headers={"User-Agent": USER_AGENT})
-    return r.status_code, r.text, dict(r.headers)
+    last = None
+    for i in range(RETRIES):
+        try:
+            r = requests.get(url, timeout=90, headers={"User-Agent": USER_AGENT})
+            if r.status_code in (429, 500, 502, 503, 504):
+                raise requests.RequestException(f"http {r.status_code}")
+            return r.status_code, r.text, dict(r.headers)
+        except requests.RequestException as e:  # مهلة/انقطاع — ننتظر ونعيد
+            last = e
+            log.info(f"   ⏳ إعادة محاولة {i + 1}/{RETRIES}: {e.__class__.__name__}")
+            time.sleep(5 * (i + 1))
+    raise RuntimeError(f"syrialaw_fetch_failed: {url} — {last}")
 
 
 def list_laws(post_type: str = "laws", http_get=None) -> list[dict]:
@@ -120,13 +134,24 @@ def import_laws(conn, post_type: str = "laws", only_names: list[str] | None = No
         terms = terms[:limit]
     for t in terms:
         stats["laws"] += 1
-        arts = fetch_articles(t["id"], post_type, http_get)
+        url = t["link"]
+        done = conn.execute(
+            "SELECT 1 FROM crawl_tasks WHERE url=? AND status='success'",
+            (canonicalize_url(url),)).fetchone()
+        if done and not dry_run:
+            stats["skipped"] += 1  # استئناف: قانون حُفظ بدورة سابقة
+            continue
+        try:
+            arts = fetch_articles(t["id"], post_type, http_get)
+        except RuntimeError as e:  # فشل قانون واحد لا يوقف الدورة
+            log.info(f"   ⚠️ {t['name'][:50]}: {e}")
+            stats["failed"] += 1
+            continue
         numbered = [a for a in arts if a["num"] is not None]
         log.info(f"• {t['name'][:60]} — {len(numbered)} مادة")
         if not numbered:
             stats["empty"] += 1
             continue
-        url = t["link"]
         key = canonicalize_url(url)
         taskqueue.enqueue(conn, url, SECTION, "topic")
         row = conn.execute("SELECT id FROM crawl_tasks WHERE url=?", (key,)).fetchone()
