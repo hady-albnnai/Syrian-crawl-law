@@ -41,3 +41,5 @@ mizan_harvester.egg-info/
 
 # ف٣: تقدّم محرك damascusbar (بيانات تشغيلية)
 data/damascusbar_done.json
+
+data/cdx_years/
