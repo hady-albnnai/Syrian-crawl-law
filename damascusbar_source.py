@@ -72,7 +72,7 @@ def thread_map(cdx_text: str) -> dict[str, list]:
 
 
 def _url_noise(u: str) -> int:
-    return ("&amp;" in u) * 4 + ("s=" in u) * 2 + ("mode=" in u or "goto=" in u) * 1
+    return ("&amp;" in u) * 4 + ("s=" in u) * 2 + ("mode=" in u or "goto=" in u or "fbclid=" in u) * 1
 
 
 def load_threads(http_get_text, refresh: bool = False) -> dict[str, str]:
