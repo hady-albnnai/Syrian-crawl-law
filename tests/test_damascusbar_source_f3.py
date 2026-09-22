@@ -39,7 +39,10 @@ def fake_bytes(url):
 
 def test_thread_map_latest_snapshot_per_thread():
     m = ds.thread_map(CDX)
+    # الأنظف (بلا s=/&amp;) يُفضَّل على الأحدث
     assert m["22726"] == ["20191210183707", "http://damascusbar.org/AlMuntada/showthread.php?t=22726&fbclid=xyz"]
+    m2 = ds.thread_map(CDX + "http://www.damascusbar.org/AlMuntada/showthread.php?t=22726 20150101000000\n")
+    assert m2["22726"] == ["20150101000000", "http://www.damascusbar.org/AlMuntada/showthread.php?t=22726"]
     assert m["8355"][0] == "20170101000000" and len(m) == 2
 
 

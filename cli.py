@@ -990,14 +990,32 @@ def cmd_precedents_bar(args) -> int:
     create_tables()
     conn = get_connection()
 
+    import time
+    last = [0.0]
+    MIN_GAP = 3.0                      # أرشيف الإنترنت يقطع الاتصال عند أسرع من ذلك
+    BACKOFF = (10, 30, 60)
+
     def get_bytes(url):
-        fetcher.polite_sleep()
-        try:
-            r = requests.get(url, timeout=90, headers={"User-Agent": USER_AGENT})
-        except requests.RequestException as e:
-            print("  فشل:", url[-60:], e.__class__.__name__)
-            return None
-        return r.content if r.status_code == 200 else None
+        for attempt in range(len(BACKOFF) + 1):
+            wait = MIN_GAP - (time.monotonic() - last[0])
+            if wait > 0:
+                time.sleep(wait)
+            last[0] = time.monotonic()
+            try:
+                r = requests.get(url, timeout=90, headers={"User-Agent": USER_AGENT})
+            except requests.RequestException as e:
+                if attempt < len(BACKOFF):
+                    print(f"  قطع اتصال ({e.__class__.__name__}) — انتظار {BACKOFF[attempt]} ث ثم إعادة")
+                    time.sleep(BACKOFF[attempt])
+                    continue
+                print("  فشل نهائي:", url[-60:], e.__class__.__name__)
+                return None
+            if r.status_code in (429, 503) and attempt < len(BACKOFF):
+                print(f"  حدّ المعدل {r.status_code} — انتظار {BACKOFF[attempt]} ث")
+                time.sleep(BACKOFF[attempt])
+                continue
+            return r.content if r.status_code == 200 else None
+        return None
 
     def get_text(url):
         b = get_bytes(url)

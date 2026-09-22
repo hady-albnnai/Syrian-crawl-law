@@ -64,9 +64,15 @@ def thread_map(cdx_text: str) -> dict[str, list]:
         if not m:
             continue
         t, ts = m.group(1), parts[1]
-        if t not in best or ts > best[t][0]:
-            best[t] = [ts, parts[0]]
-    return best
+        # الأنظف أولاً (بلا معرّف جلسة s= ولا &amp; ولا mode=)، ثم الأحدث
+        rank = (_url_noise(parts[0]), -int(ts[:14] or 0))
+        if t not in best or rank < best[t][2]:
+            best[t] = [ts, parts[0], rank]
+    return {t: v[:2] for t, v in best.items()}
+
+
+def _url_noise(u: str) -> int:
+    return ("&amp;" in u) * 4 + ("s=" in u) * 2 + ("mode=" in u or "goto=" in u) * 1
 
 
 def load_threads(http_get_text, refresh: bool = False) -> dict[str, str]:
