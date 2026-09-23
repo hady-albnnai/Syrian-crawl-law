@@ -47,6 +47,56 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
+# ------------------------------------------------- إصلاح طبقة نص الـPDF (ف٥)
+# ملفات قديمة (مجموعات الهيئة العامة ونحوها) تخرج من الـPDF بطبقة نص فيها
+# خللان موثقان، يُصلحان هنا **بلا تخمين قانوني**:
+#   1 دخائل محارف من خريطة الخط: رموز/أرقام لاتينية داخل الكلمات العربية
+#     («النق¦ض» «أ6سا6س» «مDDان») ⇒ تُحذف لأنها بين حروف عربية حصراً.
+#   2 أسطر مكتوبة بالترتيب البصري (كلمات معكوسة): «2016 لعام 159 القضية أساس»
+#     ⇒ تُقلب كلمات في السطر فقط إن كان القلب يرفع درجة القرائن البنيوية.
+_ARL = "\u0621-\u064a"
+_ARX = "\u0621-\u064a\u064b-\u065f\u0670"      # الحروف + التشكيل
+_JUNK = r"\x00-\x1f\x7f-\x9f\xa6\xae\xb7*@{}0-9A-Za-z\u02ee\u0114\u0040\ufffd"
+# الدخائل بين حرفين عربيين حصراً — لا تمس الأرقام المستقلة ولا سلاسل الأرقام
+_JUNK_INSIDE_RE = re.compile(rf"(?<=[{_ARX}:])[{_JUNK}]+(?=[{_ARX}])")
+# فصل لصق «كلمة+رقم» قبل القلب حتى تصير الوحدات صحيحة — النقطتان تُفصلان
+# عن الأرقام فقط («للعام140:قرار») لا بين حرفين («القضية:أساس» تبقى ملزوقة)
+_AR_DIGIT_SPLIT_RE = re.compile(rf"(?<=[{_ARX}])(?=\d)|(?<=\d)(?=[{_ARX}:])|(?<=:)(?=\d)")
+_CORRUPT_RE = re.compile(r"المبد[\s\u060d]+أ")  # فصل شكل الهمزة عن «المبدأ» (طبقة قديمة)
+_ORIENT_RXS = [re.compile(p) for p in (
+    r"تاريخ\s*:?\s*\d{4}[/\\\-]",           # تاريخ تتبعه سنة ⇒ الترتيب منطقي
+    r"(?:قرار|اساس|القضية|رقم)\s*:?\s*\d{1,6}",
+    r"لعام\s*\d{4}", r"لسنة\s*\d{4}",
+    r"محكمة\s+النقض", r"الهيئة\s+العامة",
+    r"العدد(?:ان)?\s*/?\s*\d", r"القاعدة\s*:?\s*\d", r"الصفحة\s*:?\s*\d",
+    r"الغرفة|الدوائر|الدائرة",
+)]
+
+
+def _orient_score(line: str) -> int:
+    return sum(len(rx.findall(line)) for rx in _ORIENT_RXS)
+
+
+def _orient_line(line: str) -> str:
+    line = _AR_DIGIT_SPLIT_RE.sub(" ", line)
+    toks = line.split()
+    if len(toks) < 2:
+        return line
+    rev = " ".join(toks[::-1])
+    return rev if _orient_score(rev) > _orient_score(line) else line
+
+
+def repair_pdf_text(text: str) -> str:
+    """إصلاح دخائل المحارف + اتجاه الأسطر البصرية — بلا أي تخمين قانوني."""
+    text = text or ""
+    prev = None
+    while prev != text:                     # دخائل متراكبة («مDDان» ⇒ تمريران)
+        prev = text
+        text = _JUNK_INSIDE_RE.sub("", text)
+    text = _CORRUPT_RE.sub("المبدأ", text)
+    return "\n".join(_orient_line(l) for l in text.split("\n"))
+
+
 def extract_pdf_text(source) -> str:
     """نص صفحات الملف كلها مطبَّعاً. `source`: مسار أو بايتات."""
     doc = fitz.open(source) if not isinstance(source, (bytes, bytearray)) \
@@ -55,7 +105,7 @@ def extract_pdf_text(source) -> str:
         parts = [p.get_text() for p in doc if p.get_text().strip()]
     finally:
         doc.close()
-    return normalize_text("\n\n".join(parts))
+    return repair_pdf_text(normalize_text("\n\n".join(parts)))
 
 
 def harvest_pdf(conn, path: str, source_url: str | None = None,

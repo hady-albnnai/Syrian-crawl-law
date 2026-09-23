@@ -204,3 +204,34 @@ def test_no_hallucination_on_plain_text():
     c = parse_citation("هذا نص عادي لا يحتوي على أي استشهاد قضائي ولا أرقام.")
     assert c.court is None and c.decision_number is None and c.confidence < 0.4
     assert parse_text("فقرة عادية.\n\nفقرة ثانية بلا اجتهاد.") == []
+
+
+# ------------------------------------------------- صيغة «القضية/قرار/تاريخ» (ف٥)
+# مجموعات الهيئة العامة القديمة (القزاز ونحوها) بلا كلمة «أساس» ولا لفظ جهة:
+# «(القضية 368 قرار 462 تاريخ 3/6/2002 المنشور في مجلة المحامون العدد 7 2004)»
+QAD = "(القضية 368 قرار 462 تاريخ 3/6/2002 المنشور في مجلة المحامون العدد السابع 2004)"
+
+
+def test_qadiya_dialect_inferred_court_with_flag():
+    c = parse_citation(QAD)
+    assert c.court == "نقض"                      # الجهة مستدلة من الصيغة القياسية
+    assert "court_inferred_collection" in c.warnings
+    assert c.decision_number == "462" and c.basis_number == "368"
+    assert c.decision_date == "2002-06-03" and c.publication == "المحامون"
+    assert c.identity_key() == "نقض|462|2002|368"
+
+
+def test_qadiya_dialect_with_arabic_indic_digits():
+    c = parse_citation("(القضية ٣٦٨ قرار ٤٦٢ تاريخ ٣/٦/٢٠٠٢)")
+    assert c.decision_number == "462" and c.basis_number == "368"
+    assert c.decision_date == "2002-06-03"
+
+
+def test_qadiya_inline_principle_exportable():
+    text = ("إن دعوى المخاصمة ذات طبيعة خاصة ليست من طرق الطعن ولا امتداداً للخصومة، "
+            "وعلى هذا الأساس فإن من واجب مدعي المخاصمة أن يرفق استدعاءه بالوثائق.\n"
+            + QAD)
+    cs = [c for c in parse_text(text) if c.is_exportable()]
+    assert len(cs) == 1
+    assert cs[0].identity_key() == "نقض|462|2002|368"
+    assert cs[0].principle_text and len(cs[0].principle_text) >= 40

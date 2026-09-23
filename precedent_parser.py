@@ -78,6 +78,8 @@ _DEC_RE = re.compile(rf"(?:(?:ال)?قرار\s+(?:جنحي|جنائي|مدني|�
 # «نقض سوري رقم 483 أساس 486» (سجلات النقض) — الرقم قبل «أساس» هو رقم القرار
 _DEC_BEFORE_BASIS_RE = re.compile(rf"(?:رقم|نقض(?:\s+(?:مدني|جزائي|شرعي|جنحي|جنائي|تجاري|عمالي|ايجاري))?(?:\s+سوري)?)\s+{_NUM.format(n='dn')}\s+(?:رقم\s+)?اساس")
 _BASIS_RE = re.compile(rf"(?:القضية\s*:?\s*)?(?:{_NUM.format(n='bn0')}\s+)?(?:رقم\s+)?اساس\s*:?\s*/?\s*(?:{_NUM.format(n='bn')}|بدون)?\s*(?:{_SEP}|لعام|لسنة)?\s*{_YR.format(n='by')}?(?!\d)")
+# صيغة مجموعات القزاز/الهيئة العامة: «القضية N قرار N تاريخ …» بلا كلمة «أساس» (ف٥)
+_QAD_BASIS_RE = re.compile(r"القضية\s*:?\s*(?P<qbn>\d{1,6})\s+قرار")
 _APPEAL_RE = re.compile(rf"في\s+الطعن\s*/?\s*{_NUM.format(n='an')}\s*/?\s*(?:لعام|لسنة)?\s*{_YR.format(n='ay')}?(?!\d)")
 _DATE_RE = re.compile(rf"(?:ب?تاريخ|المؤرخ\s+في)\s*:?\s*(?P<d>\d{{1,2}}){_SEP}(?P<m>\d{{1,2}}){_SEP}(?P<y>\d{{3,4}})(?!\d)")
 # تاريخ بترتيب سنة/شهر/يوم («تاريخ 2025/07/22» — مجلة التحكيم السورية)
@@ -196,6 +198,12 @@ def parse_citation(raw: str) -> Citation:
         # بترميز الموسوعة؛ نُثبت الجهة مع تحذير حتى يراجعها المالك.
         c.court = "نقض"
         c.warnings.append("court_inferred_kilani")
+    elif _QAD_BASIS_RE.search(t) and _DATE_RE.search(t):
+        # صيغة المجموعات (القزاز ونحوها): «القضية N قرار N تاريخ …» بلا لفظ جهة.
+        # هذا ترميز نقضي سوري قياسي؛ تُستدل الجهة وتُوسم حتى يرفعها المالك إلى
+        # «هيئة عامة» إن شاء بعد المراجعة (المجموعات المعروفة مجموعات هيئة عامة).
+        c.court = "نقض"
+        c.warnings.append("court_inferred_collection")
 
     # الغرفة / نوع الدعوى
     orig = to_western_digits(raw)
@@ -237,6 +245,10 @@ def parse_citation(raw: str) -> Citation:
         c.basis_year = _year(m.group("by"))
         if m.group("bn") is None and m.group("bn0") is None and "بدون" in m.group(0):
             c.basis_number = None
+    if c.basis_number is None:
+        m = _QAD_BASIS_RE.search(t)          # «القضية N قرار …» ⇒ القضية هي الأساس (ف٥)
+        if m:
+            c.basis_number = m.group("qbn")
     m = _APPEAL_RE.search(t)
     if m:
         c.appeal_number = m.group("an")
@@ -309,7 +321,7 @@ _BLOCK_START_RE = re.compile(
     r"\(?\s*(?:هيئة\s+عامة|الهيئة\s+العامة)\s*[،,]?\s*اساس)")
 _INLINE_RE = re.compile(
     r"\(\s*(?:نقض\s+سوري|نقض\s+(?:مدني|جزائي|شرعي|جنحي|جنائي|تجاري|عمالي|ايجاري)(?:\s+سوري)?\s+\d|نقض\s+رقم|قرار\s+نقض|"
-    r"جنحة|جناية|احداث|عسكرية|امن\s+اقتصادي|هيئة\s+عامة|القرار\s+رقم)[^()\n]{8,240}\)")
+    r"جنحة|جناية|احداث|عسكرية|امن\s+اقتصادي|هيئة\s+عامة|القرار\s+رقم|القضية)[^()\n]{8,240}\)")
 
 
 _REASONING_RE = re.compile(

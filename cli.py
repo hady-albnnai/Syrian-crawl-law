@@ -1177,6 +1177,58 @@ def cmd_precedents_file(args) -> int:
     return 0
 
 
+def cmd_precedents_drive(args) -> int:
+    """ف٥: روابط درايف عامة ⇒ تنزيل (مع بوابة التأكيد) ⇒ المحلل ⇒ pending.
+
+    أرشيفات RAR لا تُفك آلياً (لا مفك في الاعتماديات) — يُطلب فكها يدوياً
+    ثم تمرير محتوياتها إلى `precedents-file`."""
+    import os
+    import tempfile
+
+    import drive_source as drv
+    import homsbar_source as hs
+    from database import create_tables, get_connection
+    create_tables()
+    conn = get_connection()
+    ext = {"pdf": ".pdf", "zip": ".zip", "doc": ".doc", "html": ".html"}
+    total = {"links": 0, "files": 0, "citations": 0, "written": 0,
+             "unsourced": 0, "skipped_low": 0, "seen": 0, "failed": 0}
+    for link in args.links:
+        total["links"] += 1
+        print(f"\n— {link}")
+        data = drv.download_drive(link)
+        if data is None:
+            total["failed"] += 1
+            print("   تعذر التنزيل (محذوف/صلاحيات/بوابة تأكيد لم تُحل)")
+            continue
+        kind = drv.sniff_kind(data)
+        if kind == "rar":
+            print("   أرشيف RAR — فكه يدوياً ثم مرّر الملفات إلى: precedents-file")
+            continue
+        if kind == "html":
+            print("   بوابة تأكيد/صفحة خطأ بدل الملف — نزّله يدوياً واستعمل precedents-file")
+            total["failed"] += 1
+            continue
+        total["files"] += 1
+        tmp = tempfile.NamedTemporaryFile(suffix=ext.get(kind, ".bin"), delete=False)
+        try:
+            tmp.write(data); tmp.close()
+            rep = hs.harvest_file(conn, tmp.name, source_url=link,
+                                  source_site=args.site, dry_run=args.dry,
+                                  min_hits=args.min_hits)
+            for k in ("citations", "written", "unsourced", "skipped_low", "seen"):
+                total[k] += rep[k]
+            print(f"   [{kind}] {rep}")
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+    print("\nاجتهادات درايف:", total)
+    conn.close()
+    return 0
+
+
 def cmd_precedents_homsbar(args) -> int:
     """ف٥: اجتهادات فرع نقابة حمص — مقالات `juris_article` ومرفقاتها (وورد/مضغوطات) → pending."""
     from database import create_tables, get_connection
@@ -1554,6 +1606,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--refresh", action="store_true", help="إعادة بناء قائمة الخيوط من CDX")
     sp.set_defaults(fn=cmd_precedents_bar)
 
+    sp = sub.add_parser("precedents-drive", help="ف٥: روابط درايف عامة ⇒ تنزيل ⇒ المحلل ⇒ pending")
+    sp.add_argument("links", nargs="+", help="روابط مشاركة درايف أو معرفات الملفات")
+    sp.add_argument("--site", default="homsbar.org", help="اسم الموقع الأصل للهوية (افتراضي: نقابة حمص)")
+    sp.add_argument("--min-hits", type=int, default=3, help="بوابة الجودة الدنيا لكل ملف")
+    sp.add_argument("--dry", action="store_true", help="تحليل بلا كتابة")
+    sp.set_defaults(fn=cmd_precedents_drive)
     sp = sub.add_parser("precedents-file", help="ف٥: ملفات محلية نزّلها المالك بنفسه (مرفقات درايف/وورد/مضغوطات) → المحلل → pending")
     sp.add_argument("paths", nargs="+", help="مسار ملف أو أكثر على الجهاز")
     sp.add_argument("--source-url", default=None, help="رابط الأصل للاستشهاد والاستئناف")

@@ -116,12 +116,8 @@ def _docx_text(raw: bytes) -> str:
 
 def _pdf_text(raw: bytes) -> str:
     try:
-        import fitz  # pymupdf — اختياري هنا؛ غيابه لا يكسر بقية الأنواع
-    except ImportError:
-        return ""
-    try:
-        doc = fitz.open(stream=raw, filetype="pdf")
-        return "\n".join(p.get_text() for p in doc)
+        from precedent_pdf import extract_pdf_text
+        return extract_pdf_text(raw)        # يشمل التطبيع وإصلاح الطبقة النصية
     except Exception:
         return ""
 

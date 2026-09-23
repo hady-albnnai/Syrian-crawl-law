@@ -78,3 +78,56 @@ def test_extract_reads_real_pdf(tmp_path):
     doc.save(str(pdf)); doc.close()
     out = pp.extract_pdf_text(str(pdf))
     assert "page marker 0 (123/456)" in out and "page marker 1 (123/456)" in out
+
+
+# --- إصلاح طبقة نص الـPDF: دوال نقية على أنماط موثقة من ملفات فعلية -------
+def test_repair_strips_font_junk_between_arabic_letters():
+    # دخائل خريطة الخط من ملف «البيوع العقارية» الفعلي على Drive
+    assert pp.repair_pdf_text("محكمة النق¦ض") == "محكمة النقض"
+    assert pp.repair_pdf_text("القضية:*أساس") == "القضية:أساس"
+    assert pp.repair_pdf_text("مDDان") == "مان"
+    assert "أساس" in pp.repair_pdf_text("أ6سا6س")
+    # محرف الاستبدال داخل الكلمة (نمط «المبد؟أ»)
+    assert pp.repair_pdf_text("بيّ\ufffdنات") == "بيّنات"
+
+
+def test_repair_preserves_free_numbers():
+    # الأرقام المستقلة وسلاسلها لا تُمس — الهوية خط أحمر
+    assert pp.repair_pdf_text("قرار 140 لعام 2016") == "قرار 140 لعام 2016"
+    assert pp.repair_pdf_text("2016/9/20") == "2016/9/20"
+
+
+def test_repair_glues_split_hamza_of_mabda():
+    # «المبدأ» تخرج مفصولة الهمزة في الطبقات القديمة
+    assert "المبدأ:" in pp.repair_pdf_text("المبد أ: بينات")
+    assert "المبدأ:" in pp.repair_pdf_text("المبد\u060dأ: بينات")
+    assert "المبدأ:" in pp.repair_pdf_text("المبد\ufffdأ: بينات")
+
+
+def test_repair_flips_visual_order_lines_only():
+    visual = "2016 لعام159 القضية:أساس"          # مخزنة بالترتيب البصري
+    assert pp.repair_pdf_text(visual) == "القضية:أساس 159 لعام 2016"
+    visual2 = "2016/9/20 تاريخ"
+    assert pp.repair_pdf_text(visual2) == "تاريخ 2016/9/20"
+    # السطر المنطقي السليم يُترك كما هو
+    logical = "محكمة النقض قرار 140 أساس 159 تاريخ 20/9/2016"
+    assert pp.repair_pdf_text(logical) == logical
+    # سطر بلا قرائن بنيوية لا يُقلب
+    plain = "إن التعامل بالكتابة المبرر لعدم الأخذ"
+    assert pp.repair_pdf_text(plain) == plain
+
+
+# --- الصيغة الموثقة كاملة: ملف «البيوع العقارية» (هيئة عامة، مرتبة ١) ------
+BAY = ("القضية:أساس 159 لعام 2016 :قرار 140 لعام 2016 تاريخ 2016/9/20 "
+       ".الهيئة العامة /مدني – محكمة النقض المبدأ: إن التعامل بالكتابة المبرر "
+       "لعدم الأخذ بالمانع الأدبي في الإثبات بالشهادة يقتضي ثبوت أكثر من تعامل "
+       "ورقي واحد، وتوثيق العقود العقارية في السجل العقاري يعد نقلاً للملكية.")
+
+
+def test_repair_pipeline_full_haya_identity(tmp_path, monkeypatch):
+    from precedent_parser import parse_text, authority_rank
+    cs = [c for c in parse_text(pp.repair_pdf_text(BAY)) if c.is_exportable()]
+    assert len(cs) == 1
+    assert cs[0].court == "هيئة_عامة_نقض" and authority_rank(cs[0]) == 1
+    assert cs[0].decision_number == "140" and cs[0].basis_number == "159"
+    assert cs[0].decision_date == "2016-09-20"
