@@ -32,7 +32,7 @@ py-modules = [
               "dedup", "discovery", "engines",
               "exporter", "extractor", "extractor_v4",
               "fetcher", "gap_analysis", "hf_syria_laws",
-              "doc_nature", "law_identity", "law_parts", "postprocess", "named_laws", "regulations", "exclusions", "issue_date", "precedent_parser", "precedent_source", "damascusbar_source", "precedent_export", "article_links", "missing_targets", "core_laws", "syrialaw_api", "bunud_source", "law_status", "learning",
+              "doc_nature", "law_identity", "law_parts", "postprocess", "named_laws", "regulations", "exclusions", "issue_date", "precedent_parser", "precedent_source", "damascusbar_source", "precedent_export", "article_links", "missing_targets", "core_laws", "syrialaw_api", "precedent_syrialaw", "bunud_source", "law_status", "learning",
               "logging_setup", "migrations", "mizan_injector",
               "official_seed", "package_manifest", "recon",
               "search", "source_matrix", "source_quality",

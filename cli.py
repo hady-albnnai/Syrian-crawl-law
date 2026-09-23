@@ -984,6 +984,19 @@ def cmd_seed_bunud(args) -> int:
     return 0
 
 
+def cmd_precedents_syrialaw(args) -> int:
+    """ف٤: اجتهادات syria-law.com عبر REST (65 ألف منشور؛ السوري ذو الهوية فقط → pending)."""
+    from database import create_tables, get_connection
+    import precedent_syrialaw as psl
+    create_tables()
+    conn = get_connection()
+    rep = psl.harvest(conn, start_page=args.start_page, max_pages=args.pages, dry_run=args.dry,
+                      stop_when_seen=not args.no_stop)
+    print("اجتهادات syria-law:", rep)
+    conn.close()
+    return 0
+
+
 def cmd_precedents(args) -> int:
     """ف٣: جمع الاجتهادات من mohamah.net إلى الجداول الجديدة (pending)."""
     from database import create_tables, get_connection
@@ -1308,6 +1321,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("article-links", help="A-4: تقرير التعديلات على مستوى المادة")
     sp.add_argument("--out", metavar="FILE")
     sp.set_defaults(fn=cmd_article_links)
+
+    sp = sub.add_parser("precedents-syrialaw", help="ف٤: اجتهادات syria-law.com عبر REST → pending")
+    sp.add_argument("--start-page", type=int, default=1)
+    sp.add_argument("--pages", type=int, help="عدد الصفحات (100 منشور/صفحة)")
+    sp.add_argument("--no-stop", action="store_true", help="لا تتوقف عند صفحة مُدخلة بالكامل")
+    sp.add_argument("--dry", action="store_true")
+    sp.set_defaults(fn=cmd_precedents_syrialaw)
 
     sp = sub.add_parser("syrialaw", help="ف٤: استيراد قوانين syria-law.com عبر واجهة REST (193 قانوناً + 211 خاصاً)")
     sp.add_argument("--type", choices=("laws", "splaws"), default="laws")

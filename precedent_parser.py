@@ -74,10 +74,12 @@ _MUKHASAMA_RE = re.compile(r"مخاصمة")
 # أرقام
 _NUM = r"(?P<{n}>\d{{1,6}})"
 _YR = r"(?P<{n}>\d{{2,4}})"
-_DEC_RE = re.compile(rf"(?:القرار\s+رقم|قرار\s*:?|القرار)\s*/?\s*{_NUM.format(n='dn')}\s*/?\s*(?:{_SEP}|لعام|لسنة|/)?\s*{_YR.format(n='dy')}?(?!\d)")
+_DEC_RE = re.compile(rf"(?:القرار\s+رقم|قرار\s*:?|القرار|قرر|قرار\s+(?:جنحي|جنائي|مدني|شرعي|عسكري)\s+(?:رقم\s+)?)\s*/?\s*{_NUM.format(n='dn')}\s*/?\s*(?:{_SEP}|لعام|لسنة|/)?\s*{_YR.format(n='dy')}?(?!\d)")
+# «نقض سوري رقم 483 أساس 486» (سجلات النقض) — الرقم قبل «أساس» هو رقم القرار
+_DEC_BEFORE_BASIS_RE = re.compile(rf"رقم\s+{_NUM.format(n='dn')}\s+اساس")
 _BASIS_RE = re.compile(rf"(?:القضية\s*:?\s*)?(?:{_NUM.format(n='bn0')}\s+)?(?:رقم\s+)?اساس\s*:?\s*(?:{_NUM.format(n='bn')}|بدون)?\s*(?:{_SEP}|لعام|لسنة)?\s*{_YR.format(n='by')}?(?!\d)")
 _APPEAL_RE = re.compile(rf"في\s+الطعن\s*/?\s*{_NUM.format(n='an')}\s*/?\s*(?:لعام|لسنة)?\s*{_YR.format(n='ay')}?(?!\d)")
-_DATE_RE = re.compile(rf"(?:ب?تاريخ|المؤرخ\s+في)\s*:?\s*(?P<d>\d{{1,2}}){_SEP}(?P<m>\d{{1,2}}){_SEP}(?P<y>\d{{4}})")
+_DATE_RE = re.compile(rf"(?:ب?تاريخ|المؤرخ\s+في)\s*:?\s*(?P<d>\d{{1,2}}){_SEP}(?P<m>\d{{1,2}}){_SEP}(?P<y>\d{{3,4}})(?!\d)")
 _BARE_DATE_RE = re.compile(rf"(?<!\d)(?P<d>\d{{1,2}}){_SEP}(?P<m>\d{{1,2}}){_SEP}(?P<y>\d{{4}})(?!\d)")
 
 # الإسناد
@@ -87,6 +89,9 @@ _PUBS = [
     ("سجلات النقض", re.compile(r"سجلات\s+(?:محكمة\s+)?النقض")),
     ("مجموعة المبادئ الإدارية", re.compile(r"مجموعة\s+المبادئ\s+القانونية")),
     ("عطري", re.compile(r"عطري")),
+    ("كيلاني", re.compile(r"كيلاني")),
+    ("سنان", re.compile(r"عبد\s+الناصر\s+سنان|جرائم\s+الامن\s+الاقتصادي")),
+    ("طعمة", re.compile(r"شفيق\s+طعمة")),
     ("دركزلي", re.compile(r"دركزلي")),
     ("حمورابي", re.compile(r"حمورابي")),
     ("مجموعة الاجتهادات الجزائية", re.compile(r"مجموعة\s+الاجتهادات\s+الجزائية")),
@@ -161,6 +166,8 @@ def _year(v: str | None) -> int | None:
 
 def _iso(d: str, m: str, y: str) -> str | None:
     dd, mm, yy = int(d), int(m), int(y)
+    if 900 <= yy <= 999:   # ترميز كيلاني «965» = 1965
+        yy += 1000
     if not (1 <= dd <= 31 and 1 <= mm <= 12 and 1920 <= yy <= 2100):
         return None
     return f"{yy:04d}-{mm:02d}-{dd:02d}"
@@ -182,6 +189,11 @@ def parse_citation(raw: str) -> Citation:
         c.court = "هيئة_عامة_نقض"
     elif _NAQD_RE.search(t) or re.search(r"اساس", t):
         c.court = "نقض"
+    elif re.search(r"^\(?\s*سورية\s+قرار\s+(?:جنحي|جنائي|مدني|شرعي)", t):
+        # موسوعة كيلاني: «سورية قرار جنحي 322 تاريخ … قق 1273» — قرارات النقض السورية
+        # بترميز الموسوعة؛ نُثبت الجهة مع تحذير حتى يراجعها المالك.
+        c.court = "نقض"
+        c.warnings.append("court_inferred_kilani")
 
     # الغرفة / نوع الدعوى
     orig = to_western_digits(raw)
@@ -213,6 +225,10 @@ def parse_citation(raw: str) -> Citation:
     if m:
         c.decision_number = m.group("dn")
         c.decision_year = _year(m.group("dy"))
+    else:
+        m = _DEC_BEFORE_BASIS_RE.search(t)
+        if m:
+            c.decision_number = m.group("dn")
     m = _BASIS_RE.search(t)
     if m:
         c.basis_number = m.group("bn") or m.group("bn0")
