@@ -76,7 +76,7 @@ _NUM = r"(?P<{n}>\d{{1,6}})"
 _YR = r"(?P<{n}>\d{{2,4}})"
 _DEC_RE = re.compile(rf"(?:(?:ال)?قرار\s+(?:جنحي|جنائي|مدني|شرعي|عسكري)\s+(?:رقم\s+)?|(?:ال)?قرار\s+رقم|قرار\s*:?|القرار|قرر)\s*/?\s*{_NUM.format(n='dn')}\s*/?\s*(?:{_SEP}|لعام|لسنة|/)?\s*{_YR.format(n='dy')}?(?!\d)")
 # «نقض سوري رقم 483 أساس 486» (سجلات النقض) — الرقم قبل «أساس» هو رقم القرار
-_DEC_BEFORE_BASIS_RE = re.compile(rf"رقم\s+{_NUM.format(n='dn')}\s+اساس")
+_DEC_BEFORE_BASIS_RE = re.compile(rf"(?:رقم|نقض(?:\s+(?:مدني|جزائي|شرعي|جنحي|جنائي|تجاري|عمالي|ايجاري))?(?:\s+سوري)?)\s+{_NUM.format(n='dn')}\s+(?:رقم\s+)?اساس")
 _BASIS_RE = re.compile(rf"(?:القضية\s*:?\s*)?(?:{_NUM.format(n='bn0')}\s+)?(?:رقم\s+)?اساس\s*:?\s*/?\s*(?:{_NUM.format(n='bn')}|بدون)?\s*(?:{_SEP}|لعام|لسنة)?\s*{_YR.format(n='by')}?(?!\d)")
 _APPEAL_RE = re.compile(rf"في\s+الطعن\s*/?\s*{_NUM.format(n='an')}\s*/?\s*(?:لعام|لسنة)?\s*{_YR.format(n='ay')}?(?!\d)")
 _DATE_RE = re.compile(rf"(?:ب?تاريخ|المؤرخ\s+في)\s*:?\s*(?P<d>\d{{1,2}}){_SEP}(?P<m>\d{{1,2}}){_SEP}(?P<y>\d{{3,4}})(?!\d)")
@@ -342,6 +342,13 @@ def split_blocks(text: str) -> list[str]:
     return [orig[a:b].strip() for a, b in _block_spans(_norm(text))]
 
 
+_PAREN_CIT_RE = re.compile(r"\((?:نقض|قرار|هيئة|محكمة|ادارية|إدارية)[^()]{0,60}?\n[^()]{0,200}\)")
+
+
+def _join_paren_lines(text: str) -> str:
+    return _PAREN_CIT_RE.sub(lambda m: m.group(0).replace("\n", " "), text)
+
+
 def parse_text(text: str, min_confidence: float = 0.4) -> list[Citation]:
     """نقطة الدخول: نص صفحة ⇒ استشهادات بمبادئها.
 
@@ -349,6 +356,9 @@ def parse_text(text: str, min_confidence: float = 0.4) -> list[Citation]:
     - الشكل 2/3/7: المبدأ = النص الذي **يسبق** الاستشهاد إن كان بين قوسين مربعين
       أو الفقرة السابقة القصيرة (≤ 700 حرف) — أو الذي يليه إن بدأ الاستشهاد المقطع.
     """
+    # أسطر مكسورة داخل قوس الإسناد «(نقض مدني سوري\n247 أساس …)» (مدوّنات بلوغر) —
+    # تُستبدل بمسافات (حافظ للطول) حتى يلتقطها المحلل كاستشهاد واحد
+    text = _join_paren_lines(text or "")
     orig = to_western_digits(text or "")
     t = _norm(text)
     assert len(t) == len(orig)
@@ -415,7 +425,12 @@ def _principle_before(prev: str) -> str | None:
     br = re.findall(r"\[([^\[\]]{20,1200})\]", prev)
     if br:
         return " ".join(x.strip() for x in br[-3:])
-    para = re.split(r"\n\s*\n|\n", prev)[-1].strip()
+    # الفقرة الأخيرة (فاصل سطر فارغ)؛ الأسطر الملفوفة داخلها تُضم — وإن طالت
+    # (> 700) نعود للسطر الأخير وحده (سلوك mohamah السابق)
+    para = re.split(r"\n\s*\n", prev)[-1].strip()
+    para = re.sub(r"\s*\n\s*", " ", para)
+    if not (20 <= len(para) <= 700):
+        para = re.split(r"\n\s*\n|\n", prev)[-1].strip()
     if 20 <= len(para) <= 700:
         return para
     return None

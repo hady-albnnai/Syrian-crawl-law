@@ -39,3 +39,13 @@ def test_harvest_writes_pending(tmp_path, monkeypatch):
     assert n == 2
     st2 = pw.harvest(conn, "syrian-arbitration.com", http_get=http_get)
     assert st2["seen"] == 2 and st2["written"] == 0
+
+
+def test_blogger_wrapped_citation_and_paragraph_principle():
+    from precedent_parser import parse_text
+    text = ("319 ـ اكراه ـ بطلان العقد:\n\nإن الإكراه لا يجعل العقود المبرمة تحت سلطانه باطلة بطلاناً مطلقاً\n"
+            "ولا يؤدي إلى انعدامها. لذلك فإن الادعاء بإبطال هذا العقد يجب أن يتم خلال سنة.\n\n"
+            "\xa0(نقض مدني سوري\n247 أساس 481 تاريخ 27/3/1961 مجموعة المبادئ القانونية ص163)\n\n262 ـ اكراه\n")
+    cs = [c for c in parse_text(text) if c.is_exportable()]
+    assert [c.identity_key() for c in cs] == ["نقض|247|1961|481"]
+    assert cs[0].principle_text.startswith("إن الإكراه") and "خلال سنة" in cs[0].principle_text

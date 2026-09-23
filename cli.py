@@ -1050,6 +1050,35 @@ def cmd_precedents_syrialaw(args) -> int:
     return 0
 
 
+def cmd_precedents_page(args) -> int:
+    """ف٤: صفحة/صفحات مفردة يجمعها المالك (مدوّنات، منتديات) → المحلل العام → pending."""
+    from urllib.parse import urlparse
+    from database import create_tables, get_connection
+    from fetcher import fetch
+    import precedent_source as ps
+    create_tables()
+    conn = get_connection()
+    total = {"pages": 0, "citations": 0, "written": 0, "unsourced": 0}
+    for url in args.urls:
+        if ps.already_ingested(conn, url) and not args.force:
+            log.info(f"   ⏭ مُدخلة سابقاً: {url}")
+            continue
+        r = fetch(url)
+        html_text = r["html"] if r.get("ok") else None
+        if not html_text:
+            log.info(f"   ⚠️ فشل الجلب: {url}")
+            continue
+        site = urlparse(url).netloc.lower().replace("www.", "")
+        st = ps.ingest_page(conn, url, html_text, source_site=site)
+        total["pages"] += 1
+        for k in ("citations", "written", "unsourced"):
+            total[k] += st[k]
+        log.info(f"   {site}: استشهادات {st['citations']} | كُتب {st['written']} | بلا هوية {st['unsourced']}")
+    print("اجتهادات الصفحات:", total)
+    conn.close()
+    return 0
+
+
 def cmd_precedents_wp(args) -> int:
     """ف٤: اجتهادات من موقع ووردبريس (العنوان = إسناد، المتن = مبدأ) → pending."""
     from database import create_tables, get_connection
@@ -1400,6 +1429,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-stop", action="store_true", help="لا تتوقف عند صفحة مُدخلة بالكامل")
     sp.add_argument("--dry", action="store_true")
     sp.set_defaults(fn=cmd_precedents_syrialaw)
+
+    sp = sub.add_parser("precedents-page", help="ف٤: صفحات مفردة (مدوّنة/منتدى) → المحلل العام → pending")
+    sp.add_argument("urls", nargs="+")
+    sp.add_argument("--force", action="store_true", help="أعد الإدخال ولو سبق")
+    sp.set_defaults(fn=cmd_precedents_page)
 
     sp = sub.add_parser("precedents-wp", help="ف٤: اجتهادات موقع ووردبريس عبر REST (مثل syrian-arbitration.com) → pending")
     sp.add_argument("site", help="النطاق أو الرابط")
