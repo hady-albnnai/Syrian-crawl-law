@@ -559,7 +559,7 @@ def cmd_sources(args):
             log.info(f"اعتُمد المصدر {sid} بقرار المالك")
     elif args.action == "reactivate":
         # مصدر «مستنفد» (3 دورات فارغة) يعود للبذر — لصفحات جديدة نُشرت لاحقاً.
-        n = conn.execute("UPDATE source_performance SET consecutive_empty=0, learned_status=NULL "
+        n = conn.execute("UPDATE source_performance SET consecutive_empty_runs=0, learned_status='active' "
                          "WHERE learned_status='exhausted'").rowcount
         conn.commit()
         log.info(f"أُعيد تفعيل {n} مصدر مستنفد")
@@ -1050,6 +1050,18 @@ def cmd_precedents_syrialaw(args) -> int:
     return 0
 
 
+def cmd_precedents_wp(args) -> int:
+    """ف٤: اجتهادات من موقع ووردبريس (العنوان = إسناد، المتن = مبدأ) → pending."""
+    from database import create_tables, get_connection
+    import precedent_wp as pw
+    create_tables()
+    conn = get_connection()
+    rep = pw.harvest(conn, args.site, category=args.category, max_pages=args.pages, dry_run=args.dry)
+    print("اجتهادات ووردبريس:", rep)
+    conn.close()
+    return 0
+
+
 def cmd_precedents(args) -> int:
     """ف٣: جمع الاجتهادات من mohamah.net إلى الجداول الجديدة (pending)."""
     from database import create_tables, get_connection
@@ -1388,6 +1400,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-stop", action="store_true", help="لا تتوقف عند صفحة مُدخلة بالكامل")
     sp.add_argument("--dry", action="store_true")
     sp.set_defaults(fn=cmd_precedents_syrialaw)
+
+    sp = sub.add_parser("precedents-wp", help="ف٤: اجتهادات موقع ووردبريس عبر REST (مثل syrian-arbitration.com) → pending")
+    sp.add_argument("site", help="النطاق أو الرابط")
+    sp.add_argument("--category", type=int, help="معرّف التصنيف (يُستنتج للمواقع المعروفة)")
+    sp.add_argument("--pages", type=int)
+    sp.add_argument("--dry", action="store_true")
+    sp.set_defaults(fn=cmd_precedents_wp)
 
     sp = sub.add_parser("syrialaw", help="ف٤: استيراد قوانين syria-law.com عبر واجهة REST (193 قانوناً + 211 خاصاً)")
     sp.add_argument("--type", choices=("laws", "splaws"), default="laws")

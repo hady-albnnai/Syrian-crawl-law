@@ -77,9 +77,11 @@ _YR = r"(?P<{n}>\d{{2,4}})"
 _DEC_RE = re.compile(rf"(?:(?:ال)?قرار\s+(?:جنحي|جنائي|مدني|شرعي|عسكري)\s+(?:رقم\s+)?|(?:ال)?قرار\s+رقم|قرار\s*:?|القرار|قرر)\s*/?\s*{_NUM.format(n='dn')}\s*/?\s*(?:{_SEP}|لعام|لسنة|/)?\s*{_YR.format(n='dy')}?(?!\d)")
 # «نقض سوري رقم 483 أساس 486» (سجلات النقض) — الرقم قبل «أساس» هو رقم القرار
 _DEC_BEFORE_BASIS_RE = re.compile(rf"رقم\s+{_NUM.format(n='dn')}\s+اساس")
-_BASIS_RE = re.compile(rf"(?:القضية\s*:?\s*)?(?:{_NUM.format(n='bn0')}\s+)?(?:رقم\s+)?اساس\s*:?\s*(?:{_NUM.format(n='bn')}|بدون)?\s*(?:{_SEP}|لعام|لسنة)?\s*{_YR.format(n='by')}?(?!\d)")
+_BASIS_RE = re.compile(rf"(?:القضية\s*:?\s*)?(?:{_NUM.format(n='bn0')}\s+)?(?:رقم\s+)?اساس\s*:?\s*/?\s*(?:{_NUM.format(n='bn')}|بدون)?\s*(?:{_SEP}|لعام|لسنة)?\s*{_YR.format(n='by')}?(?!\d)")
 _APPEAL_RE = re.compile(rf"في\s+الطعن\s*/?\s*{_NUM.format(n='an')}\s*/?\s*(?:لعام|لسنة)?\s*{_YR.format(n='ay')}?(?!\d)")
 _DATE_RE = re.compile(rf"(?:ب?تاريخ|المؤرخ\s+في)\s*:?\s*(?P<d>\d{{1,2}}){_SEP}(?P<m>\d{{1,2}}){_SEP}(?P<y>\d{{3,4}})(?!\d)")
+# تاريخ بترتيب سنة/شهر/يوم («تاريخ 2025/07/22» — مجلة التحكيم السورية)
+_DATE_YMD_RE = re.compile(rf"(?:ب?تاريخ|المؤرخ\s+في)\s*:?\s*(?P<y>\d{{4}}){_SEP}(?P<m>\d{{1,2}}){_SEP}(?P<d>\d{{1,2}})(?!\d)")
 _BARE_DATE_RE = re.compile(rf"(?<!\d)(?P<d>\d{{1,2}}){_SEP}(?P<m>\d{{1,2}}){_SEP}(?P<y>\d{{4}})(?!\d)")
 
 # الإسناد
@@ -239,7 +241,7 @@ def parse_citation(raw: str) -> Citation:
     if m:
         c.appeal_number = m.group("an")
         c.decision_year = c.decision_year or _year(m.group("ay"))
-    m = _DATE_RE.search(t)
+    m = _DATE_RE.search(t) or _DATE_YMD_RE.search(t)
     if m:
         c.decision_date = _iso(m.group("d"), m.group("m"), m.group("y"))
     if c.decision_date and c.decision_year and c.decision_year != int(c.decision_date[:4]):
