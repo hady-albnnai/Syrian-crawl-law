@@ -1130,6 +1130,18 @@ def cmd_precedents(args) -> int:
     return 0
 
 
+def cmd_precedents_homsbar(args) -> int:
+    """ف٥: اجتهادات فرع نقابة حمص — مقالات `juris_article` ومرفقاتها (وورد/مضغوطات) → pending."""
+    from database import create_tables, get_connection
+    import homsbar_source as hs
+    create_tables()
+    conn = get_connection()
+    rep = hs.harvest(conn, dry_run=args.dry, max_pages=args.pages)
+    print("اجتهادات حمص:", rep)
+    conn.close()
+    return 0
+
+
 def cmd_precedents_bar(args) -> int:
     """ف٣: منتدى محامي سوريا (damascusbar) عبر أرشيف Wayback — قابل للاستئناف."""
     import requests
@@ -1494,6 +1506,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry", action="store_true", help="جلب وتحليل بلا كتابة")
     sp.add_argument("--refresh", action="store_true", help="إعادة بناء قائمة الخيوط من CDX")
     sp.set_defaults(fn=cmd_precedents_bar)
+
+    sp = sub.add_parser("precedents-homsbar", help="ف٥: اجتهادات فرع نقابة حمص — خريطة الموقع + مرفقات وورد/مضغوطات → pending")
+    sp.add_argument("--pages", type=int, default=None, help="حد أقصى لمقالات الاجتهاد")
+    sp.add_argument("--dry", action="store_true", help="تنزيل وتحليل بلا كتابة")
+    sp.set_defaults(fn=cmd_precedents_homsbar)
 
     sp = sub.add_parser("precedents-export", help="ف٣: حزمة الاجتهادات لميزان (export/precedents)")
     sp.add_argument("--out", default="export/precedents")
