@@ -125,3 +125,49 @@ def test_harvest_file_writes_and_resumes(tmp_path, monkeypatch):
     st2 = hb.harvest_file(conn, str(f))
     assert st2["seen"] == 1 and st2["written"] == 0
     conn.close()
+
+
+def test_precedents_file_dir_expands_each_file_with_own_identity(tmp_path, monkeypatch):
+    """مجلد بملفات كثيرة (مجموعة الألوسي): كل ملف بهوية «الرابط#الاسم» مستقلة."""
+    import cli
+    import config
+    import database
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+    create_tables()
+    d = tmp_path / "مجموعة جار الله الألوسي"
+    d.mkdir()
+    (d / "الجزء الأول هيئة عامة.docx").write_bytes(_docx(SY_LINES))
+    (d / "الجزء الثاني هيئة عامة.docx").write_bytes(_docx(SY_LINES))
+    ns = cli.build_parser().parse_args(
+        ["precedents-file", str(d), "--source-url", "https://drive.google.com/file/d/XYZ/view"])
+    assert cli.cmd_precedents_file(ns) == 0
+    conn = get_connection()
+    urls = {r[0] for r in conn.execute("SELECT DISTINCT source_url FROM citations")}
+    assert urls == {"https://drive.google.com/file/d/XYZ/view#الجزء الأول هيئة عامة.docx",
+                    "https://drive.google.com/file/d/XYZ/view#الجزء الثاني هيئة عامة.docx"}
+    # القرارات لا تتكرر وإن تكررت مصادرها (الاستشهادان يحويان الهوية نفسها)
+    assert conn.execute("SELECT count(*) FROM decisions").fetchone()[0] == 3
+    # استئناف: التشغيل الثاني يرى الملفين مُدخلين ولا يكتب
+    st2 = cli.cmd_precedents_file(ns)
+    assert st2 == 0
+    conn.close()
+
+
+def test_precedents_file_single_file_dir_keeps_clean_url(tmp_path, monkeypatch):
+    import cli
+    import config
+    import database
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+    create_tables()
+    d = tmp_path / "ملف واحد"
+    d.mkdir()
+    (d / "هيئة عامة 2003.docx").write_bytes(_docx(SY_LINES))
+    ns = cli.build_parser().parse_args(
+        ["precedents-file", str(d), "--source-url", "https://drive.google.com/file/d/ABC/view"])
+    assert cli.cmd_precedents_file(ns) == 0
+    conn = get_connection()
+    urls = {r[0] for r in conn.execute("SELECT DISTINCT source_url FROM citations")}
+    assert urls == {"https://drive.google.com/file/d/ABC/view"}   # بلا لواحق
+    conn.close()

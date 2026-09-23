@@ -1160,18 +1160,37 @@ def cmd_precedents_pdf(args) -> int:
 
 
 def cmd_precedents_file(args) -> int:
-    """ف٥: ملفات محلية نزّلها المالك بنفسه (مرفقات درايف وما شابه) → المحلل → pending."""
-    from database import create_tables, get_connection
+    """ف٥: ملفات محلية نزّلها المالك بنفسه (مرفقات درايف وما شابه) → المحلل → pending.
+
+    يقبل مجلداً أيضاً: يُحصد كل ما فيه ملفاً ملفاً، ولكل ملف هوية مستقلة
+    «رابط الأصل#اسم الملف» حتى لا يطغى الاستئناف بعضها على بعض."""
+    from pathlib import Path
+
     import homsbar_source as hs
+    from database import create_tables, get_connection
     create_tables()
     conn = get_connection()
-    total = {"files": 0, "citations": 0, "written": 0, "unsourced": 0, "skipped_low": 0, "seen": 0}
+    jobs: list[tuple[str, str | None]] = []
     for path in args.paths:
-        rep = hs.harvest_file(conn, path, source_url=args.source_url or None, dry_run=args.dry)
+        p = Path(path)
+        if p.is_dir():
+            files = sorted(f for f in p.rglob("*") if f.is_file())
+            if not files:
+                print(f"   {path}: مجلد فارغ — لا شيء يُحصد")
+                continue
+            for f in files:
+                surl = (f"{args.source_url}#{f.name}"
+                        if args.source_url and len(files) > 1 else args.source_url or None)
+                jobs.append((str(f), surl))
+        else:
+            jobs.append((path, args.source_url or None))
+    total = {"files": 0, "citations": 0, "written": 0, "unsourced": 0, "skipped_low": 0, "seen": 0}
+    for path, surl in jobs:
+        rep = hs.harvest_file(conn, path, source_url=surl, dry_run=args.dry)
         total["files"] += 1
         for k in ("citations", "written", "unsourced", "skipped_low", "seen"):
             total[k] += rep[k]
-        print(f"   {path}: {rep}")
+        print(f"   {Path(path).name}: {rep}")
     print("اجتهادات الملفات المحلية:", total)
     conn.close()
     return 0
