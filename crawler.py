@@ -315,10 +315,10 @@ def stop_event_set(ev) -> bool:
     return bool(ev is not None and getattr(ev, "is_set", lambda: False)())
 
 
-def start_crawling(max_pages=40, dry_run=False, stop_event=None):
+def start_crawling(max_pages=40, dry_run=False, stop_event=None, domain: str | None = None):
     log.info("=" * 100)
     log.info(f"🚀 الزاحف القابل للاستئناف v2.4 — طابور دائم + تقرير دورة")
-    log.info(f"الحد الأقصى: {max_pages} | الوضع: {'تجريبي' if dry_run else 'فعلي'} | "
+    log.info((f"عامل نطاق: {domain} | " if domain else "") + f"الحد الأقصى: {max_pages} | الوضع: {'تجريبي' if dry_run else 'فعلي'} | "
              f"{datetime.now():%Y-%m-%d %H:%M:%S}")
     log.info("-" * 100)
 
@@ -378,9 +378,9 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None):
         if stop_event is not None and stop_event.is_set():
             log.info("⏹ إيقاف تعاوني طُلب — تُغلق الدورة بأمان (الطابور دائم)")
             break
-        task = taskqueue.claim_next(conn)
+        task = taskqueue.claim_next(conn, domain)
         if task is None:
-            log.info("📭 الطابور فارغ — لا عمل متبقٍ")
+            log.info("📭 الطابور فارغ — لا عمل متبقٍ" + (f" لنطاق {domain}" if domain else ""))
             break
         stats["pages"] += 1
         log.info(f"[{stats['pages']}/{max_pages}] {'📂' if task['kind']=='section' else '📄'} "

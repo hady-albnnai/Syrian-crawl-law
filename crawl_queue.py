@@ -26,18 +26,43 @@ def enqueue(conn, url: str, section: str, kind: str) -> bool:
     return True
 
 
-def claim_next(conn):
-    """أقدم مهمة queued → running. يعيد dict أو None."""
+def claim_next(conn, domain: str | None = None):
+    """أقدم مهمة queued → running. يعيد dict أو None.
+
+    domain: عامل متوازٍ يأخذ مهام نطاقه فقط (ف٤). الحجز ذرّي: UPDATE مشروط
+    بـstatus='queued' فلا يأخذ عاملان المهمة نفسها ولو تزامنا."""
     cur = conn.cursor()
-    cur.execute("SELECT id, url, section, kind, attempts FROM crawl_tasks "
-                "WHERE status = 'queued' ORDER BY id LIMIT 1")
-    row = cur.fetchone()
-    if not row:
-        return None
-    cur.execute("UPDATE crawl_tasks SET status='running', updated_at=? WHERE id=?",
-                (datetime.now().isoformat(), row["id"]))
-    conn.commit()
-    return dict(row)
+    for _ in range(5):
+        if domain:
+            cur.execute("SELECT id, url, section, kind, attempts FROM crawl_tasks "
+                        "WHERE status = 'queued' AND (url LIKE ? OR url LIKE ?) ORDER BY id LIMIT 1",
+                        (f"%://{domain}/%", f"%://www.{domain}/%"))
+        else:
+            cur.execute("SELECT id, url, section, kind, attempts FROM crawl_tasks "
+                        "WHERE status = 'queued' ORDER BY id LIMIT 1")
+        row = cur.fetchone()
+        if not row:
+            return None
+        cur.execute("UPDATE crawl_tasks SET status='running', updated_at=? "
+                    "WHERE id=? AND status='queued'",
+                    (datetime.now().isoformat(), row["id"]))
+        conn.commit()
+        if cur.rowcount == 1:
+            return dict(row)
+    return None
+
+
+def queued_domains(conn) -> list[tuple[str, int]]:
+    """[(نطاق, عدد المهام المنتظرة)] تنازلياً — لتوزيع العمّال."""
+    from urllib.parse import urlparse
+    counts = {}
+    for (url,) in conn.execute("SELECT url FROM crawl_tasks WHERE status='queued'"):
+        d = (urlparse(url).netloc or "").lower()
+        if d.startswith("www."):
+            d = d[4:]
+        if d:
+            counts[d] = counts.get(d, 0) + 1
+    return sorted(counts.items(), key=lambda kv: -kv[1])
 
 
 def mark(conn, task_id: int, status: str, error: str = None,

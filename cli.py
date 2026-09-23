@@ -352,7 +352,44 @@ def cmd_crawl(args):
     if args.mode == "full" and not args.yes:
         log.error("الوضع full يتطلب --yes صراحة (الخيار الآمن افتراضياً)")
         return 2
-    start_crawling(max_pages=args.pages, dry_run=(args.mode == "dry"))
+    start_crawling(max_pages=args.pages, dry_run=(args.mode == "dry"), domain=args.domain)
+    return 0
+
+
+def cmd_parallel(args):
+    """ف٤: عامل لكل نطاق بنافذة مستقلة — موقع واحد لا يُطرق إلا من عامل واحد."""
+    import subprocess
+    import sys
+    from database import create_tables, get_connection
+    import crawl_queue as taskqueue
+    create_tables()
+    conn = get_connection()
+    # بذر المصادر المعتمدة أولاً (كما تفعل الدورة) ليكون التوزيع على كل النطاقات
+    try:
+        import learning
+        for src in learning.prioritized_active_sources(conn):
+            taskqueue.enqueue(conn, src["base_url"], src["name"] or src["base_url"], "section")
+    except Exception as exc:
+        log.info(f"تخطي بذر المصادر المعتمدة: {exc}")
+    doms = taskqueue.queued_domains(conn)
+    conn.close()
+    if not doms:
+        log.info("📭 لا مهام منتظرة — لا شيء يُوزَّع")
+        return 0
+    doms = doms[: args.workers]
+    log.info("توزيع العمّال:")
+    for d, n in doms:
+        log.info(f"   {d}: {n} مهمة")
+    if args.list:
+        return 0
+    for d, _ in doms:
+        cmd = [sys.executable, "-m", "cli", "crawl", "--mode", "full", "--yes",
+               "--pages", str(args.pages), "--domain", d]
+        if sys.platform.startswith("win"):
+            subprocess.Popen(["cmd", "/c", "start", f"crawl {d}", "cmd", "/k"] + cmd)
+        else:
+            subprocess.Popen(cmd)
+        log.info(f"🚀 أُطلق عامل {d}")
     return 0
 
 
@@ -1161,6 +1198,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("crawl", help="تشغيل الزحف")
     sp.add_argument("--pages", type=int, default=10)
     sp.add_argument("--mode", choices=("dry", "limited", "full"), default="dry")
+    sp.add_argument("--domain", help="عامل متوازٍ: مهام هذا النطاق فقط")
     sp.add_argument("--yes", action="store_true",
                     help="تأكيد صريح للوضع full")
     sp.set_defaults(fn=cmd_crawl)
@@ -1321,6 +1359,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("article-links", help="A-4: تقرير التعديلات على مستوى المادة")
     sp.add_argument("--out", metavar="FILE")
     sp.set_defaults(fn=cmd_article_links)
+
+    sp = sub.add_parser("parallel", help="ف٤: إطلاق عامل زحف لكل نطاق بنافذة مستقلة")
+    sp.add_argument("--workers", type=int, default=4, help="أقصى عدد نوافذ (نطاقات)")
+    sp.add_argument("--pages", type=int, default=400, help="سقف الصفحات لكل عامل")
+    sp.add_argument("--list", action="store_true", help="عرض التوزيع فقط")
+    sp.set_defaults(fn=cmd_parallel)
 
     sp = sub.add_parser("precedents-syrialaw", help="ف٤: اجتهادات syria-law.com عبر REST → pending")
     sp.add_argument("--start-page", type=int, default=1)

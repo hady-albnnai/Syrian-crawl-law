@@ -24,8 +24,15 @@ def migrations_latest() -> int:
 
 def get_connection():
     """إرجاع اتصال بقاعدة البيانات"""
-    conn = sqlite3.connect(DB_PATH)
+    # ف٤ (2026-09-23): عمّال متوازون (نافذة لكل نطاق) يكتبون بنفس القاعدة —
+    # WAL يسمح بقارئ مع كاتب، وbusy_timeout ينتظر الكاتب الآخر بدل «database is locked».
+    conn = sqlite3.connect(DB_PATH, timeout=60)
     conn.row_factory = sqlite3.Row  # لإرجاع النتائج كـ dictionary
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 60000")
+    except sqlite3.DatabaseError:
+        pass
     # تفعيل القيود الخارجية (دفعة P0): sqlite يعطّلها افتراضياً، وبدونها كانت
     # المواد اليتيمة (doc_id خاطئ) تمر بصمت عند تجاهل INSERT OR IGNORE.
     conn.execute("PRAGMA foreign_keys = ON")
