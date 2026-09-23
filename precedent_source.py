@@ -46,6 +46,18 @@ def _quote_url(u: str) -> str:
 _URL_SY_IMPLICIT = re.compile(r"الهيئة-العامة-لمحكمة-النقض|المحكمة-الإدارية-العليا|المحكمة-الادارية-العليا")
 
 
+# الوضع الواسع (--broad): كل صفحة اجتهادية العنوان غير أجنبية — المحلل يحسم (≥3 بهوية)
+_URL_BROAD = re.compile(r"اجتهاد|نقض|هيئة-العامة|مبادئ|أحكام|احكام|قرارات")
+_URL_FOREIGN = re.compile(r"مصر|لبنان|أردن|الاردن|مغرب|كويت|إمارات|امارات|عمان|فلسطين|عراق|جزائر|تونس|سعود|بحرين|قطر|ليبي|يمن|سودان|فرنس")
+
+
+def is_broad_candidate_url(url: str) -> bool:
+    u = unquote(url)
+    if _URL_EXCLUDE.search(u) or _URL_FOREIGN.search(u):
+        return False
+    return bool(_URL_BROAD.search(u))
+
+
 def is_precedent_url(url: str) -> bool:
     u = unquote(url)
     if _URL_EXCLUDE.search(u):
@@ -53,8 +65,9 @@ def is_precedent_url(url: str) -> bool:
     return bool((_URL_SY.search(u) and _URL_IJ.search(u)) or (_URL_SY_IMPLICIT.search(u) and "مصر" not in u))
 
 
-def sitemap_precedent_urls(index_xml: str, http_get) -> list[str]:
+def sitemap_precedent_urls(index_xml: str, http_get, broad: bool = False) -> list[str]:
     """يقرأ فهرس الخرائط ثم كل خريطة مقالات ويعيد روابط الاجتهاد السوري (بلا تكرار)."""
+    pred = is_broad_candidate_url if broad else is_precedent_url
     out, seen = [], set()
     for sm in _LOC_RE.findall(index_xml or ""):
         if "post-sitemap" not in sm:
@@ -63,7 +76,7 @@ def sitemap_precedent_urls(index_xml: str, http_get) -> list[str]:
         if not xml:
             continue
         for loc in _LOC_RE.findall(xml):
-            if is_precedent_url(loc):
+            if pred(loc):
                 q = _quote_url(loc)
                 if q not in seen:
                     seen.add(q)
@@ -273,10 +286,12 @@ def already_ingested(conn, url: str) -> bool:
 
 
 def harvest_mohamah(conn, http_get, limit: int | None = None, dry_run: bool = False,
-                    skip_done: bool = True) -> dict:
-    """الدورة الكاملة. `http_get(url) -> str|None` يُحقن (fetcher.fetch في الإنتاج)."""
+                    skip_done: bool = True, broad: bool = False, min_hits: int = 3) -> dict:
+    """الدورة الكاملة. `http_get(url) -> str|None` يُحقن (fetcher.fetch في الإنتاج).
+    broad=True: مرشّح روابط واسع (~2,200 صفحة) والمحلل يحسم — صفحة بلا ≥min_hits
+    استشهاداً بهوية تُهمل ولا تُكتب."""
     idx = http_get(MOHAMAH_SITEMAP_INDEX)
-    urls = sitemap_precedent_urls(idx or "", http_get)
+    urls = sitemap_precedent_urls(idx or "", http_get, broad=broad)
     report = {"candidate_urls": len(urls), "fetched": 0, "skipped_done": 0, "failed": 0,
               "citations": 0, "new_decisions": 0, "new_principles": 0, "unsourced": 0,
               "pages": []}
@@ -301,6 +316,11 @@ def harvest_mohamah(conn, http_get, limit: int | None = None, dry_run: bool = Fa
             report["citations"] += st["citations"]
             report["unsourced"] += st["unsourced"]
         else:
+            if broad:
+                probe = [c for c in parse_text(article_text(page)) if c.is_exportable()]
+                if len(probe) < min_hits:
+                    report["rejected_broad"] = report.get("rejected_broad", 0) + 1
+                    continue
             st = ingest_page(conn, u, page)
             for k in ("citations", "new_decisions", "new_principles", "unsourced"):
                 report[k] += st[k]

@@ -1079,6 +1079,18 @@ def cmd_precedents_page(args) -> int:
     return 0
 
 
+def cmd_precedents_blogger(args) -> int:
+    """ف٤: مدوّنة بلوغر كاملة عبر تغذية JSON (مثل bibliotdroit.com) → pending."""
+    from database import create_tables, get_connection
+    import precedent_blogger as pb
+    create_tables()
+    conn = get_connection()
+    rep = pb.harvest(conn, args.blog, dry_run=args.dry, max_posts=args.max_posts)
+    print("اجتهادات بلوغر:", rep)
+    conn.close()
+    return 0
+
+
 def cmd_precedents_wp(args) -> int:
     """ف٤: اجتهادات من موقع ووردبريس (العنوان = إسناد، المتن = مبدأ) → pending."""
     from database import create_tables, get_connection
@@ -1107,7 +1119,7 @@ def cmd_precedents(args) -> int:
         r = fetch(url)
         return r["html"] if r.get("ok") else None
 
-    rep = ps.harvest_mohamah(conn, http_get, limit=args.limit, dry_run=args.dry)
+    rep = ps.harvest_mohamah(conn, http_get, limit=args.limit, dry_run=args.dry, broad=args.broad)
     pages = rep.pop("pages")
     print("الاجتهادات (mohamah.net):", rep)
     for st in pages[-10:]:
@@ -1435,6 +1447,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="أعد الإدخال ولو سبق")
     sp.set_defaults(fn=cmd_precedents_page)
 
+    sp = sub.add_parser("precedents-blogger", help="ف٤: مدوّنة بلوغر كاملة عبر التغذية (مثل bibliotdroit.com) → pending")
+    sp.add_argument("blog", help="النطاق أو الرابط")
+    sp.add_argument("--max-posts", type=int)
+    sp.add_argument("--dry", action="store_true")
+    sp.set_defaults(fn=cmd_precedents_blogger)
+
     sp = sub.add_parser("precedents-wp", help="ف٤: اجتهادات موقع ووردبريس عبر REST (مثل syrian-arbitration.com) → pending")
     sp.add_argument("site", help="النطاق أو الرابط")
     sp.add_argument("--category", type=int, help="معرّف التصنيف (يُستنتج للمواقع المعروفة)")
@@ -1468,6 +1486,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=None, help="عدد الصفحات الجديدة كحد أقصى")
     sp.add_argument("--dry", action="store_true", help="جلب وتحليل بلا كتابة")
     sp.add_argument("--stats", action="store_true", help="أعداد الجداول فقط")
+    sp.add_argument("--broad", action="store_true", help="مرشّح روابط واسع (~2,200 صفحة) — المحلل يحسم (≥3 بهوية)")
     sp.set_defaults(fn=cmd_precedents)
 
     sp = sub.add_parser("precedents-bar", help="ف٣: منتدى محامي سوريا عبر Wayback (يُستأنف تلقائياً)")
