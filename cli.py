@@ -547,6 +547,22 @@ def cmd_sources(args):
     elif args.action in ("approve", "reject"):
         decide_source(conn, _key_of(conn, args.id), args.action == "approve")
         log.info(f"{'اعتُمد' if args.action == 'approve' else 'رُفض'} المصدر {args.id}")
+    elif args.action == "add":
+        # ف٤: تسجيل رابط جمعه المالك يدوياً — يُقيَّم بجلب واحد ثم يُعتمد إن طُلب.
+        from discovery import evaluate_candidate, register_candidate
+        ev = evaluate_candidate(args.id)
+        sid, created = register_candidate(conn, args.id, "manual", ev)
+        log.info(f"[{sid}] {'سُجّل' if created else 'موجود سابقاً'} — الحكم الآلي: {ev.verdict} | "
+                 f"مواد {ev.articles} | {ev.title[:50]}")
+        if args.approve:
+            decide_source(conn, _key_of(conn, str(sid)), True)
+            log.info(f"اعتُمد المصدر {sid} بقرار المالك")
+    elif args.action == "reactivate":
+        # مصدر «مستنفد» (3 دورات فارغة) يعود للبذر — لصفحات جديدة نُشرت لاحقاً.
+        n = conn.execute("UPDATE source_performance SET consecutive_empty=0, learned_status=NULL "
+                         "WHERE learned_status='exhausted'").rowcount
+        conn.commit()
+        log.info(f"أُعيد تفعيل {n} مصدر مستنفد")
     conn.close()
     return 0
 
@@ -1458,8 +1474,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_seeds)
 
     sp = sub.add_parser("sources", help="إدارة سجل المصادر")
-    sp.add_argument("action", choices=("list", "approve", "reject"))
-    sp.add_argument("id", nargs="?")
+    sp.add_argument("action", choices=("list", "approve", "reject", "add", "reactivate"))
+    sp.add_argument("id", nargs="?", help="معرّف المصدر — أو الرابط مع add")
+    sp.add_argument("--approve", action="store_true", help="مع add: اعتماد فوري")
     sp.set_defaults(fn=cmd_sources)
 
     sp = sub.add_parser("gaps", help="تحليل فجوات فروع القانون + استعلامات مقترحة")

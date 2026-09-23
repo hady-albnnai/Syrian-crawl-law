@@ -54,3 +54,4 @@
 - `crawl_queue.claim_next(conn, domain)`: حجز ذرّي (UPDATE مشروط بـ`status='queued'`) — اختبار بخيطين على 60 مهمة: لا مهمة مشتركة. `queued_domains` لتوزيع العمّال.
 - `cli crawl --domain X` (عامل نطاق)، `cli parallel [--workers 4] [--pages 400] [--list]`: يبذر المصادر المعتمدة ثم يفتح نافذة `cmd /k` لكل نطاق من الأكثر مهامّاً.
 - ما يبقى منفرداً: `precedents-syrialaw` و`syrialaw` (نفس نطاق syria-law — لا يُشغَّلان مع عامل نطاق syria-law في وقت واحد).
+- `cli sources add <URL> [--approve]`: تسجيل رابط جمعه المالك يدوياً (تقييم بجلب واحد) واعتماده؛ `cli sources reactivate`: إعادة المصادر «المستنفدة» للبذر (لصفحات نُشرت بعد آخر زحف). بذلك يمتلئ الطابور بنطاقات متعددة ثم `parallel` يوزّعها.
