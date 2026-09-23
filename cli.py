@@ -1130,6 +1130,19 @@ def cmd_precedents(args) -> int:
     return 0
 
 
+def cmd_precedents_pdf(args) -> int:
+    """ف٥: اجتهادات من ملف PDF محلي (أطروحات وأوراق بهوامش استشهادات) → pending."""
+    from database import create_tables, get_connection
+    import precedent_pdf as ppdf
+    create_tables()
+    conn = get_connection()
+    rep = ppdf.harvest_pdf(conn, args.path, source_url=args.source_url or None,
+                           dry_run=args.dry)
+    print("اجتهادات PDF:", rep)
+    conn.close()
+    return 0
+
+
 def cmd_precedents_homsbar(args) -> int:
     """ف٥: اجتهادات فرع نقابة حمص — مقالات `juris_article` ومرفقاتها (وورد/مضغوطات) → pending."""
     from database import create_tables, get_connection
@@ -1511,6 +1524,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--pages", type=int, default=None, help="حد أقصى لمقالات الاجتهاد")
     sp.add_argument("--dry", action="store_true", help="تنزيل وتحليل بلا كتابة")
     sp.set_defaults(fn=cmd_precedents_homsbar)
+
+    sp = sub.add_parser("precedents-pdf", help="ف٥: اجتهادات من ملف PDF محلي (أطروحات وأوراق بهوامش) → pending")
+    sp.add_argument("path", help="مسار ملف الـPDF على الجهاز")
+    sp.add_argument("--source-url", default=None, help="رابط الأصل للاستشهاد والاستئناف (وإلا فالمسار)")
+    sp.add_argument("--dry", action="store_true", help="تحليل بلا كتابة")
+    sp.set_defaults(fn=cmd_precedents_pdf)
 
     sp = sub.add_parser("precedents-export", help="ف٣: حزمة الاجتهادات لميزان (export/precedents)")
     sp.add_argument("--out", default="export/precedents")
