@@ -17,6 +17,7 @@
     python -m cli gaps                      # فجوات فروع القانون + استعلامات مقترحة
 """
 import argparse
+import os
 import shutil
 from pathlib import Path
 import sys
@@ -1159,11 +1160,70 @@ def cmd_precedents_pdf(args) -> int:
     return 0
 
 
+def _is_rar(path) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(6) == b"Rar!\x1a\x07"
+    except OSError:
+        return False
+
+
+def _find_rar_tool() -> list[str] | None:
+    """أفضل مفكّ RAR متاح: 7ز ثم ونرار ثم تار ويندوز 10+."""
+    import shutil
+    t = shutil.which("7z") or shutil.which("7zz") or shutil.which("7za")
+    if t:
+        return [t]
+    for p in (r"C:\Program Files\7-Zip\7z.exe", r"C:\Program Files (x86)\7-Zip\7z.exe"):
+        if os.path.exists(p):
+            return [p]
+    if shutil.which("unrar"):
+        return ["unrar"]
+    if shutil.which("tar"):
+        return ["tar"]
+    return None
+
+
+def _extract_rar(rar_path: str, dest: str) -> bool:
+    """يفك الأرشيف إلى `dest`. حقن الأداة يتم عبر `_find_rar_tool` للاختبار."""
+    import subprocess
+    tool = _find_rar_tool()
+    if not tool:
+        return False
+    name = os.path.basename(tool[0]).lower()
+    try:
+        if "7z" in name:
+            cmd = tool + ["x", f"-o{dest}", "-y", rar_path]
+        elif name.startswith("unrar"):
+            cmd = tool + ["x", "-o+", "-y", rar_path, dest.rstrip("/\\") + os.sep]
+        else:                                        # tar/bsdtar
+            cmd = tool + ["-xf", rar_path, "-C", dest]
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except Exception:
+        return False
+
+
+def _dir_jobs(dirpath, source_url: str | None) -> list[tuple[str, str | None]]:
+    """ملفات المجلد كلها ⇒ مهام، لكل ملف هوية مستقلة إن تعددت."""
+    from pathlib import Path
+    files = sorted(f for f in Path(dirpath).rglob("*") if f.is_file())
+    jobs = []
+    for f in files:
+        surl = (f"{source_url}#{f.name}"
+                if source_url and len(files) > 1 else source_url or None)
+        jobs.append((str(f), surl))
+    return jobs
+
+
 def cmd_precedents_file(args) -> int:
     """ف٥: ملفات محلية نزّلها المالك بنفسه (مرفقات درايف وما شابه) → المحلل → pending.
 
-    يقبل مجلداً أيضاً: يُحصد كل ما فيه ملفاً ملفاً، ولكل ملف هوية مستقلة
+    يقبل مجلداً وأرشيف RAR أيضاً: المجلد يُحصد ملفاً ملفاً، والأرشيف يُفك
+    بأفضل مفك متاح (7ز/ونرار/تار) ثم يُحصد محتواه — لكل ملف هوية مستقلة
     «رابط الأصل#اسم الملف» حتى لا يطغى الاستئناف بعضها على بعض."""
+    import shutil
+    import tempfile
     from pathlib import Path
 
     import homsbar_source as hs
@@ -1171,26 +1231,37 @@ def cmd_precedents_file(args) -> int:
     create_tables()
     conn = get_connection()
     jobs: list[tuple[str, str | None]] = []
+    tmpdirs: list[str] = []
     for path in args.paths:
         p = Path(path)
         if p.is_dir():
-            files = sorted(f for f in p.rglob("*") if f.is_file())
-            if not files:
+            j = _dir_jobs(p, args.source_url or None)
+            if not j:
                 print(f"   {path}: مجلد فارغ — لا شيء يُحصد")
+            jobs += j
+        elif p.is_file() and _is_rar(p):
+            dest = tempfile.mkdtemp(prefix="rar_")
+            tmpdirs.append(dest)
+            if not _extract_rar(str(p), dest):
+                print(f"   {p.name}: أرشيف RAR لم يُفك — ركّب 7-Zip (7-zip.org) أو فككه يدوياً ومرّر المجلد")
                 continue
-            for f in files:
-                surl = (f"{args.source_url}#{f.name}"
-                        if args.source_url and len(files) > 1 else args.source_url or None)
-                jobs.append((str(f), surl))
+            j = _dir_jobs(dest, args.source_url or None)
+            if j:
+                print(f"   {p.name}: فُك الأرشيف — {len(j)} ملفات")
+            jobs += j
         else:
             jobs.append((path, args.source_url or None))
     total = {"files": 0, "citations": 0, "written": 0, "unsourced": 0, "skipped_low": 0, "seen": 0}
-    for path, surl in jobs:
-        rep = hs.harvest_file(conn, path, source_url=surl, dry_run=args.dry)
-        total["files"] += 1
-        for k in ("citations", "written", "unsourced", "skipped_low", "seen"):
-            total[k] += rep[k]
-        print(f"   {Path(path).name}: {rep}")
+    try:
+        for path, surl in jobs:
+            rep = hs.harvest_file(conn, path, source_url=surl, dry_run=args.dry)
+            total["files"] += 1
+            for k in ("citations", "written", "unsourced", "skipped_low", "seen"):
+                total[k] += rep[k]
+            print(f"   {Path(path).name}: {rep}")
+    finally:
+        for d in tmpdirs:
+            shutil.rmtree(d, ignore_errors=True)
     print("اجتهادات الملفات المحلية:", total)
     conn.close()
     return 0
@@ -1222,7 +1293,7 @@ def cmd_precedents_drive(args) -> int:
             continue
         kind = drv.sniff_kind(data)
         if kind == "rar":
-            print("   أرشيف RAR — فكه يدوياً ثم مرّر الملفات إلى: precedents-file")
+            print("   أرشيف RAR — نزّله من المتصفح ثم مرّره كما هو إلى: precedents-file مسار\\الملف.rar")
             continue
         if kind == "html":
             print("   بوابة تأكيد/صفحة خطأ بدل الملف — نزّله يدوياً واستعمل precedents-file")

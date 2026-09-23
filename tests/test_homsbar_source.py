@@ -171,3 +171,51 @@ def test_precedents_file_single_file_dir_keeps_clean_url(tmp_path, monkeypatch):
     urls = {r[0] for r in conn.execute("SELECT DISTINCT source_url FROM citations")}
     assert urls == {"https://drive.google.com/file/d/ABC/view"}   # بلا لواحق
     conn.close()
+
+
+def test_precedents_file_extracts_rar_then_harvests(tmp_path, monkeypatch):
+    """أرشيف RAR (مجموعة الألوسي) ⇒ فك بأداة الجهاز ⇒ حصد كل ملف بهوية مستقلة."""
+    import cli
+    import config
+    import database
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+
+    def fake_extract(rar_path, dest):
+        from pathlib import Path
+        d = Path(dest)
+        (d / "الجزء الأول هيئة عامة من مجموعة المحامي عبد القادر جار الله الآلوسي.docx").write_bytes(_docx(SY_LINES))
+        (d / "انعدام الحكم القضائي.docx").write_bytes(_docx(SY_LINES))
+        return True
+
+    monkeypatch.setattr(cli, "_extract_rar", fake_extract)
+    create_tables()
+    rar = tmp_path / "مجموعة الألوسي.rar"
+    rar.write_bytes(b"Rar!\x1a\x07\x00" + b"\x00" * 64)
+    ns = cli.build_parser().parse_args(
+        ["precedents-file", str(rar), "--source-url", "https://drive.google.com/file/d/ALU/view"])
+    assert cli.cmd_precedents_file(ns) == 0
+    conn = get_connection()
+    urls = {r[0] for r in conn.execute("SELECT DISTINCT source_url FROM citations")}
+    assert any(u.endswith("#انعدام الحكم القضائي.docx") for u in urls)
+    assert all(u.startswith("https://drive.google.com/file/d/ALU/view#") for u in urls)
+    assert conn.execute("SELECT count(*) FROM decisions").fetchone()[0] == 3
+    conn.close()
+
+
+def test_precedents_file_rar_without_tool_reports_friendly(tmp_path, monkeypatch, capsys):
+    import cli
+    import config
+    import database
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+    monkeypatch.setattr(cli, "_find_rar_tool", lambda: None)
+    create_tables()
+    rar = tmp_path / "أرشيف.rar"
+    rar.write_bytes(b"Rar!\x1a\x07\x00" + b"\x00" * 16)
+    ns = cli.build_parser().parse_args(["precedents-file", str(rar)])
+    assert cli.cmd_precedents_file(ns) == 0          # لا ينهار
+    assert "7-Zip" in capsys.readouterr().out
+    conn = get_connection()
+    assert conn.execute("SELECT count(*) FROM citations").fetchone()[0] == 0
+    conn.close()
