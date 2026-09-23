@@ -357,6 +357,12 @@ def split_blocks(text: str) -> list[str]:
 
 _PAREN_CIT_RE = re.compile(r"\((?:نقض|قرار|هيئة|محكمة|ادارية|إدارية)[^()]{0,60}?\n[^()]{0,200}\)")
 
+# الاستشهاد بين علامتي اقتباس (مجموعات الآلوسي): «" هيئة عامة قرار 19 أساس …"»
+_QUOTED_RE = re.compile(
+    r"[\"“]\s*(?:هيئة\s+عامة|نقض|محكمة|قرار|القضية)[^\"”\n]{8,300}[\"”]")
+# سطر «القاعدة 489: كلمات مفتاحية» الذي يسبق مبدأ المجموعة ⇒ إسناد تحريري
+_KW_LINE_RE = re.compile(r"القاعدة[ \t]*:?(?P<r>\d{1,5})[ \t]*:[ \t]*(?P<k>[^\n]{3,160})?")
+
 
 def _join_paren_lines(text: str) -> str:
     return _PAREN_CIT_RE.sub(lambda m: m.group(0).replace("\n", " "), text)
@@ -378,15 +384,26 @@ def parse_text(text: str, min_confidence: float = 0.4) -> list[Citation]:
     out: list[Citation] = []
     seen: set[str] = set()
 
-    # (أ) الاستشهادات بين قوسين داخل الفقرات (الشكلان 2 و7): المبدأ يسبقها
+    # (أ) الاستشهادات بين قوسين أو علامتي اقتباس داخل الفقرات (2 و7 ومجموعات
+    # الآلوسي): المبدأ يسبقها؛ وسطر «القاعدة N: …» السابق يوثق تحريريًا
     last_end = 0
-    for m in _INLINE_RE.finditer(t):
+    matches = sorted(list(_INLINE_RE.finditer(t)) + list(_QUOTED_RE.finditer(t)),
+                     key=lambda m: m.start())
+    for m in matches:
+        if m.end() <= last_end:          # تطابق متداخل داخل مقتطَف سابق
+            continue
         raw = orig[m.start():m.end()]
         c = parse_citation(raw)
         prev = orig[last_end:m.start()]
         p = _principle_before(prev)
         if p:
             c.principle_text = p
+        kms = list(_KW_LINE_RE.finditer(prev))
+        if kms and not c.title_keywords:
+            c.rule_number = c.rule_number or kms[-1].group("r")
+            k = kms[-1].group("k")
+            if k:
+                c.title_keywords = k.strip(" .")
         last_end = m.end()
         _push(out, seen, c, min_confidence)
 
@@ -438,6 +455,13 @@ def _principle_before(prev: str) -> str | None:
     br = re.findall(r"\[([^\[\]]{20,1200})\]", prev)
     if br:
         return " ".join(x.strip() for x in br[-3:])
+    # مبدأ المجموعة بين حاصورين «{- … }» (مجموعات الآلوسي) — قد يمتد فقرات
+    # وتتكرر «{-» في مطلعه كرامز تعداد؛ يُلتقط حتى أول «}» وتُنظف الرموز
+    cu = re.findall(r"\{([^}]{20,3000})\}", prev)
+    if cu:
+        p = cu[-1]
+        p = re.sub(r"(?m)^[\s{(]*[\-\u2013\u0640]\s*", "", p)
+        return re.sub(r"^[{\s]+|[\s})\u0640.]+$", "", p) or None
     # الفقرة الأخيرة (فاصل سطر فارغ)؛ الأسطر الملفوفة داخلها تُضم — وإن طالت
     # (> 700) نعود للسطر الأخير وحده (سلوك mohamah السابق)
     para = re.split(r"\n\s*\n", prev)[-1].strip()
@@ -445,7 +469,7 @@ def _principle_before(prev: str) -> str | None:
     if not (20 <= len(para) <= 700):
         para = re.split(r"\n\s*\n|\n", prev)[-1].strip()
     if 20 <= len(para) <= 700:
-        return para
+        return re.sub(r"^[{(\s\-\u2013\u0640]+|[\s})\u0640]+$", "", para) or None
     return None
 
 

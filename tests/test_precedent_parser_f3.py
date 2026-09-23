@@ -235,3 +235,45 @@ def test_qadiya_inline_principle_exportable():
     assert len(cs) == 1
     assert cs[0].identity_key() == "نقض|462|2002|368"
     assert cs[0].principle_text and len(cs[0].principle_text) >= 40
+
+
+# ------------------------------------------------- مجموعات الآلوسي (ف٥)
+# قاعدة/مبدأ بين حاصورين/استشهاد بين علامتي اقتباس — قيس على ملفات فعلية
+ALUSI = ("القاعدة 489: اعتداء على الملكية المشتاعة – عقد إيجار ثابت التاريخ – قسمة رضائية .\n\n"
+         "{- إن القسمة الرضائية ما بين المالكين المشتاعين لا تسري ولا تصبح نافذة بينهم إذا لم "
+         "يوافق عليها جميع المالكين المشترين على الشيوع .\n"
+         "{- إن وضع يد المستأجر من أحد المالكين على الشيوع بموجب عقد إيجار ثابت التاريخ لا "
+         "يعبر معتدياً على ملكية الآخرين وكان على المتضرر مراجعة القضاء المدني لإبطال إجارته } .\n\n"
+         "\" هيئة عامة قرار 117 أساس 500 تاريخ 6/11/1994 – مجموعة الآلوسي – صفحة 11 – قاعدة 489 \"")
+
+
+def test_alusi_quoted_haya_full():
+    cs = [c for c in parse_text(ALUSI) if c.is_exportable()]
+    assert len(cs) == 1
+    c = cs[0]
+    assert c.court == "هيئة_عامة_نقض" and c.decision_number == "117"
+    assert c.basis_number == "500" and c.decision_date == "1994-11-06"
+    assert c.rule_number == "489"
+    assert c.title_keywords and "اعتداء على الملكية المشتاعة" in c.title_keywords
+    assert "القسمة الرضائية" in c.principle_text
+    assert "إبطال إجارته" in c.principle_text        # الفقرتان معاً، لا الأخيرة فقط
+
+
+def test_alusi_quoted_naqd():
+    t = ("القاعدة 1: استملاك ـــــ لجان ــــ قضاء عادي ــــ اختصاص .\n"
+         "{ - إن الدفع بالاختصاص الموضوعي من النظام العام وتثيره المحكمة من تلقاء نفسها . }.\n"
+         "\"نقض قرار 2238 أساس 1497 تاريخ 22/11/1989 – مجموعة الألوسي – صفحة 9 - قاعدة 1 \"")
+    cs = [c for c in parse_text(t) if c.is_exportable()]
+    assert len(cs) == 1 and cs[0].identity_key() == "نقض|2238|1989|1497"
+
+
+def test_alusi_citation_with_empty_keywords_line():
+    t = ("القاعدة 1:\n"
+         "{ - حالة السفه نسبية تزيد وتنقص وتنتهي بعامل الزمن والظروف الاجتماعية وللإثبات كافة الطرق .\n"
+         "- القرار القاضي بالحجر هو من القرارات التي يتوجب إبطالها بانتهاء سببها }.\n"
+         "\" هيئة عامة قرار 58 أساس 89 تاريخ 14/3/2003 – مجموعة الآلوسي – الجزء الرابع – صفحة 11 \"")
+    cs = [c for c in parse_text(t) if c.is_exportable()]
+    assert len(cs) == 1
+    assert cs[0].identity_key() == "هيئة_عامة_نقض|58|2003|89"
+    assert cs[0].rule_number == "1" and cs[0].title_keywords is None
+    assert "حالة السفه نسبية" in cs[0].principle_text
