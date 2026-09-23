@@ -123,6 +123,8 @@ python -m pytest --ignore=tests/test_ui_v3.py --ignore=tests/test_ui_v5.py --ign
   - `damascusbar_source.py`: كاشف مواضيع منتدى فرع نقابة دمشق عبر أرشيف Wayback Machine CDX.
 - **عقد التصدير إلى ميزان (`precedent_export.py`):**
   - تصدير ملفات CSV و JSON بترميز UTF-8-SIG متوافقة مع متطلبات استيراد ميزان.
+- **أمر الصفحات المفردة يدعم الأرشيف تلقائياً (ف٥، 2026-09-23):**
+  - `precedents-page` يجرّب الرابط حياً، فإن كان ميتاً جلب أحدث لقطة أرشيفية صالحة وكتبها بهوية الرابط الأصلي مع طابع اللقطة. قيس عليه فوراً: مقالة الاجتهادات السورية في «محكمتي» = 112 استشهاداً / 109 بهوية كاملة (تفصيل: `DELIVERY/REMAINING-SOURCES-AUDIT-2026-09-23.md`).
 
 ### 2. العمل الجاري حالياً على جهاز المالك:
 - نافذة حصد مدونة bibliotdroit: `python -m cli precedents-blogger bibliotdroit.com`

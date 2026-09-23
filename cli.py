@@ -1051,29 +1051,45 @@ def cmd_precedents_syrialaw(args) -> int:
 
 
 def cmd_precedents_page(args) -> int:
-    """ف٤: صفحة/صفحات مفردة يجمعها المالك (مدوّنات، منتديات) → المحلل العام → pending."""
+    """ف٤/ف٥: صفحة/صفحات مفردة يجمعها المالك (حية أو مؤرشفة) → المحلل العام → pending.
+
+    الرابط الميت يُجرَّب تلقائياً عبر أحدث لقطة صالحة له في أرشيف الويب
+    (الهوية المسجلة تبقى الرابط الأصلي، وطابع اللقطة يُحفظ معها).
+    """
     from urllib.parse import urlparse
     from database import create_tables, get_connection
     from fetcher import fetch
     import precedent_source as ps
+    import wayback_source as wb
     create_tables()
     conn = get_connection()
-    total = {"pages": 0, "citations": 0, "written": 0, "unsourced": 0}
+    total = {"pages": 0, "citations": 0, "written": 0, "unsourced": 0, "from_archive": 0}
     for url in args.urls:
         if ps.already_ingested(conn, url) and not args.force:
             log.info(f"   ⏭ مُدخلة سابقاً: {url}")
             continue
         r = fetch(url)
         html_text = r["html"] if r.get("ok") else None
+        snapshot_ts = None
         if not html_text:
-            log.info(f"   ⚠️ فشل الجلب: {url}")
+            log.info(f"   🔎 الرابط ميت حياً — أبحث في أرشيف الويب: {url}")
+            wa = wb.as_pipeline_result(url)
+            if wa.get("ok"):
+                html_text = wa["html"]
+                snapshot_ts = wa.get("snapshot_ts")
+        if not html_text:
+            log.info(f"   ⚠️ فشل الجلب حياً ومن الأرشيف: {url}")
             continue
         site = urlparse(url).netloc.lower().replace("www.", "")
-        st = ps.ingest_page(conn, url, html_text, source_site=site)
+        st = ps.ingest_page(conn, url, html_text, source_site=site,
+                            snapshot_ts=snapshot_ts)
         total["pages"] += 1
+        if snapshot_ts:
+            total["from_archive"] += 1
         for k in ("citations", "written", "unsourced"):
             total[k] += st[k]
-        log.info(f"   {site}: استشهادات {st['citations']} | كُتب {st['written']} | بلا هوية {st['unsourced']}")
+        log.info(f"   {site}: استشهادات {st['citations']} | كُتب {st['written']} | بلا هوية {st['unsourced']}"
+                 + (f" | من الأرشيف {snapshot_ts}" if snapshot_ts else ""))
     print("اجتهادات الصفحات:", total)
     conn.close()
     return 0

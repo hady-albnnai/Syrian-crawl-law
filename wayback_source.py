@@ -113,4 +113,4 @@ def as_pipeline_result(original_url: str, http_get=None) -> dict:
     if "Temporarily Offline" in html:
         return {"ok": False, "error": "wayback_temporarily_offline"}
     return {"ok": True, "html": html, "final_url": original_url,
-            "status": 200, "encoding": "utf-8"}
+            "status": 200, "encoding": "utf-8", "snapshot_ts": ts}
