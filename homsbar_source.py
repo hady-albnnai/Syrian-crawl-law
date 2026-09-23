@@ -214,6 +214,40 @@ def extract_text(raw: bytes, depth: int = 0) -> str:
     return ""
 
 
+# ------------------------------------------------------------- ملف محلي واحد
+def harvest_file(conn, path: str, source_url: str | None = None,
+                 source_site: str | None = None, dry_run: bool = False,
+                 min_hits: int = MIN_HITS) -> dict:
+    """ملف محلي واحد (وورد/مضغوط/نص) نزّله المالك بنفسه — مثل مرفقات جوجل
+    درايف التي لا تُزحف آلياً. الهوية: `--source-url` وإلا `مسار الملف`."""
+    from pathlib import Path
+    identity = source_url or f"file:{path}"
+    site = source_site or ("homsbar.org" if not str(identity).startswith("http")
+                           else str(identity).split("/")[2].removeprefix("www."))
+    st = {"source": identity, "site": site, "citations": 0, "written": 0,
+          "unsourced": 0, "skipped_low": 0, "seen": 0, "pages_written": 0}
+    if already_ingested(conn, identity):
+        st["seen"] = 1
+        return st
+    raw = Path(path).read_bytes()
+    text = extract_text(raw)
+    hits = [c for c in parse_text(text) if c.is_exportable()]
+    if len(hits) < min_hits:
+        st["skipped_low"] = 1
+        log.info(f"   ⚠️ {identity}: {len(hits)} استشهاداً فقط — دون بوابة الجودة ({min_hits})")
+        return st
+    st["citations"] = len(hits)
+    if dry_run:
+        return st
+    r = ingest_page(conn, identity, "", source_site=site,
+                    text_fn=lambda _h, _t=text: _t)
+    st["pages_written"] = 1
+    for k in ("written", "unsourced"):
+        st[k] = r[k]
+    log.info(f"   {site}: كُتب {r['written']} استشهاداً من {identity}")
+    return st
+
+
 # ------------------------------------------------------------- الحصاد
 def harvest(conn, http_get_text=None, http_get_bytes=None, dry_run: bool = False,
             max_pages: int | None = None, min_hits: int = MIN_HITS,

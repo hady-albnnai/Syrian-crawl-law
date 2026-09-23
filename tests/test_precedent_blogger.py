@@ -43,3 +43,21 @@ def test_broad_candidate_url():
     assert is_broad_candidate_url("https://www.mohamah.net/law/أحكام-و-إجتهادات-قضائية-لمحكمة-النقض-ا/")
     assert not is_broad_candidate_url("https://www.mohamah.net/law/اجتهادات-محكمة-النقض-المصرية/")
     assert not is_broad_candidate_url("https://www.mohamah.net/law/صيغة-ونموذج-طعن-بالنقض/")
+
+
+def test_blogger_www_fallback_when_apex_dead(tmp_path, monkeypatch):
+    import config, database
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+    create_tables()
+    conn = get_connection()
+    entries = [{"title": {"$t": "اجتهادات سورية"}, "content": {"$t": SY},
+                "link": [{"rel": "alternate", "href": "https://b.com/2016/05/a.html"}]}]
+
+    def http_get(url):
+        if "www.b.com" in url:
+            return (200, _feed(entries) if "start-index=1" in url else _feed([]), {})
+        return (404, "", {})
+    st = pb.harvest(conn, "b.com", http_get=http_get)
+    assert st["site"] == "b.com" and st["written"] == 3
+    conn.close()

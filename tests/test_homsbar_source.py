@@ -110,3 +110,18 @@ def test_extract_docx_and_zip_and_legacy():
 def test_list_juris_filters_only_juris_maps():
     urls = hb.list_juris_urls(http_get_text=_http_text)
     assert len(urls) == 2 and all("/juris_article/" in u for u in urls)
+
+
+def test_harvest_file_writes_and_resumes(tmp_path, monkeypatch):
+    import config, database
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "t.db"), raising=False)
+    create_tables()
+    conn = get_connection()
+    f = tmp_path / "مجموعة-درايف.docx"
+    f.write_bytes(_docx(SY_LINES))
+    st = hb.harvest_file(conn, str(f))
+    assert st["citations"] == 3 and st["written"] == 3
+    st2 = hb.harvest_file(conn, str(f))
+    assert st2["seen"] == 1 and st2["written"] == 0
+    conn.close()

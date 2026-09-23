@@ -1159,6 +1159,24 @@ def cmd_precedents_pdf(args) -> int:
     return 0
 
 
+def cmd_precedents_file(args) -> int:
+    """ف٥: ملفات محلية نزّلها المالك بنفسه (مرفقات درايف وما شابه) → المحلل → pending."""
+    from database import create_tables, get_connection
+    import homsbar_source as hs
+    create_tables()
+    conn = get_connection()
+    total = {"files": 0, "citations": 0, "written": 0, "unsourced": 0, "skipped_low": 0, "seen": 0}
+    for path in args.paths:
+        rep = hs.harvest_file(conn, path, source_url=args.source_url or None, dry_run=args.dry)
+        total["files"] += 1
+        for k in ("citations", "written", "unsourced", "skipped_low", "seen"):
+            total[k] += rep[k]
+        print(f"   {path}: {rep}")
+    print("اجتهادات الملفات المحلية:", total)
+    conn.close()
+    return 0
+
+
 def cmd_precedents_homsbar(args) -> int:
     """ف٥: اجتهادات فرع نقابة حمص — مقالات `juris_article` ومرفقاتها (وورد/مضغوطات) → pending."""
     from database import create_tables, get_connection
@@ -1535,6 +1553,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry", action="store_true", help="جلب وتحليل بلا كتابة")
     sp.add_argument("--refresh", action="store_true", help="إعادة بناء قائمة الخيوط من CDX")
     sp.set_defaults(fn=cmd_precedents_bar)
+
+    sp = sub.add_parser("precedents-file", help="ف٥: ملفات محلية نزّلها المالك بنفسه (مرفقات درايف/وورد/مضغوطات) → المحلل → pending")
+    sp.add_argument("paths", nargs="+", help="مسار ملف أو أكثر على الجهاز")
+    sp.add_argument("--source-url", default=None, help="رابط الأصل للاستشهاد والاستئناف")
+    sp.add_argument("--dry", action="store_true", help="تحليل بلا كتابة")
+    sp.set_defaults(fn=cmd_precedents_file)
 
     sp = sub.add_parser("precedents-homsbar", help="ف٥: اجتهادات فرع نقابة حمص — خريطة الموقع + مرفقات وورد/مضغوطات → pending")
     sp.add_argument("--pages", type=int, default=None, help="حد أقصى لمقالات الاجتهاد")

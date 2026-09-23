@@ -27,6 +27,25 @@ MIN_HITS = 3
 POLITE_DELAY = 0.5
 
 
+def _alt_host(blog: str) -> str:
+    """بديل النطاق: `مثال.com` ⇦ `www.مثال.com` والعكس.
+
+    قِيس 2026-09-23 على bibliotdroit.com: النطاق المجرد توقف حله (DNS)
+    بينما www حية — التغريدة تعمل على أيٍّ منهما.
+    """
+    pre, rest = blog.split("://", 1)
+    return f"{pre}://{rest[4:]}" if rest.startswith("www.") else f"{pre}://www.{rest}"
+
+
+def _probe_feed(blog: str, http_get=None) -> int:
+    url = f"{blog}/feeds/posts/default?alt=json&max-results=1&start-index=1"
+    try:
+        code, _body, _hdrs = _get(url, http_get)
+        return code
+    except RuntimeError:
+        return 0
+
+
 def _get(url: str, http_get=None):
     if http_get:
         return http_get(url)
@@ -48,6 +67,10 @@ def harvest(conn, blog: str, http_get=None, dry_run: bool = False,
     blog = blog.rstrip("/")
     if "://" not in blog:
         blog = "https://" + blog
+    # إن لم يحل النطاق المجرد، جرّب بديل www (والعكس) قبل الحكم بالفشل
+    if _probe_feed(blog, http_get) != 200 and _probe_feed(_alt_host(blog), http_get) == 200:
+        blog = _alt_host(blog)
+        log.info(f"   🔁 حُوّل إلى النطاق البديل الحي: {blog}")
     site = blog.split("://", 1)[1].replace("www.", "")
     st = {"site": site, "posts": 0, "candidates": 0, "pages_written": 0, "citations": 0,
           "written": 0, "unsourced": 0, "seen": 0}
