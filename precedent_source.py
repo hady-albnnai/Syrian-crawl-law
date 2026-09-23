@@ -42,9 +42,15 @@ def _quote_url(u: str) -> str:
     return urlunsplit((p.scheme, p.netloc, quote(unquote(p.path)), p.query, ""))
 
 
+# صفحات بلا كلمة «سورية» في الرابط لكنها سورية بالعنوان («اجتهادات-الهيئة-العامة-لمحكمة-النقض-ا-2»)
+_URL_SY_IMPLICIT = re.compile(r"الهيئة-العامة-لمحكمة-النقض|المحكمة-الإدارية-العليا|المحكمة-الادارية-العليا")
+
+
 def is_precedent_url(url: str) -> bool:
     u = unquote(url)
-    return bool(_URL_SY.search(u) and _URL_IJ.search(u) and not _URL_EXCLUDE.search(u))
+    if _URL_EXCLUDE.search(u):
+        return False
+    return bool((_URL_SY.search(u) and _URL_IJ.search(u)) or (_URL_SY_IMPLICIT.search(u) and "مصر" not in u))
 
 
 def sitemap_precedent_urls(index_xml: str, http_get) -> list[str]:
