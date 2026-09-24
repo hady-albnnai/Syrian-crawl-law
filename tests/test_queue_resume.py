@@ -280,3 +280,27 @@ def test_circuit_breaker_stops_cycle_and_keeps_queue(tmp_path, monkeypatch):
     assert by.get("failed") == 12    # قاطع الدورة عند 12
     assert by.get("queued") == 3     # الباقي محفوظ بالطابور
     conn.close()
+
+
+def test_canonicalize_keeps_content_params_and_drops_tracking():
+    # عطل 2026-09-24: رابط مجلس الشعب ?cat=15634&node=5560 كان يُقصّ إلى index.php
+    c = canonicalize_url("http://parliament.gov.sy/arabic/index.php?cat=15634&node=5560&sid=zz")
+    assert c == "http://parliament.gov.sy/arabic/index.php?cat=15634&node=5560"
+    # الترتيب لا يغيّر المفتاح
+    d = canonicalize_url("http://parliament.gov.sy/arabic/index.php?node=5560&cat=15634")
+    assert c == d
+    # ما ليس محتوى ولا مستثنى يبقى خارجاً
+    assert canonicalize_url("https://x.org/f3?utm_source=a&sid=b") == "https://x.org/f3"
+
+
+def test_phpbb_topic_links_skip_non_legal_sidebar():
+    # منتدى عام: شريط «آخر المواضيع» شعر — لا يُسحب؛ عناوين القسم والقانوني يُسحبان
+    import engines
+    html = """
+    <ul class="topiclist"><li><a class="topictitle" href="/t7306-topic">الموضوع 7306</a></li></ul>
+    <div class="recent"><a href="/t9351-mi-ziada">مي زيادة</a>
+    <a href="/t9350-labid">لبيد بن ربيعة</a>
+    <a href="/t8000-x">قانون الإيجار رقم 6 لعام 2001</a></div>
+    """
+    links = engines.extract_topic_links(html, "https://alsarab.example/", "phpbb")
+    assert links == ["https://alsarab.example/t7306-topic", "https://alsarab.example/t8000-x"]

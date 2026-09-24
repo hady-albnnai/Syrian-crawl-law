@@ -83,8 +83,15 @@ def extract_topic_links(html: str, base_url: str, engine: str = None) -> list:
             continue
         full = urljoin(base_url, href)
         if engine == "phpbb":
+            # عطل 2026-09-24: شريط «آخر المواضيع» في منتدى عام (قصائد ودواوين)
+            # كان يُسحب كله لأن كل /t\d+ اعتُبر وثيقة. يُقبل الموضوع إن كان
+            # عنوانه/مساره قانونياً، أو كان رابط عنوانٍ في قائمة القسم نفسها
+            # (class topictitle) حيث القسم كله مكتبة.
             if _PHPBB_TOPIC.search(href):
-                links.append(full)
+                classes = " ".join(a.get("class") or [])
+                in_list = "topictitle" in classes or "topic-title" in classes
+                if in_list or is_legal_anchor(a.get_text(" ", strip=True), href):
+                    links.append(full)
         else:
             # روابط الترقيم ليست وثائق — تعالجها extract_pagination_links.
             if _PAGINATION.search(full):
