@@ -1680,12 +1680,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--max-posts", type=int)
     sp.add_argument("--dry", action="store_true")
 
+    sp.set_defaults(fn=cmd_precedents_blogger)
+
     sp = sub.add_parser("precedents-blogger-file",
                         help="ف٤-ب: تغذية بلوغر محفوظة محلياً (بديل الشبكة المقطوعة) → pending")
     sp.add_argument("file", help="ملف JSON بصيغة صفحة تغذية")
     sp.add_argument("--dry", action="store_true")
     sp.set_defaults(fn=cmd_precedents_blogger_file)
-    sp.set_defaults(fn=cmd_precedents_blogger)
 
     sp = sub.add_parser("precedents-wp", help="ف٤: اجتهادات موقع ووردبريس عبر REST (مثل syrian-arbitration.com) → pending")
     sp.add_argument("site", help="النطاق أو الرابط")
