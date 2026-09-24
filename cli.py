@@ -1108,6 +1108,33 @@ def cmd_precedents_blogger(args) -> int:
     return 0
 
 
+def cmd_precedents_blogger_file(args) -> int:
+    """ف٤-ب: استيراد تغذية بلوغر محفوظة محلياً — بديل الشبكة المقطوعة.
+
+    الملف بصيغة صفحة تغذية واحدة «{"feed": {"entry": [...]}}»؛ تُقدَّم
+    للطلب الأول فقط وما بعده تغذية فارغة توقف الدورة. القبول هو نفسه
+    بوابة الشبكة: محلل عام ≥3 استشهادات بهوية + عدم سبق الإدخال."""
+    from database import create_tables, get_connection
+    import json
+    import precedent_blogger as pb
+    create_tables()
+    with open(args.file, encoding='utf-8') as f:
+        blob = json.load(f)
+    body = json.dumps(blob, ensure_ascii=False)
+
+    def http_get(url):
+        if url.endswith('start-index=1'):
+            return 200, body, {}
+        return 200, '{"feed": {"entry": []}}', {}
+
+    conn = get_connection()
+    rep = pb.harvest(conn, 'https://www.bibliotdroit.com', http_get=http_get,
+                     dry_run=args.dry)
+    print('اجتهادات بلوغر (من ملف محلي):', rep)
+    conn.close()
+    return 0
+
+
 def cmd_precedents_wp(args) -> int:
     """ف٤: اجتهادات من موقع ووردبريس (العنوان = إسناد، المتن = مبدأ) → pending."""
     from database import create_tables, get_connection
@@ -1652,6 +1679,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("blog", help="النطاق أو الرابط")
     sp.add_argument("--max-posts", type=int)
     sp.add_argument("--dry", action="store_true")
+
+    sp = sub.add_parser("precedents-blogger-file",
+                        help="ف٤-ب: تغذية بلوغر محفوظة محلياً (بديل الشبكة المقطوعة) → pending")
+    sp.add_argument("file", help="ملف JSON بصيغة صفحة تغذية")
+    sp.add_argument("--dry", action="store_true")
+    sp.set_defaults(fn=cmd_precedents_blogger_file)
     sp.set_defaults(fn=cmd_precedents_blogger)
 
     sp = sub.add_parser("precedents-wp", help="ف٤: اجتهادات موقع ووردبريس عبر REST (مثل syrian-arbitration.com) → pending")
