@@ -472,9 +472,14 @@ def source_rows(status: str = "", needle: str = "") -> list[dict]:
         conn and conn.close()
         return []
     has_docs = _has_table(conn, "documents")
+    source_cols = {r[1] for r in conn.execute("PRAGMA table_info(sources)")}
+    eval_cols = ("evaluation_score", "evaluation_verdict", "source_type",
+                 "evaluation_reasons_json", "evaluated_at")
+    eval_projection = ", ".join(
+        col if col in source_cols else f"NULL AS {col}" for col in eval_cols)
     sql = ("SELECT id, source_key, base_url, name, engine, credibility, status,"
-           " domain_tier, discovered_via, decided_by, rejection_count"
-           " FROM sources")
+           " domain_tier, discovered_via, decided_by, rejection_count, "
+           + eval_projection + " FROM sources")
     cond, params = [], []
     if status:
         cond.append("status = ?"); params.append(status)

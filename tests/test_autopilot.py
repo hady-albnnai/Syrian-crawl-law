@@ -120,11 +120,83 @@ def test_sitemap_candidates_from_robots_then_sitemap(monkeypatch):
     assert all(c.via == "sitemap" for c in cands)
 
 
+def _disable_candidate_side_channels(monkeypatch):
+    import gap_analysis
+    import missing_targets
+    monkeypatch.setattr(autopilot, "seed_candidates", lambda: [])
+    monkeypatch.setattr(autopilot, "known_registrables", lambda conn: set())
+    monkeypatch.setattr(autopilot, "mine_corpus_links", lambda conn: [])
+    monkeypatch.setattr(autopilot, "approved_sources", lambda conn: [])
+    monkeypatch.setattr(autopilot, "reference_driven_queries", lambda conn, limit=10: [])
+    monkeypatch.setattr(missing_targets, "missing_target_queries",
+                        lambda conn, limit=40: [])
+    monkeypatch.setattr(gap_analysis, "gap_driven_queries", lambda conn: [])
+
+
+@pytest.mark.parametrize("failure", [
+    discovery.SearchUnavailable("HTTP 202 challenge"),
+    TimeoutError("search timeout"),
+])
+def test_search_provider_failure_is_quarantined_for_remaining_queries(
+        monkeypatch, failure):
+    calls = []
+    _disable_candidate_side_channels(monkeypatch)
+
+    class FailingDDG:
+        name = "ddg"
+
+        def search(self, query, limit=10):
+            calls.append(query)
+            raise failure
+
+    class MissingBing:
+        def __init__(self):
+            raise discovery.SearchUnavailable("no Bing key")
+
+    monkeypatch.setattr(autopilot, "DuckDuckGoHtmlProvider", FailingDDG)
+    monkeypatch.setattr(discovery, "BingApiProvider", MissingBing)
+    result = autopilot.generate_candidates(
+        object(), queries=[f"query-{i}" for i in range(30)])
+    assert result == []
+    assert calls == ["query-0"]
+
+
+def test_default_search_query_count_is_bounded_and_keeps_precedents(monkeypatch):
+    import gap_analysis
+    import missing_targets
+    calls = []
+    _disable_candidate_side_channels(monkeypatch)
+    monkeypatch.setattr(missing_targets, "missing_target_queries",
+                        lambda conn, limit=40: [f"missing-{i}" for i in range(limit)])
+    monkeypatch.setattr(autopilot, "reference_driven_queries",
+                        lambda conn, limit=10: [f"reference-{i}" for i in range(10)])
+    monkeypatch.setattr(gap_analysis, "gap_driven_queries",
+                        lambda conn: [f"gap-{i}" for i in range(10)])
+
+    class HealthyDDG:
+        name = "ddg"
+
+        def search(self, query, limit=10):
+            calls.append(query)
+            return []
+
+    class MissingBing:
+        def __init__(self):
+            raise discovery.SearchUnavailable("no Bing key")
+
+    monkeypatch.setattr(autopilot, "DuckDuckGoHtmlProvider", HealthyDDG)
+    monkeypatch.setattr(discovery, "BingApiProvider", MissingBing)
+    assert autopilot.generate_candidates(object()) == []
+    assert len(calls) == autopilot.MAX_SEARCH_QUERIES_PER_RUN == 12
+    assert any("اجتهاد" in query for query in calls)
+
+
 # ═════════════════ بوابة الاعتماد التلقائي ═════════════════
 
 def _ev(verdict="recommended", score=80.0, articles=4):
     return Evaluation("https://x.example/", True, "wordpress", True, score,
-                      "عنوان", verdict, [], articles)
+                      "عنوان", verdict, [], articles, source_score=80.0,
+                      source_type="legislation", domain_tier=4)
 
 
 def test_auto_gate_passes_strong_source():
@@ -145,6 +217,13 @@ def test_auto_gate_rejects_few_articles():
 def test_auto_gate_rejects_non_recommended():
     ok, _ = auto_verdict(_ev(verdict="rejected", score=99, articles=9))
     assert not ok
+
+
+def test_auto_gate_never_approves_precedent_source():
+    ev = _ev(score=99, articles=9)
+    ev.source_type = "precedent"
+    ok, why = auto_verdict(ev)
+    assert not ok and "precedent" in why
 
 
 def test_consider_auto_approve_records_decided_by_auto_and_enqueues(
@@ -230,6 +309,44 @@ def test_run_discovery_full_loop_offline(tmp_path, monkeypatch):
         "SELECT url FROM crawl_tasks WHERE status='queued'")]
     assert URL_PASS in queued and URL_WEAK not in queued
     conn.close()
+
+
+def test_propose_only_evaluates_but_never_approves_or_rejects_sources(
+        tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(discovery, "fetch", _patched_fetch)
+    monkeypatch.setattr(autopilot, "generate_candidates",
+                        lambda c, use_search=True: [
+                            Candidate(URL_PASS, "قانون العقوبات", via="corpus"),
+                            Candidate(URL_WEAK, "قرار 7", via="corpus"),
+                            Candidate(URL_JUNK, "مدونة طبخ", via="search:ddg"),
+                        ])
+    stats = run_discovery(conn, auto_approve=False, use_search=False)
+
+    assert stats["evaluated"] == 3 and stats["approved"] == 0
+    assert stats["rejected"] == 0 and stats["proposed"] == 3
+    rows = conn.execute(
+        "SELECT status, decided_by, evaluation_verdict, evaluation_score "
+        "FROM sources WHERE base_url IN (?, ?, ?)",
+        (URL_PASS, URL_WEAK, URL_JUNK)).fetchall()
+    assert len(rows) == 3
+    assert all(r["status"] == "proposed" and r["decided_by"] is None for r in rows)
+    assert all(r["evaluation_verdict"] is not None and
+               r["evaluation_score"] is not None for r in rows)
+    assert taskqueue.pending_count(conn) == 0
+    conn.close()
+
+
+def test_autopilot_cli_defaults_to_proposals_without_approval_or_crawl():
+    import cli
+    args = cli.build_parser().parse_args(["autopilot"])
+    assert args.auto_approve is False
+    assert args.crawl is False
+    # القديم محفوظ للتوافق، لكنه لا يحتاج ذكره للوضع الآمن.
+    old_style = cli.build_parser().parse_args(
+        ["autopilot", "--no-auto", "--no-crawl"])
+    assert old_style.no_auto is True and old_style.no_crawl is True
+    assert any("اجتهاد" in q for q in autopilot.DEFAULT_QUERIES)
 
 
 # ═════════════════ الزاحف يتعامل مع مصدر مكتشف ═════════════════

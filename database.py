@@ -230,7 +230,14 @@ def create_tables():
         decided_at TEXT,
         decided_by TEXT,
         domain_tier INTEGER DEFAULT 4,
-        rejection_count INTEGER DEFAULT 0
+        rejection_count INTEGER DEFAULT 0,
+        evaluation_score REAL,
+        evaluation_verdict TEXT,
+        source_type TEXT,
+        evaluation_reasons_json TEXT,
+        evaluation_details_json TEXT,
+        evaluated_at TEXT,
+        evaluation_sample_count INTEGER DEFAULT 0
     )
     ''')
 

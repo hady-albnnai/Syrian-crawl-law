@@ -427,9 +427,10 @@ def cmd_discover(args):
     for cand in candidates:
         log.info(f"• {cand.title}  ←  {cand.url}")
         if args.evaluate:
-            ev = evaluate_candidate(cand.url)
+            ev = evaluate_candidate(cand.url, cand.title, cand.snippet)
             register_candidate(conn, cand.url, cand.via, ev)
-            log.info(f"   الحكم: {ev.verdict} | الدرجة {ev.score:.1f} | "
+            log.info(f"   التقييم: {ev.verdict} | المصدر {ev.source_score:.1f}/100 "
+                     f"({ev.source_type}) | الدرجة القانونية {ev.score:.1f} | "
                      f"المحرك {ev.engine} | {'؛ '.join(ev.reasons)}")
             if args.auto and ev.verdict == "recommended":
                 from autopilot import consider_auto_approve
@@ -453,20 +454,22 @@ def cmd_prune(_args):
 
 
 def cmd_autopilot(args):
-    """الطيار الآلي: توليد ← تقييم ← اعتماد تلقائي ← زحف المعتمد."""
+    """اكتشاف وتقييم المصادر؛ التسجيل للمراجعة فقط افتراضياً."""
     from autopilot import run_autopilot
     stats = run_autopilot(pages=args.pages, use_search=not args.no_search,
-                          auto_approve=not args.no_auto,
-                          crawl=not args.no_crawl,
+                          auto_approve=args.auto_approve and not args.no_auto,
+                          crawl=args.crawl and not args.no_crawl,
                           max_evaluate=args.max_evaluate)
-    log.info("═══ تقرير الطيار الآلي ═══")
+    log.info("═══ تقرير تقييم المصادر ═══")
     log.info(f"مرشحون: {stats['seen']} | قُيّموا: {stats['evaluated']} | "
-             f"جدد: {stats['new']}")
-    log.info(f"اعتُمد تلقائياً: {stats['approved']} | مقترح/مرفوض: "
-             f"{stats['rejected']} | محجوب robots: {stats['blocked']}")
+             f"جدد: {stats['new']} | توصية: {stats['recommended']}")
+    log.info(f"مقترح للمراجعة: {stats['proposed']} | منخفض الصلة: "
+             f"{stats['low_relevance']} | محجوب robots: {stats['blocked']}")
+    log.info(f"اعتماد آلي بطلب صريح: {stats['approved']} | "
+             f"رفض آلي: {stats['rejected']}")
     for src in stats["approved_list"]:
-        log.info(f"  🤖 {src['title'][:50]} — {src['engine']} | "
-                 f"{src['score']:.1f} | {src['articles']} مادة | {src['via']}")
+        log.info(f"  🤖 {src['title'][:50]} — تقييم المصدر "
+                 f"{src['source_score']:.1f}/100 | {src['source_type']} | {src['via']}")
     if stats["errors"]:
         log.info(f"أعطال تقييم متجاوزة: {len(stats['errors'])}")
     return 0
@@ -553,14 +556,35 @@ def cmd_sources(args):
     conn = get_connection()
     cur = conn.cursor()
     if args.action == "list":
-        cur.execute("SELECT id, source_key, base_url, name, engine, status "
+        cur.execute("SELECT id, source_key, base_url, name, engine, status, "
+                    "evaluation_score, evaluation_verdict, source_type, "
+                    "evaluation_reasons_json, evaluated_at "
                     "FROM sources ORDER BY id")
         rows = cur.fetchall()
         if not rows:
-            log.info("لا مصادر مسجلة بعد — استخدم discover أو seeds")
+            log.info("لا مصادر مسجلة بعد — استخدم autopilot أو discover")
+        verdict_ar = {"recommended": "موصى به", "needs_review": "يحتاج تدقيقاً",
+                      "rejected": "ضعيف الصلة", "blocked": "محجوب",
+                      "unknown": "غير مقيّم"}
+        type_ar = {"legislation": "تشريعات", "precedent": "اجتهادات",
+                   "mixed": "مختلط", "potential_legal": "قانوني محتمل",
+                   "nonlegal": "غير قانوني", "unknown": "غير محدد"}
+        import json as _json
         for r in rows:
+            score = r["evaluation_score"]
+            evaluation = (f" | تقييم {score:.0f}/100 · "
+                          f"{type_ar.get(r['source_type'], r['source_type'] or '—')} · "
+                          f"{verdict_ar.get(r['evaluation_verdict'], r['evaluation_verdict'] or '—')}"
+                          if score is not None else " | لم يُقيّم بعد")
             log.info(f"[{r['id']}] {r['status']:9s} {r['engine']:10s} "
-                     f"{r['name'][:40]:42s} {r['base_url']}")
+                     f"{r['name'][:40]:42s} {r['base_url']}{evaluation}")
+            if r["evaluation_reasons_json"]:
+                try:
+                    reasons = _json.loads(r["evaluation_reasons_json"])
+                except (TypeError, ValueError):
+                    reasons = []
+                for reason in reasons[:3]:
+                    log.info(f"     ↳ {reason}")
     elif args.action in ("approve", "reject"):
         decide_source(conn, _key_of(conn, args.id), args.action == "approve")
         log.info(f"{'اعتُمد' if args.action == 'approve' else 'رُفض'} المصدر {args.id}")
@@ -569,8 +593,9 @@ def cmd_sources(args):
         from discovery import evaluate_candidate, register_candidate
         ev = evaluate_candidate(args.id)
         sid, created = register_candidate(conn, args.id, "manual", ev)
-        log.info(f"[{sid}] {'سُجّل' if created else 'موجود سابقاً'} — الحكم الآلي: {ev.verdict} | "
-                 f"مواد {ev.articles} | {ev.title[:50]}")
+        log.info(f"[{sid}] {'سُجّل' if created else 'موجود سابقاً'} — تقييم آلي "
+                 f"{ev.source_score:.1f}/100 | {ev.source_type} | الحكم: "
+                 f"{ev.verdict} | مواد {ev.articles} | {ev.title[:50]}")
         if args.approve:
             decide_source(conn, _key_of(conn, str(sid)), True)
             log.info(f"اعتُمد المصدر {sid} بقرار المالك")
@@ -1550,19 +1575,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_discover)
 
     sp = sub.add_parser("autopilot",
-                        help="طيار آلي: يلاقي مصادر لحالو — يولّد/يقيّم/"
-                             "يعتمد تلقائياً ثم يزحف المعتمد")
+                        help="اكتشاف وتقييم المصادر — المقترحات فقط افتراضياً")
     sp.add_argument("--pages", type=int, default=20,
-                    help="حد صفحات الزحف بعد الاكتشاف")
+                    help="حد صفحات الزحف إذا طُلب --crawl صراحة")
     sp.add_argument("--max-evaluate", type=int, default=12,
                     help="حد المرشحين المقيَّمين في الدورة")
     sp.add_argument("--no-search", action="store_true",
                     help="تعطيل قنوات البحث (DDG/Bing)")
+    sp.add_argument("--auto-approve", action="store_true",
+                    help="خيار صريح للاعتماد الآلي؛ لا تفعّله في وضع المقترحات فقط")
+    sp.add_argument("--crawl", action="store_true",
+                    help="خيار صريح لبدء الزحف بعد الاكتشاف (قد يعالج المصادر المعتمدة/الطابور)")
     sp.add_argument("--no-auto", action="store_true",
-                    help="تسجيل proposed فقط بلا اعتماد تلقائي")
+                    help="تعطيل الاعتماد الآلي (توافق مع الأوامر القديمة)")
     sp.add_argument("--no-crawl", action="store_true",
-                    help="اكتشاف فقط — بلا زحف")
-    sp.set_defaults(fn=cmd_autopilot)
+                    help="تعطيل بدء الزحف (توافق مع الأوامر القديمة؛ وهو الافتراضي)")
+    sp.set_defaults(fn=cmd_autopilot, auto_approve=False, crawl=False)
 
     sp = sub.add_parser("runs", help="سجل دورات الزحف وتقاريرها")
     sp.add_argument("--limit", type=int, default=10)

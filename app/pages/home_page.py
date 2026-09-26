@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel,
 from app import core_data as md
 from ._common import Collapsible, card, page_header
 
-DEFAULT_MAX_PAGES = 60
+DEFAULT_MAX_EVALUATE = 12
 
 
 def _stat_card(label: str) -> QWidget:
@@ -50,8 +50,7 @@ def _git_head() -> str:
 
 
 class _AutopilotWorker(QThread):
-    """اكتشاف تلقائي كامل ثم زحف — نفس autopilot.run_autopilot المستخدم
-    بأمر `cli autopilot`، خارج خيط الواجهة كي لا تتجمد النافذة."""
+    """اكتشاف وتقييم وتسجيل المصادر للمراجعة فقط؛ لا يبدأ الزحف."""
     finished_run = Signal(dict)
 
     def __init__(self, max_pages, stop_event, parent=None, *,
@@ -74,8 +73,10 @@ class _AutopilotWorker(QThread):
             # مفتاح الإيقاف والوضع التجريبي، فمسار الواجهة ومسار CLI واحد.
             from autopilot import run_autopilot
             stats = run_autopilot(pages=self.max_pages,
+                                  max_evaluate=self.max_pages,
                                   use_search=self.use_search,
                                   auto_approve=self.auto_approve,
+                                  crawl=False,
                                   stop_event=self.stop_event,
                                   dry_run=self.dry_run)
         except Exception as exc:  # noqa: BLE001 — الواجهة تعرض ولا تنهار
@@ -96,16 +97,16 @@ class HomePage(QWidget):
         root.setSpacing(16)
         root.addWidget(page_header(
             "البداية",
-            "الأداة تكتشف مصادرها بنفسها وتجمع كل ما له علاقة بالقانون "
-            "السوري تلقائياً — قوانين، قرارات، اجتهادات"))
+            "الأداة تبحث عن مصادر القانون السوري وتقيّمها آلياً؛ كل مصدر يُسجَّل "
+            "للمراجعة، ولا اعتماد ولا زحف قبل قرارك"))
 
         main_card, mv = card()
-        self.status_label = QLabel("جاهزة — اضغط «ابدأ الزحف»")
+        self.status_label = QLabel("جاهزة — اكتشف وقيّم المصادر للمراجعة")
         self.status_label.setProperty("class", "hint")
         mv.addWidget(self.status_label)
 
         btn_row = QHBoxLayout(); btn_row.setSpacing(12)
-        self.start_btn = QPushButton("▶  ابدأ الزحف")
+        self.start_btn = QPushButton("🔎  اكتشف وقيّم المصادر")
         self.start_btn.setProperty("class", "primary")
         self.start_btn.setMinimumHeight(52)
         self.start_btn.setMinimumWidth(200)
@@ -123,10 +124,11 @@ class HomePage(QWidget):
         self.results_btn.setEnabled(False)
         self.results_btn.clicked.connect(self._open_results)
 
-        self.dry_box = QCheckBox("تجريبي — بلا حفظ في القاعدة")
+        self.dry_box = QCheckBox("تجريبي للزحف فقط")
         self.dry_box.setToolTip(
-            "نفس مسار `cli crawl --mode dry`: يُقرأ ويُستخرج ويُعدّ، ولا "
-            "يُكتب أي سطر في documents/articles. معاينة آمنة قبل دورة حقيقية")
+            "هذه الشاشة لا تبدأ الزحف؛ تقييم المصادر المقترحة يُحفظ دائماً "
+            "للمراجعة. يظل الوضع التجريبي خاصاً بأمر الزحف المنفصل.")
+        self.dry_box.setEnabled(False)
         btn_row.addWidget(self.start_btn)
         btn_row.addWidget(self.stop_btn)
         btn_row.addStretch()
@@ -143,12 +145,12 @@ class HomePage(QWidget):
         mv.addLayout(dry_row)
         root.addWidget(main_card)
 
-        adv = Collapsible("خيارات متقدّمة (حدّ الصفحات)")
+        adv = Collapsible("خيارات متقدّمة (حدّ المرشحين)")
         limits_row = QHBoxLayout(); limits_row.setSpacing(12)
-        limits_row.addWidget(QLabel("أقصى عدد صفحات بكل دورة زحف:"))
+        limits_row.addWidget(QLabel("أقصى عدد مصادر ستُقيَّم في كل دورة:"))
         from PySide6.QtWidgets import QSpinBox
-        self.spin = QSpinBox(); self.spin.setRange(5, 5000)
-        self.spin.setValue(DEFAULT_MAX_PAGES)
+        self.spin = QSpinBox(); self.spin.setRange(1, 100)
+        self.spin.setValue(DEFAULT_MAX_EVALUATE)
         limits_row.addWidget(self.spin)
         limits_row.addStretch()
         adv.addLayout(limits_row)
@@ -167,10 +169,11 @@ class HomePage(QWidget):
         policy_card, pol = card()
         prow = QHBoxLayout(); prow.setSpacing(18)
         self.auto_approve_box = QCheckBox(
-            "اعتماد المصادر المكتشفة تلقائياً (بوابة ≥70 و≥3 مواد)")
+            "اعتماد آلي (معطّل — المصادر المقترحة تحتاج قرارك)")
+        self.auto_approve_box.setChecked(False)
+        self.auto_approve_box.setEnabled(False)
         self.auto_approve_box.setToolTip(
-            "إبقُه مطفأً إن أردت أن تعتمد كل مصدر بيدك: sources approve <id> — "
-            "القرار أصلاً لك حسب السياسة الموثقة")
+            "حسب خيارك، يقوم الزاحف بالتقييم والتسجيل فقط؛ الاعتماد يدوي")
         self.search_box = QCheckBox("توليد مرشحين بالبحث (DuckDuckGo/Bing)")
         self.search_box.setChecked(True)
         prow.addWidget(self.auto_approve_box)
@@ -288,7 +291,7 @@ class HomePage(QWidget):
         self.stop_btn.setEnabled(True)
         self.results_btn.setEnabled(False)
         self.status_label.setText(
-            "🤖 جارٍ اكتشاف المصادر والزحف تلقائياً — قد يستغرق دقائق…")
+            "🔎 جارٍ اكتشاف المصادر وتقييمها وتسجيلها للمراجعة — لن يبدأ الزحف…")
         self.worker = _AutopilotWorker(self.spin.value(), self.stop_event,
                                        parent=self,
                                        auto_approve=self.auto_approve_box.isChecked(),
@@ -313,7 +316,7 @@ class HomePage(QWidget):
             self.status_label.setText(f"⚠️ تعطل التشغيل: {stats['error']}")
         else:
             self.status_label.setText(
-                "✓ انتهت الدورة — اضغط «نتائج الزحف» لمراجعة ما جُمع")
+                "✓ اكتمل تقييم المصادر — افتح شاشة المصادر لمراجعة الدرجات والأسباب")
         self.refresh()
         if not stats.get("error"):
             try:

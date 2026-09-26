@@ -61,6 +61,35 @@ def test_evaluate_rejects_non_legal_source(monkeypatch):
     ev = evaluate_candidate("https://food.example.com/recipe")
     assert ev.verdict == "rejected"
     assert ev.legal is False
+    assert ev.source_type == "nonlegal"
+    assert ev.source_score < discovery.SOURCE_ASSESSMENT_MIN_SCORE
+
+
+def test_evaluator_recognizes_precedent_source_by_parsed_decision(monkeypatch):
+    html = ("<html><head><title>اجتهادات محكمة النقض السورية</title></head>"
+            "<body><article><p>نقض سوري – الغرفة المدنية الثالثة – قرار "
+            "1890 – أساس 2914 – تاريخ 9/11/1997</p></article></body></html>")
+    _patch_fetch(monkeypatch, html)
+    ev = evaluate_candidate("https://law.example/decisions")
+    assert ev.source_type == "precedent"
+    assert ev.verdict == "recommended"
+    assert ev.details["evidence"]["precedent_citation_count"] == 1
+    assert ev.source_score >= discovery.SOURCE_ASSESSMENT_MIN_SCORE
+    assert any("استشهاداً بهوية قرار" in reason for reason in ev.reasons)
+
+
+def test_evaluator_scores_law_listing_even_without_article_container(monkeypatch):
+    html = ("<html><head><title>مصادر القوانين السورية</title></head><body>"
+            "<h1>التشريعات السورية</h1>"
+            "<a href='/laws/civil-law'>نص القانون المدني السوري</a>"
+            "<a href='/decrees/penal-code'>مرسوم وقانون العقوبات</a>"
+            "</body></html>")
+    _patch_fetch(monkeypatch, html)
+    ev = evaluate_candidate("https://laws.example/")
+    assert ev.source_type == "legislation"
+    assert ev.verdict == "recommended"
+    assert ev.details["evidence"]["legal_internal_links"] == 2
+    assert ev.details["evidence"]["extraction_ok"] is False
 
 
 def test_evaluate_marks_robots_blocked(monkeypatch):
@@ -118,7 +147,9 @@ def _tmp_db(tmp_path, monkeypatch):
 
 
 def _ev(url, verdict="recommended"):
-    return Evaluation(url, True, "phpbb", True, 80.0, "قانون اختبار", verdict, [])
+    return Evaluation(url, True, "phpbb", True, 80.0, "قانون اختبار", verdict, [],
+                      articles=3, source_score=72.5, source_type="legislation",
+                      domain_tier=4, details={"proof": "fixture"}, sample_count=1)
 
 
 def test_register_candidate_idempotent(tmp_path, monkeypatch):
@@ -130,6 +161,16 @@ def test_register_candidate_idempotent(tmp_path, monkeypatch):
     assert id1 == id2  # تطبيع الرابط → مفتاح واحد
     n = conn.execute("SELECT COUNT(*) c FROM sources").fetchone()["c"]
     assert n == 1
+    row = conn.execute("SELECT status, evaluation_score, evaluation_verdict, "
+                       "source_type, evaluation_reasons_json, "
+                       "evaluation_details_json, evaluation_sample_count "
+                       "FROM sources WHERE id=?", (id1,)).fetchone()
+    assert row["status"] == "proposed"
+    assert row["evaluation_score"] == 72.5
+    assert row["evaluation_verdict"] == "recommended"
+    assert row["source_type"] == "legislation"
+    assert '"proof": "fixture"' in row["evaluation_details_json"]
+    assert row["evaluation_sample_count"] == 1
     conn.close()
 
 
@@ -139,13 +180,34 @@ def test_no_crawl_before_approval(tmp_path, monkeypatch):
     register_candidate(conn, url, "seed", _ev(url))
     assert approved_sources(conn) == []  # مقترح فقط — لا يدخل نطاق الزحف
 
-    key = conn.execute("SELECT source_key FROM sources").fetchone()["source_key"]
+    key = conn.execute("SELECT source_key FROM sources WHERE base_url=?",
+                       (url,)).fetchone()["source_key"]
     decide_source(conn, key, approve=True)
     appr = approved_sources(conn)
     assert len(appr) == 1 and appr[0]["base_url"].endswith("/t99")
 
     decide_source(conn, key, approve=False)
     assert approved_sources(conn) == []
+    conn.close()
+
+
+def test_rerevaluation_does_not_override_previous_human_decision(
+        tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    url = "https://example-law.sy/t100"
+    register_candidate(conn, url, "seed", _ev(url))
+    key = conn.execute("SELECT source_key FROM sources WHERE base_url=?",
+                       (url,)).fetchone()["source_key"]
+    decide_source(conn, key, approve=True, decided_by="user")
+
+    weak = _ev(url, verdict="rejected")
+    weak.source_score = 12.0
+    weak.source_type = "nonlegal"
+    register_candidate(conn, url, "search:ddg", weak)
+    row = conn.execute("SELECT status, decided_by, evaluation_verdict "
+                       "FROM sources WHERE source_key=?", (key,)).fetchone()
+    assert (row["status"], row["decided_by"], row["evaluation_verdict"]) == \
+        ("approved", "user", "rejected")
     conn.close()
 
 

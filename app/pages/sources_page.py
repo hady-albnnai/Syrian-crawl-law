@@ -29,6 +29,7 @@ COLUMNS = [
     ("الجدارة", "credibility"),
     ("التير", "domain_tier"),
     ("قرار", "decided_by"),
+    ("التقييم الآلي", "evaluation_score"),
 ]
 STATUS_AR = {"proposed": "معلّق", "approved": "معتمد ✓", "rejected": "مرفوض ✗",
              "auto_approved": "معتمد آلياً", "seed": "بذرة"}
@@ -51,15 +52,35 @@ class _SourceModel(QAbstractTableModel):
         return len(COLUMNS)
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
-        if not index.isValid() or role != Qt.DisplayRole:
+        if not index.isValid():
             return None
         r = self._rows[index.row()]
         key = COLUMNS[index.column()][1]
+        if role == Qt.ToolTipRole and key == "evaluation_score":
+            import json
+            try:
+                reasons = json.loads(r.get("evaluation_reasons_json") or "[]")
+            except (TypeError, ValueError):
+                reasons = []
+            return "\n".join(reasons) or None
+        if role != Qt.DisplayRole:
+            return None
         v = r.get(key)
         if key == "status":
             return STATUS_AR.get(v, v or "—")
         if key == "credibility":
             return f"{v:.2f}" if isinstance(v, (int, float)) else "—"
+        if key == "evaluation_score":
+            if not isinstance(v, (int, float)):
+                return "لم يُقيّم"
+            types = {"legislation": "تشريعات", "precedent": "اجتهادات",
+                     "mixed": "مختلط", "potential_legal": "قانوني محتمل",
+                     "nonlegal": "غير قانوني", "unknown": "غير محدد"}
+            verdicts = {"recommended": "موصى به", "needs_review": "تدقيق",
+                        "rejected": "ضعيف الصلة", "blocked": "محجوب"}
+            return (f"{v:.0f}/100 · "
+                    f"{types.get(r.get('source_type'), r.get('source_type') or '—')} · "
+                    f"{verdicts.get(r.get('evaluation_verdict'), '—')}")
         if key == "domain_tier":
             return f"تير {v}" if v not in (None, "") else "—"
         if key in ("docs",):

@@ -18,11 +18,10 @@
 - `crawler.py`: زحف قابل للاستئناف (طابور SQLite) — **يكتشف محرك كل صفحة**
   (phpBB/WordPress/عام) ويتعامل مع المصادر المكتشفة، والمصدر أحادي الصفحة
   يُحفظ وثيقة كاملة.
-- `discovery.py` + `autopilot.py` + `engines.py`: **الطيار الآلي** — الزاحف
-  يولّد مصادره بنفسه (بذور/بحث/تنقيب المتن/خرائط مواقع)، يقيّمها مهذباً،
-  ويعتمد تلقائياً ببوابة أعلى (درجة ≥70 + ≥3 مواد) مسجلة `decided_by='auto'`.
-  أمر واحد: `python -m cli autopilot`.
-- `database.py`: مخطط SQLite (هجرة 3) + `prune_corpus` لصيانة المتن.
+- `discovery.py` + `autopilot.py` + `engines.py`: **اكتشاف وتقييم آلي للمصادر**
+  (بذور/بحث/تنقيب المتن/خرائط مواقع). يسجّل الدرجة (0–100) ونوع المحتوى
+  والأدلة والأسباب؛ الوضع الافتراضي مقترحات للمراجعة فقط، بلا اعتماد أو زحف.
+- `database.py`: مخطط SQLite وهجراته الإضافية + `prune_corpus` لصيانة المتن.
 - الحالة الحية (2026-09-05): **54 وثيقة / 3676 مادة / 3784 قطعة** من
   3 مصادر معتمدة (المنتدى + ويكي مصدر + محامة) — اكتُشف اثنانها تلقائياً.
 - القياس: Recall@5=1.00 · MRR=1.00 · إسناد 1.00 · رفض آمن 1.00 (12 سؤالاً) —
@@ -40,10 +39,12 @@ python -m cli crawl --pages 10 --mode dry
 python -m cli crawl --pages 30 --mode limited
 python -m cli crawl --pages 500 --mode full --yes
 
-# استكشاف المصادر
-python -m cli discover "القانون المدني السوري" --via ddg --evaluate
-python -m cli seeds
-python -m cli sources list|approve 1|reject 1
+# اكتشاف وتقييم المصادر — لا اعتماد ولا زحف تلقائياً
+python -m cli autopilot --max-evaluate 12
+python -m cli sources list
+# بعد مراجعتك فقط:
+python -m cli sources approve 1
+python -m cli crawl --pages 20 --mode limited
 
 # حزمة ميزان: توليد + بوابة واحدة تُطابق planCsvImport في ميزان
 python -m cli export --out export/content_package     # يكتب المانيفست ويطبع البوابة

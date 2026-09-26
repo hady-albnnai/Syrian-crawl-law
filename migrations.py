@@ -364,6 +364,26 @@ def _migration_012_precedents_v2(cursor) -> dict:
                        "decision_relations", "principle_articles"]}
 
 
+def _migration_013_source_assessment(cursor) -> dict:
+    """حفظ التقييم الآلي للمصادر المكتشفة (طلب المالك 2026-09-26).
+
+    الدرجة والأسباب/الأدلة منفصلة عن status: التوصية الآلية لا تعتمد المصدر
+    ولا ترفضه في وضع «المقترحات فقط». كل التغييرات إضافية ومتوافقة مع القاعدة.
+    """
+    added = 0
+    for column, decl in (
+        ("evaluation_score", "REAL"),
+        ("evaluation_verdict", "TEXT"),
+        ("source_type", "TEXT"),
+        ("evaluation_reasons_json", "TEXT"),
+        ("evaluation_details_json", "TEXT"),
+        ("evaluated_at", "TEXT"),
+        ("evaluation_sample_count", "INTEGER DEFAULT 0"),
+    ):
+        added += _add_column_if_missing(cursor, "sources", column, decl)
+    return {"columns_added": added}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
     (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
@@ -385,6 +405,7 @@ MIGRATIONS = [
     (11, "documents.legal_status_reason (A-3)", _migration_011_status_reason),
     (12, "precedents v2: decisions/principles/citations/relations/articles (ف٣)",
      _migration_012_precedents_v2),
+    (13, "sources.evaluation: score/type/verdict/evidence", _migration_013_source_assessment),
 ]
 LATEST = MIGRATIONS[-1][0]
 

@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""autopilot.py — الطيار الآلي: الزاحف يلاقي مصادره لحالو ويتعامل معها.
+"""autopilot.py — الطيار الآلي: اكتشاف المصادر وتقييمها تلقائياً.
 
-حلقة كاملة بلا إدخال يدوي:
-  توليد مرشحين ← تقييم مهذب (robots + استخراج v4 + درجة قانونية)
-  ← اعتماد تلقائي ببوابة أعلى من «موصى به» اليدوي ← بذر طابور الزحف.
+الوضع الآمن الافتراضي:
+  توليد مرشحين ← تقييم مهذب ومفسَّر ← تسجيل النتيجة للمراجعة.
+لا اعتماد للمصدر ولا بدء للزحف إلا بطلب صريح منفصل.
+
+الوضع الاختياري الصريح:
+  اعتماد تلقائي ببوابة أعلى من «موصى به» اليدوي ← بذر طابور الزحف.
 
 قنوات التوليد (كلها آلية):
   1) دليل البذور المرفق (SEED_SOURCES).
@@ -53,12 +56,20 @@ DEFAULT_QUERIES = [
     "القانون المدني السوري نص كامل",
     "قانون العقوبات السوري مواد",
     "مرسوم تشريعي سوري كامل",
+    "اجتهادات محكمة النقض السورية قرار أساس",
+    "اجتهاد سوري المبدأ القانوني المحكمة الإدارية العليا",
 ]
 
 # أقصى عدد استعلامات مولَّدة من إشارات نصية بكل دورة — يمنع انفجار عدد
 # طلبات البحث لو حوى المتن مئات الإشارات (وثيقة قانونية واحدة قد تشير
 # لعشرات التعديلات التاريخية).
 MAX_REFERENCE_QUERIES = 10
+# حد أعلى لطلبات البحث في الدورة، مع حصة صغيرة لكل قناة كي لا تطغى فجوات
+# التشريع على الاستعلامات العامة واجتهادات المحاكم.
+MAX_SEARCH_QUERIES_PER_RUN = 12
+MAX_MISSING_TARGET_QUERIES_PER_RUN = 4
+MAX_REFERENCE_SEARCH_QUERIES_PER_RUN = 2
+MAX_GAP_SEARCH_QUERIES_PER_RUN = 1
 
 
 # ═══════════════════ القطعة الثانية: إشارات نصية → استعلامات بحث ═══════════════════
@@ -189,11 +200,9 @@ def generate_candidates(conn, use_search: bool = True,
                         queries: list = None) -> list:
     """مرشحون من كل القنوات — مُلغى تكرارهم، وبلا نطاقات معروفة/مستثناة.
 
-    الاستعلامات المستخدمة عند queries=None (السلوك الافتراضي): الثلاثة
-    الثابتة (DEFAULT_QUERIES) + استعلامات مولَّدة من إشارات نصية داخل
-    المتن المحفوظ فعلاً (reference_driven_queries, §3) + استعلامات موجَّهة
-    للفروع الناقصة التغطية فعلياً (gap_analysis.gap_driven_queries, §7)
-    — لا تحلّ محل بعضها، تُضاف معاً (اتساع الاستعلامات مطلوب صراحة).
+    الاستعلامات الافتراضية مزيج محدود: أعلى 4 فجوات معلومة، الاستعلامات
+    العامة والقضائية، إشارتان نصيتان، وفجوة فرع واحدة (بحد أقصى 12 طلب بحث).
+    إذا حجب مزوّد أو انتهت مهلته، يُعطَّل لباقي الدورة ويُجرَّب Bing إن توفر.
     """
     known = known_registrables(conn)
     cands, seen = [], set()
@@ -220,23 +229,37 @@ def generate_candidates(conn, use_search: bool = True,
         except SearchUnavailable:
             pass  # بلا مفتاح — DDG وحده
         from gap_analysis import gap_driven_queries
-        # B-1: الفجوات المعلومة (صكوك مستهدَفة بتعديل/إلغاء/أمومة وغير
-        # محصودة) تتقدّم على كل شيء — الزاحف يبحث عمّا يعرف أنه ينقصه.
         from missing_targets import missing_target_queries
-        effective_queries = list(queries) if queries is not None else (
-            missing_target_queries(conn) + list(DEFAULT_QUERIES)
-            + reference_driven_queries(conn) + gap_driven_queries(conn))
-        effective_queries = list(dict.fromkeys(effective_queries))
+        if queries is not None:
+            effective_queries = list(queries)
+        else:
+            # حصة B-1 تحافظ على أولوية الصكوك الناقصة، مع إبقاء الاستعلامات
+            # العامة/القضائية في الدورة؛ لا تُرسل عشرات الطلبات دفعة واحدة.
+            effective_queries = (
+                missing_target_queries(conn, limit=MAX_MISSING_TARGET_QUERIES_PER_RUN)
+                + list(DEFAULT_QUERIES)
+                + reference_driven_queries(conn, limit=MAX_REFERENCE_SEARCH_QUERIES_PER_RUN)
+                + gap_driven_queries(conn)[:MAX_GAP_SEARCH_QUERIES_PER_RUN]
+            )
+        effective_queries = list(dict.fromkeys(effective_queries))[:MAX_SEARCH_QUERIES_PER_RUN]
+
+        # مزوّد البحث الذي يحجبنا أو ينتهي وقته يُعطَّل لباقي الدورة؛ لا نكرر
+        # 202/403 أو انتظار 25 ثانية لكل استعلام. إن توفر Bing ينتقل إليه فوراً.
+        disabled_providers = set()
         for query in effective_queries:
             for provider in providers:
+                if provider.name in disabled_providers:
+                    continue
                 try:
                     for cand in provider.search(query, limit=6):
                         add(cand)
                     break  # مزود واحد كافٍ لكل استعلام
                 except SearchUnavailable as exc:
-                    log.info(f"قناة {provider.name} غير متاحة: {exc}")
-                except Exception as exc:  # عطل شبكة عابر — القناة تُتجاوز
-                    log.info(f"قناة {provider.name} تعطلت: {exc}")
+                    disabled_providers.add(provider.name)
+                    log.info(f"قناة {provider.name} أُوقفت لهذه الدورة: {exc}")
+                except Exception as exc:  # عطل شبكة/مهلة — القناة تُتجاوز لهذه الدورة
+                    disabled_providers.add(provider.name)
+                    log.info(f"قناة {provider.name} أُوقفت بعد عطل: {exc}")
 
     for cand in mine_corpus_links(conn):
         add(cand)
@@ -254,9 +277,11 @@ def generate_candidates(conn, use_search: bool = True,
 # ═══════════════════ بوابة الاعتماد التلقائي ═══════════════════
 
 def auto_verdict(ev) -> tuple:
-    """(ok, سبب) — أعلى من «موصى به» اليدوي لأن القرار بلا تدخل بشري."""
+    """(ok, سبب) — بوابة محافظة؛ لا تُمرر الاجتهادات أو النوع المجهول آلياً."""
     if ev.verdict != "recommended":
         return False, f"الحكم {ev.verdict}"
+    if ev.source_type not in {"legislation", "mixed"} or not ev.legal:
+        return False, f"نوع المحتوى {ev.source_type} لا يجتاز الاعتماد الآلي"
     if ev.score < AUTO_APPROVE_MIN_SCORE:
         return False, (f"الدرجة {ev.score:.1f} دون حد الاعتماد التلقائي "
                        f"{AUTO_APPROVE_MIN_SCORE}")
@@ -268,10 +293,15 @@ def auto_verdict(ev) -> tuple:
 
 
 def consider_auto_approve(conn, cand_url: str, ev) -> bool:
-    """يعتمد ويبذر الطابور إن اجتاز البوابة — يعيد هل اعتُمد."""
+    """اعتماد اختياري للمرشح غير المحسوم؛ لا يتجاوز قراراً بشرياً سابقاً."""
     ok, why = auto_verdict(ev)
     if not ok:
         log.info(f"   ⏸ مقترح فقط ({why}) — يحتاج موافقة يدوية")
+        return False
+    row = conn.execute("SELECT status, decided_by FROM sources WHERE source_key = ?",
+                       (_source_key(cand_url),)).fetchone()
+    if row is None or row["status"] != "proposed" or row["decided_by"]:
+        log.info("   ⏸ لم يُمسّ المصدر: له قرار سابق أو ليس مقترحاً")
         return False
     decide_source(conn, _source_key(cand_url), True, decided_by="auto")
     taskqueue.enqueue(conn, cand_url, ev.title or cand_url, "section")
@@ -299,11 +329,12 @@ def bootstrap_primary_source(conn):
     return True
 
 
-def run_discovery(conn, auto_approve: bool = True, use_search: bool = True,
+def run_discovery(conn, auto_approve: bool = False, use_search: bool = True,
                   max_evaluate: int = 12) -> dict:
-    """يولّد ← يقيّم ← يسجل ← (يعتمد تلقائياً + يبذر) — يعيد إحصاءات التدقيق."""
+    """يولّد المرشحين ويقيّمهم ويسجل الأدلة؛ الوضع الافتراضي مقترحات فقط."""
     stats = {"seen": 0, "evaluated": 0, "new": 0, "approved": 0,
-             "rejected": 0, "blocked": 0, "approved_list": [], "errors": []}
+             "recommended": 0, "proposed": 0, "rejected": 0, "low_relevance": 0,
+             "blocked": 0, "approved_list": [], "errors": []}
     bootstrap_primary_source(conn)
 
     candidates = generate_candidates(conn, use_search=use_search)
@@ -317,49 +348,62 @@ def run_discovery(conn, auto_approve: bool = True, use_search: bool = True,
         log.info(f"[{stats['evaluated']}/{max_evaluate}] تقييم: "
                  f"{cand.url[:80]} (عبر: {cand.via})")
         try:
-            ev = evaluate_candidate(cand.url)
+            ev = evaluate_candidate(cand.url, cand.title, cand.snippet)
         except Exception as exc:
             stats["errors"].append(f"{cand.url}: {exc}")
             log.info(f"   ❌ عطل تقييم: {exc}")
             continue
-        _id, created = register_candidate(conn, cand.url, cand.via, ev)
+        source_id, created = register_candidate(conn, cand.url, cand.via, ev)
         if created:
             stats["new"] += 1
-        if ev.verdict == "blocked":
-            stats["blocked"] += 1  # يبقى proposed — robots قد تتغير لاحقاً
+        if ev.verdict in ("rejected", "needs_review"):
+            stats["low_relevance"] += 1
         if ev.verdict == "recommended":
-            if auto_approve and consider_auto_approve(conn, cand.url, ev):
-                stats["approved"] += 1
-                stats["approved_list"].append(
-                    {"url": canonicalize_url(cand.url),
-                     "title": ev.title or cand.url, "engine": ev.engine,
-                     "score": ev.score, "articles": ev.articles,
-                     "via": cand.via})
-                continue
-        if ev.verdict != "blocked":
-            stats["rejected"] += 1
-        if ev.verdict == "rejected":
-            # الحكم يُسجل في صف المصدر نفسه (لا في الإحصاء فقط) — للتدقيق.
-            decide_source(conn, _source_key(cand.url), False,
-                          decided_by="auto")
+            stats["recommended"] += 1
+        if ev.verdict == "blocked":
+            stats["blocked"] += 1  # يبقى مقترحاً؛ robots قد تتغير لاحقاً
+
+        if ev.verdict == "recommended" and auto_approve \
+                and consider_auto_approve(conn, cand.url, ev):
+            stats["approved"] += 1
+            stats["approved_list"].append(
+                {"url": canonicalize_url(cand.url),
+                 "title": ev.title or cand.url, "engine": ev.engine,
+                 "score": ev.score, "source_score": ev.source_score,
+                 "articles": ev.articles, "source_type": ev.source_type,
+                 "via": cand.via})
+            continue
+
+        # الاعتماد الآلي اختياري فقط؛ أما الحكم المنخفض فيبقى نتيجة تقييم
+        # على صف مقترح عندما يكون auto_approve=False.
+        if auto_approve and ev.verdict == "rejected":
+            row = conn.execute("SELECT status, decided_by FROM sources WHERE id = ?",
+                               (source_id,)).fetchone()
+            if row and row["status"] == "proposed" and not row["decided_by"]:
+                decide_source(conn, _source_key(cand.url), False,
+                              decided_by="auto")
+                stats["rejected"] += 1
+        row = conn.execute("SELECT status FROM sources WHERE id = ?",
+                           (source_id,)).fetchone()
+        if row and row["status"] == "proposed":
+            stats["proposed"] += 1
         conn.commit()
 
     conn.commit()
-    log.info(f"🏁 الطيار: رُئي {stats['seen']} | قُيّم {stats['evaluated']} | "
-             f"جديد {stats['new']} | اعتُمد {stats['approved']} | "
-             f"مقترح/مرفوض {stats['rejected']} | محجوب {stats['blocked']}")
+    log.info(f"🏁 التقييم: رُئي {stats['seen']} | قُيّم {stats['evaluated']} | "
+             f"جديد {stats['new']} | مقترح للمراجعة {stats['proposed']} | "
+             f"موصى به {stats['recommended']} | منخفض الصلة {stats['low_relevance']} | "
+             f"مرفوض آلياً {stats['rejected']} | محجوب robots {stats['blocked']}")
     return stats
 
 
 def run_autopilot(pages: int = 20, use_search: bool = True,
-                  auto_approve: bool = True, crawl: bool = True,
+                  auto_approve: bool = False, crawl: bool = False,
                   max_evaluate: int = 12, stop_event=None,
                   dry_run: bool = False) -> dict:
-    """اكتشاف ذاتي كامل ثم زحف المعتمد — نقطة الدخول للأمر **والواجهة**.
+    """يكتشف ويقيّم ويسجل مصادر للمراجعة؛ لا اعتماد ولا زحف افتراضياً.
 
-    دفعة 5: الواجهة كانت تكرّر ترتيب الخطوات هنا (‏`run_discovery` ثم
-    `start_crawling`) لأن الدالة لم تكن تقبل `stop_event` — ازدواجية تنجرف.
-    صارت المعبر الوحيد: مفتاح الإيقاف والوضع التجريبي يمرّان من هنا.
+    يمكن استدعاء الاعتماد أو الزحف صراحةً بعد التغيير المتعمد للخيارات.
     """
     from database import create_tables, get_connection
     create_tables()
