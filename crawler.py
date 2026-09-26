@@ -304,15 +304,6 @@ def _handle_topic(conn, task, html, dry_run, stats):
                                                    title, clean)
     if n_links:
         log.info(f"   ⛓ سُجلت {n_links} إحالة تعديل/إلغاء")
-    # ذ19 — نفاذ المادة بعينها: ما يمسّ موادَّ محددة من صكوك أخرى.
-    try:
-        import article_amendments
-        article_amendments.ensure_table(conn)
-        n_arts = article_amendments.record_for_doc(conn, doc_row_id, title, clean)
-        if n_arts:
-            log.info(f"   ⛓ سُجل {n_arts} تعديلاً على مواد بعينها")
-    except Exception as exc:  # noqa: BLE001 — طبقة إضافية لا تُسقط الحفظ
-        log.warning(f"   article_amendments: {exc}")
 
     conn.commit()
     taskqueue.mark(conn, task["id"], "success")

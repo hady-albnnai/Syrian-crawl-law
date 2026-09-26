@@ -313,6 +313,7 @@ def cmd_sync(args):
         from database import get_connection
         conn = get_connection()
         aa.ensure_table(conn)
+        # A-4 يعيد البناء من الصفر (لا بقايا) — يُبنى هنا إن كان فارغاً فقط.
         if not conn.execute("SELECT 1 FROM article_amendments LIMIT 1").fetchone():
             aa.rebuild(conn)
         rep = aa.export_csv(conn, Path(root) / "content" / "legal_library" / "article_amendments.csv")
@@ -846,7 +847,7 @@ def cmd_article_amendments(args) -> int:
         result["export"] = aa.export_csv(conn, args.out)
     if args.law:
         rows = [r for r in aa.export_rows(conn) if r["target_identity"] == args.law
-                and (args.article is None or int(r["article"]) == args.article)]
+                and (args.article is None or str(r["article"]).split()[0] == str(args.article))]
         result["rows"] = rows[:50]
         result["matched"] = len(rows)
     conn.close()
@@ -1791,7 +1792,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry", action="store_true", help="تحليل بلا كتابة")
     sp.set_defaults(fn=cmd_precedents_pdf)
 
-    sp = sub.add_parser("article-amendments", help="ذ19: تعديلات المواد بعينها (بناء/تصدير/استعلام)")
+    sp = sub.add_parser("article-amendments", help="ذ19: تصدير تعديلات المواد (جدول A-4) لميزان")
     sp.add_argument("--rebuild", action="store_true", help="إعادة البناء من كل الوثائق أولاً")
     sp.add_argument("--out", metavar="FILE", help="تصدير CSV لميزان")
     sp.add_argument("--law", metavar="HOIYA", help="استعلام بهوية الصك مثل القانون:6:2001")
