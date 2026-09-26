@@ -307,6 +307,19 @@ def cmd_sync(args):
                                          "dest": str(dest)}
     except Exception as exc:  # noqa: BLE001 — يُبلَّغ لا يُخفى
         result["steps"]["precedents"] = {"error": str(exc)}
+    # 5) ذ19: تعديلات المواد بعينها ⇒ content/legal_library/article_amendments.csv
+    try:
+        import article_amendments as aa
+        from database import get_connection
+        conn = get_connection()
+        aa.ensure_table(conn)
+        if not conn.execute("SELECT 1 FROM article_amendments LIMIT 1").fetchone():
+            aa.rebuild(conn)
+        rep = aa.export_csv(conn, Path(root) / "content" / "legal_library" / "article_amendments.csv")
+        conn.close()
+        result["steps"]["article_amendments"] = rep
+    except Exception as exc:  # noqa: BLE001
+        result["steps"]["article_amendments"] = {"error": str(exc)}
     print(_json.dumps(result, ensure_ascii=False))
     return 0 if result["ok"] else 1
 
@@ -815,6 +828,29 @@ def cmd_nature(args):
         "status='active' AND COALESCE(nature,'instrument')='instrument'"
     ).fetchone()[0]
     log.info(f"صكوك نشطة بلا هوية (الرقم الصادق): {unid}")
+    return 0
+
+
+def cmd_article_amendments(args) -> int:
+    """ذ19: تعديلات المواد بعينها — بناء/تصدير article_amendments.csv لميزان."""
+    import json as _json
+    import article_amendments as aa
+    from database import create_tables, get_connection
+    create_tables()
+    conn = get_connection()
+    aa.ensure_table(conn)
+    result = {}
+    if args.rebuild:
+        result["rebuild"] = aa.rebuild(conn)
+    if args.out:
+        result["export"] = aa.export_csv(conn, args.out)
+    if args.law:
+        rows = [r for r in aa.export_rows(conn) if r["target_identity"] == args.law
+                and (args.article is None or int(r["article"]) == args.article)]
+        result["rows"] = rows[:50]
+        result["matched"] = len(rows)
+    conn.close()
+    print("تعديلات المواد:", _json.dumps(result, ensure_ascii=False))
     return 0
 
 
@@ -1754,6 +1790,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--source-url", default=None, help="رابط الأصل للاستشهاد والاستئناف (وإلا فالمسار)")
     sp.add_argument("--dry", action="store_true", help="تحليل بلا كتابة")
     sp.set_defaults(fn=cmd_precedents_pdf)
+
+    sp = sub.add_parser("article-amendments", help="ذ19: تعديلات المواد بعينها (بناء/تصدير/استعلام)")
+    sp.add_argument("--rebuild", action="store_true", help="إعادة البناء من كل الوثائق أولاً")
+    sp.add_argument("--out", metavar="FILE", help="تصدير CSV لميزان")
+    sp.add_argument("--law", metavar="HOIYA", help="استعلام بهوية الصك مثل القانون:6:2001")
+    sp.add_argument("--article", type=int, help="حصر الاستعلام بمادة")
+    sp.set_defaults(fn=cmd_article_amendments)
 
     sp = sub.add_parser("precedents-export", help="ف٣: حزمة الاجتهادات لميزان (export/precedents)")
     sp.add_argument("--out", default="export/precedents")
