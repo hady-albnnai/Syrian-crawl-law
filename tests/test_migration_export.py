@@ -88,6 +88,42 @@ class TestMigrations:
         assert pathlib.Path(rep["backups"][0]).exists()
 
 
+def test_migration_013_creates_review_forms_and_demotes_seed(tmp_path, monkeypatch):
+    """seed-primary historical auto-approval is not treated as human consent."""
+    db = tmp_path / "review_forms_legacy.db"
+    conn = sqlite3.connect(db)
+    conn.executescript('''
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY, doc_id TEXT, clean_content TEXT,
+            raw_content TEXT
+        );
+        CREATE TABLE sources (
+            id INTEGER PRIMARY KEY, source_key TEXT UNIQUE, base_url TEXT UNIQUE,
+            name TEXT, engine TEXT, credibility REAL, status TEXT,
+            discovered_via TEXT, discovered_at TEXT, decided_at TEXT,
+            decided_by TEXT
+        );
+        INSERT INTO sources VALUES
+        (1, 'seed', 'https://seed.example/', 'seed', 'phpbb', 0.9,
+         'approved', 'seed-primary', '2026-01-01', '2026-01-01', 'user');
+    ''')
+    conn.commit(); conn.close()
+    monkeypatch.setattr(migrations, "BACKUP_DIR", tmp_path / "backups")
+    report = migrations.migrate(db)
+    assert report["end_version"] == 13
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT status, decided_at, decided_by, source_role "
+                       "FROM sources WHERE id=1").fetchone()
+    assert row == ("proposed", None, None, "unknown")
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"document_reviews", "template_reviews", "template_versions"} <= tables
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(templates)")}
+    assert {"jurisdiction", "rights_status", "is_complete_text", "content_sha256"} <= columns
+    conn.close()
+    assert report["applied"][-1]["seed_approvals_demoted"] == 1
+
+
 class TestExporter:
     @pytest.fixture
     def package(self, legacy_db, tmp_path):

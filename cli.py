@@ -147,9 +147,13 @@ def cmd_export(args):
     rep = build_package(db_path=args.db or DB_PATH, out_dir=args.out,
                         prefix=args.prefix,
                         min_articles=args.min_articles,
-                        with_manifest=not args.no_manifest)
+                        with_manifest=not args.no_manifest,
+                        current_only=getattr(args, "current_only", False))
     print(f"حزمة المحتوى: {rep['docs']} وثيقة → {rep['out_dir']}")
     print(f"  الفهرس: {rep['csv']}")
+    if rep.get("current_only"):
+        print(f"  بوابة النفاذ البشري: استُبعدت {rep['current_excluded']} وثيقة "
+              "لغياب تحقق النص/النفاذ/الحقوق أو عدم تطابق البصمة")
     if rep["skipped"]:
         print(f"  تخطي (مواد < {args.min_articles}): {rep['skipped']}")
     if rep.get("renamed"):
@@ -169,6 +173,167 @@ def cmd_export(args):
         if n is not None:
             print(f"  مواد داخل الحزمة (معدودة من القرص): {n}")
     return 0 if rep.get("gate_ok", True) else 1
+
+
+def cmd_document_review(args):
+    """يسجل مراجعة قانونية بشرية لنص محدد وبصمته الحالية."""
+    from database import create_tables, get_connection
+    from legal_quality import record_document_review
+    create_tables()
+    conn = get_connection()
+    try:
+        review_id = record_document_review(
+            conn, args.document_id, args.review_type, args.outcome,
+            args.reviewer, evidence_url=args.evidence_url, note=args.note)
+    except ValueError as exc:
+        log.error(str(exc))
+        conn.close()
+        return 2
+    conn.close()
+    log.info(f"سُجلت المراجعة #{review_id} للوثيقة #{args.document_id} "
+             f"({args.review_type}={args.outcome})")
+    return 0
+
+
+def cmd_current_audit(args):
+    """تقرير أهلية الصكوك لبوابة «نافذ ومكتمل ومراجع» — بلا جلب حي."""
+    import json
+    from database import create_tables, get_connection
+    from legal_quality import audit_current_laws
+    create_tables()
+    conn = get_connection()
+    report = audit_current_laws(conn, limit=args.limit)
+    conn.close()
+    eligible = sum(bool(row["eligible"]) for row in report)
+    payload = {"policy": "current-law-gate-v1", "documents": len(report),
+               "eligible": eligible, "excluded": len(report) - eligible,
+               "results": report}
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(json.dumps(payload, ensure_ascii=False,
+                                             indent=2) + "\n", encoding="utf-8")
+        log.info(f"تقرير الأهلية: {eligible}/{len(report)} → {args.out}")
+    else:
+        log.info(f"مؤهلون: {eligible}/{len(report)} | مستبعدون: {len(report)-eligible}")
+        for row in report:
+            if not row["eligible"]:
+                title = (row["title"] or f"وثيقة #{row['document_id']}")[:55]
+                log.info(f"  ✗ #{row['document_id']} {title}: "
+                         f"{', '.join(row['reasons'])}")
+    return 0
+
+
+def cmd_forms_queries(args):
+    from forms import FORM_TYPES, template_queries
+    kinds = [args.template_type] if args.template_type else list(FORM_TYPES)
+    for kind in kinds:
+        if kind in ("other",):
+            continue
+        for query in template_queries(kind):
+            print(f"[{FORM_TYPES[kind]}] {query}")
+    return 0
+
+
+def cmd_forms_discover(args):
+    """بحث اختياري صريح؛ يعرض نتائج، ويُسجل URL/title فقط عند --record."""
+    from forms import register_search_results, template_queries
+    from discovery import (BingApiProvider, DuckDuckGoHtmlProvider,
+                           SearchUnavailable)
+    try:
+        provider = (BingApiProvider() if args.via == "bing"
+                    else DuckDuckGoHtmlProvider())
+    except SearchUnavailable as exc:
+        log.error(str(exc))
+        return 2
+    collected = []
+    try:
+        for query in template_queries(args.template_type):
+            candidates = provider.search(query, limit=args.limit)
+            collected.extend(candidates)
+            log.info(f"استعلام: {query} — {len(candidates)} نتيجة")
+            for cand in candidates:
+                log.info(f"  • {cand.title} ← {cand.url}")
+    except SearchUnavailable as exc:
+        log.error(str(exc))
+        return 2
+    if not args.record:
+        log.info("وضع معاينة: لم تُنشأ قاعدة/تُسجل النتائج. "
+                 "أعد التشغيل مع --record للحفظ.")
+        return 0
+
+    from database import create_tables, get_connection
+    create_tables()
+    conn = get_connection()
+    try:
+        report = register_search_results(
+            conn, collected, args.template_type,
+            discovered_via=f"search:{args.via}")
+    finally:
+        conn.close()
+    log.info(f"سُجلت روابط النماذج كـmetadata فقط: {report}")
+    return 0
+
+
+def cmd_forms_fetch(args):
+    from database import create_tables, get_connection
+    from forms import fetch_candidate
+    create_tables()
+    conn = get_connection()
+    try:
+        result = fetch_candidate(
+            conn, args.template_id, store_text=args.store_text,
+            rights_status=args.rights_status,
+            rights_evidence_url=args.rights_evidence_url)
+    except (PermissionError, ValueError) as exc:
+        log.error(str(exc))
+        conn.close()
+        return 2
+    conn.close()
+    if not result["ok"]:
+        log.error(f"لم يُجلب النموذج: {result['error']}")
+        return 1
+    log.info(f"جُلب #{args.template_id}: {result['chars']} حرف؛ "
+             f"تخزين النص={'نعم' if result['text_stored'] else 'لا'}؛ "
+             f"الحالة تبقى pending حتى المراجعة البشرية")
+    return 0
+
+
+def cmd_forms_review(args):
+    from database import create_tables, get_connection
+    from forms import review_template
+    create_tables()
+    conn = get_connection()
+    try:
+        result = review_template(
+            conn, args.template_id, reviewer=args.reviewer,
+            completeness=args.completeness, currentness=args.currentness,
+            jurisdiction=args.jurisdiction, rights_status=args.rights_status,
+            source_role=args.source_role,
+            completeness_evidence_url=args.completeness_evidence,
+            currentness_evidence_url=args.currentness_evidence,
+            jurisdiction_evidence_url=args.jurisdiction_evidence,
+            rights_evidence_url=args.rights_evidence, note=args.note)
+    except ValueError as exc:
+        log.error(str(exc))
+        conn.close()
+        return 2
+    conn.close()
+    log.info(f"النموذج #{args.template_id}: {result['review_status']} / "
+             f"{result['template_status']} — النص لا يدخل تصدير القوانين")
+    return 0
+
+
+def cmd_forms_export(args):
+    from database import create_tables, get_connection
+    from forms import export_templates
+    create_tables()
+    conn = get_connection()
+    report = export_templates(conn, out_dir=args.out,
+                              include_pending=args.include_pending)
+    conn.close()
+    log.info(f"حزمة النماذج المنفصلة: {report['exported']} نصاً مؤهلاً، "
+             f"{report['metadata_only']} metadata فقط → {report['csv']}")
+    return 0
 
 
 def cmd_verify_package(args):
@@ -381,13 +546,7 @@ def cmd_parallel(args):
     import crawl_queue as taskqueue
     create_tables()
     conn = get_connection()
-    # بذر المصادر المعتمدة أولاً (كما تفعل الدورة) ليكون التوزيع على كل النطاقات
-    try:
-        import learning
-        for src in learning.prioritized_active_sources(conn):
-            taskqueue.enqueue(conn, src["base_url"], src["name"] or src["base_url"], "section")
-    except Exception as exc:
-        log.info(f"تخطي بذر المصادر المعتمدة: {exc}")
+    # التوازي يوزع المهام الموجودة فقط؛ لا يدرج مصدراً معتمداً ضمناً.
     doms = taskqueue.queued_domains(conn)
     conn.close()
     if not doms:
@@ -431,9 +590,6 @@ def cmd_discover(args):
             register_candidate(conn, cand.url, cand.via, ev)
             log.info(f"   الحكم: {ev.verdict} | الدرجة {ev.score:.1f} | "
                      f"المحرك {ev.engine} | {'؛ '.join(ev.reasons)}")
-            if args.auto and ev.verdict == "recommended":
-                from autopilot import consider_auto_approve
-                consider_auto_approve(conn, cand.url, ev)
     conn.commit()
     conn.close()
     return 0
@@ -453,22 +609,50 @@ def cmd_prune(_args):
 
 
 def cmd_autopilot(args):
-    """الطيار الآلي: توليد ← تقييم ← اعتماد تلقائي ← زحف المعتمد."""
-    from autopilot import run_autopilot
-    stats = run_autopilot(pages=args.pages, use_search=not args.no_search,
-                          auto_approve=not args.no_auto,
-                          crawl=not args.no_crawl,
-                          max_evaluate=args.max_evaluate)
-    log.info("═══ تقرير الطيار الآلي ═══")
-    log.info(f"مرشحون: {stats['seen']} | قُيّموا: {stats['evaluated']} | "
-             f"جدد: {stats['new']}")
-    log.info(f"اعتُمد تلقائياً: {stats['approved']} | مقترح/مرفوض: "
-             f"{stats['rejected']} | محجوب robots: {stats['blocked']}")
-    for src in stats["approved_list"]:
-        log.info(f"  🤖 {src['title'][:50]} — {src['engine']} | "
-                 f"{src['score']:.1f} | {src['articles']} مادة | {src['via']}")
-    if stats["errors"]:
-        log.info(f"أعطال تقييم متجاوزة: {len(stats['errors'])}")
+    """لا شبكة/اعتماد/زحف افتراضياً؛ كل مرحلة تحتاج خياراً صريحاً."""
+    # getattr يبقي الاستدعاء متوافقاً مع واجهات/اختبارات قديمة تنشئ
+    # Namespace يدوياً، بينما parser يعرّف كل هذه الخيارات صراحةً.
+    discover = bool(getattr(args, "discover", False))
+    crawl = bool(getattr(args, "crawl", False))
+    search = bool(getattr(args, "search", False))
+    dry_run = bool(getattr(args, "dry_run", False))
+    search_via = getattr(args, "search_via", None)
+    if search and not discover:
+        log.error("--search يتطلب --discover صراحةً؛ البحث لا يدرج مهاماً ولا يزحف")
+        return 2
+    if not discover and not crawl:
+        log.info("لم يُشغّل شيء. للتقييم أضف --discover، "
+                 "وللبحث أضف --discover --search --search-via ddg|bing، "
+                 "وللزحف على مهام مدرجة مسبقاً أضف --crawl.")
+        return 0
+    if search and not search_via:
+        log.error("لم يُختَر مزود البحث؛ أضف --search-via ddg|bing صراحةً")
+        return 2
+
+    stats = None
+    if discover:
+        from autopilot import run_autopilot
+        if dry_run:
+            log.info("وضع معاينة: تقييم حيّ دون حفظ المقترحات في قاعدة البيانات")
+        stats = run_autopilot(pages=0, use_search=search,
+                              search_via=search_via,
+                              auto_approve=False, crawl=False,
+                              max_evaluate=getattr(args, "max_evaluate", 12),
+                              dry_run=dry_run, discover=True)
+        log.info("═══ تقرير الاكتشاف ═══")
+        log.info(f"مرشحون: {stats['seen']} | قُيّموا: {stats['evaluated']} | "
+                 f"جدد: {stats['new']} | بقيت مقترحة: {stats.get('proposed', 0)}")
+        log.info(f"اعتماد آلي: {stats['approved']} | غير موصى آلياً: "
+                 f"{stats['rejected']} | محجوب robots: {stats['blocked']}")
+        if stats["errors"]:
+            log.info(f"أعطال تقييم متجاوزة: {len(stats['errors'])}")
+
+    if crawl:
+        # هذه مرحلة مستقلة أيضاً؛ start_crawling يستهلك المهام الموجودة
+        # فقط ولا يبذر بذوراً أو مصادر معتمدة تلقائياً.
+        from crawler import start_crawling
+        start_crawling(max_pages=getattr(args, "pages", 20),
+                       dry_run=dry_run)
     return 0
 
 
@@ -490,6 +674,26 @@ def cmd_runs(args):
                            (args.report,)).fetchone()
         if rep:
             log.info("\n" + rep["report"])
+    conn.close()
+    return 0
+
+
+def cmd_queue_approved(args):
+    """المرحلة الصريحة لإدراج مصدر approved في طابور الزحف فقط."""
+    from database import create_tables, get_connection
+    from crawl_queue import enqueue_approved_sources
+    create_tables()
+    conn = get_connection()
+    try:
+        items = enqueue_approved_sources(conn, source_ids=args.source_id)
+    except ValueError as exc:
+        log.error(str(exc))
+        conn.close()
+        return 2
+    for item in items:
+        state = "أُدرج" if item["enqueued"] else "موجود مسبقاً"
+        log.info(f"{state}: المصدر #{item['source_id']} — {item['url']}")
+    log.info(f"عدد المصادر: {len(items)}؛ ابدأ الجلب لاحقاً بأمر crawl منفصل")
     conn.close()
     return 0
 
@@ -565,15 +769,12 @@ def cmd_sources(args):
         decide_source(conn, _key_of(conn, args.id), args.action == "approve")
         log.info(f"{'اعتُمد' if args.action == 'approve' else 'رُفض'} المصدر {args.id}")
     elif args.action == "add":
-        # ف٤: تسجيل رابط جمعه المالك يدوياً — يُقيَّم بجلب واحد ثم يُعتمد إن طُلب.
+        # تسجيل مرشح جمعه المالك يدوياً وتقييمه؛ الاعتماد بأمر منفصل.
         from discovery import evaluate_candidate, register_candidate
         ev = evaluate_candidate(args.id)
         sid, created = register_candidate(conn, args.id, "manual", ev)
         log.info(f"[{sid}] {'سُجّل' if created else 'موجود سابقاً'} — الحكم الآلي: {ev.verdict} | "
                  f"مواد {ev.articles} | {ev.title[:50]}")
-        if args.approve:
-            decide_source(conn, _key_of(conn, str(sid)), True)
-            log.info(f"اعتُمد المصدر {sid} بقرار المالك")
     elif args.action == "reactivate":
         # مصدر «مستنفد» (3 دورات فارغة) يعود للبذر — لصفحات جديدة نُشرت لاحقاً.
         n = conn.execute("UPDATE source_performance SET consecutive_empty_runs=0, learned_status='active' "
@@ -634,8 +835,12 @@ def cmd_wayback_crawl(args):
     log.info(f"أهداف Wayback: {len(urls)} رابطاً أصلياً (روابط PDF مؤجلة)")
 
     stats = {"fetched": 0, "no_snapshot": 0, "failed": 0,
-             "saved": 0, "skipped": 0}
+             "saved": 0, "skipped": 0, "unapproved": 0}
     for i, url in enumerate(urls, 1):
+        if taskqueue.approved_source_for_url(conn, url) is None:
+            stats["unapproved"] += 1
+            log.info(f"[{i}/{len(urls)}] ⏸ تخطٍ — المصدر الأصلي غير معتمد: {url[:65]}")
+            continue
         res = wayback_source.as_pipeline_result(url)
         if not res.get("ok"):
             err = res.get("error", "wayback_failed")
@@ -643,10 +848,18 @@ def cmd_wayback_crawl(args):
             stats[key] += 1
             log.info(f"[{i}/{len(urls)}] ✗ {err} ← {url[:65]}")
             continue
-        taskqueue.enqueue(conn, url, wayback_source.SECTION, "topic")
-        row = conn.execute("SELECT id FROM crawl_tasks WHERE url=?",
-                           (canonicalize_url(url),)).fetchone()
-        task = {"id": row["id"], "url": url,
+        if args.dry:
+            task_id = -1  # no queue write in dry-run
+        else:
+            enqueued, source_id = taskqueue.enqueue_approved_url(
+                conn, url, wayback_source.SECTION, "topic")
+            if source_id is None:
+                stats["unapproved"] += 1
+                continue
+            row = conn.execute("SELECT id FROM crawl_tasks WHERE url=?",
+                               (canonicalize_url(url),)).fetchone()
+            task_id = row["id"]
+        task = {"id": task_id, "url": url,
                 "section": wayback_source.SECTION, "kind": "topic"}
         cstats = {"pages": 1, "docs": 0, "articles": 0,
                   "skipped": 0, "failures": 0}
@@ -698,7 +911,8 @@ def cmd_hf_import(args):
     rep = import_hf_laws(conn, dry_run=args.dry)
     log.info(f"استيراد HF: حُفظ {rep['imported']} | بديل {rep['alternate']} | "
              f"مطابق {rep['skipped']} | مراجعة {rep['needs_review']} | "
-             f"فشل {rep['failed']} | فارغ (للأرشيف) {rep['empty']}")
+             f"فشل {rep['failed']} | فارغ (للأرشيف) {rep['empty']} | "
+             f"مصدر غير معتمد {rep.get('unapproved', 0)}")
     conn.close()
     return 0
 
@@ -716,7 +930,8 @@ def cmd_syrialaw(args):
     rep = import_laws(conn, post_type=args.type, only_names=args.only, dry_run=args.dry, limit=args.limit,
                       force=args.force)
     log.info(f"syria-law: قوانين {rep['laws']} | حُفظ {rep['imported']} | بديل {rep['alternate']} | "
-             f"مطابق {rep['skipped']} | مراجعة {rep['needs_review']} | فشل {rep['failed']} | فارغ {rep['empty']}")
+             f"مطابق {rep['skipped']} | مراجعة {rep['needs_review']} | فشل {rep['failed']} | "
+             f"فارغ {rep['empty']} | مصدر غير معتمد {rep.get('unapproved', 0)}")
     conn.close()
     return 0
 
@@ -1541,27 +1756,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("discover", help="البحث عن مصادر جديدة")
     sp.add_argument("query")
-    sp.add_argument("--via", choices=("ddg", "bing"), default="ddg")
+    sp.add_argument("--via", choices=("ddg", "bing"), required=True,
+                    help="اختيار صريح لمزود البحث")
     sp.add_argument("--limit", type=int, default=10)
     sp.add_argument("--evaluate", action="store_true",
                     help="تقييم كل مرشح وتسجيله proposed")
-    sp.add_argument("--auto", action="store_true",
-                    help="اعتماد تلقائي لمن يجتاز بوابة الطيار الآلي الأعلى")
     sp.set_defaults(fn=cmd_discover)
 
     sp = sub.add_parser("autopilot",
-                        help="طيار آلي: يلاقي مصادر لحالو — يولّد/يقيّم/"
-                             "يعتمد تلقائياً ثم يزحف المعتمد")
+                        help="مراحل منفصلة: لا يعمل شيء حتى اختيار --discover/--search/--crawl")
+    sp.add_argument("--discover", action="store_true",
+                    help="تقييم بذور/مرشحين عبر الشبكة (لا يعتمد ولا يدرج مهاماً تلقائياً)")
+    sp.add_argument("--search", action="store_true",
+                    help="تشغيل البحث الخارجي (يتطلب --search-via صريحاً)")
+    sp.add_argument("--search-via", choices=("ddg", "bing"), default=None,
+                    help="اختيار مزود البحث؛ لن يُختار مزود نيابة عنك")
+    sp.add_argument("--crawl", action="store_true",
+                    help="استهلاك مهام أُدرجت مسبقاً بأمر queue-approved منفصل")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="المعاينة لا تحفظ مقترحات؛ مع --crawl لا تحفظ الوثائق (قد يبقى اتصال الشبكة)")
     sp.add_argument("--pages", type=int, default=20,
-                    help="حد صفحات الزحف بعد الاكتشاف")
+                    help="حد صفحات الزحف عند تمرير --crawl")
     sp.add_argument("--max-evaluate", type=int, default=12,
                     help="حد المرشحين المقيَّمين في الدورة")
-    sp.add_argument("--no-search", action="store_true",
-                    help="تعطيل قنوات البحث (DDG/Bing)")
-    sp.add_argument("--no-auto", action="store_true",
-                    help="تسجيل proposed فقط بلا اعتماد تلقائي")
-    sp.add_argument("--no-crawl", action="store_true",
-                    help="اكتشاف فقط — بلا زحف")
     sp.set_defaults(fn=cmd_autopilot)
 
     sp = sub.add_parser("runs", help="سجل دورات الزحف وتقاريرها")
@@ -1569,6 +1786,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--report", type=int, metavar="RUN_ID",
                     help="طباعة تقرير دورة معينة")
     sp.set_defaults(fn=cmd_runs)
+
+    sp = sub.add_parser("queue-approved",
+                        help="إدراج صريح لمصدر/مصادر approved في الطابور؛ لا يبدأ الجلب")
+    sp.add_argument("--source-id", type=int, action="append",
+                    help="رقم مصدر معتمد؛ كرره لاختيار عدة مصادر (بدونه كل المعتمد)")
+    sp.set_defaults(fn=cmd_queue_approved)
 
     sp = sub.add_parser("tasks",
                         help="فحص مهام الطابور (حالة/محاولات/آخر عطل)")
@@ -1591,8 +1814,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_migrate)
 
     sp = sub.add_parser("seed-official",
-                        help="بذر المصادر الرسمية: moj (sitemap) + ويبو "
-                             "(فهرس عضوية سوريا الحي)")
+                        help="اكتشاف عناوين من sitemap؛ لا يدرجها إلا إذا كان المضيف approved")
     sp.add_argument("--dry", action="store_true",
                     help="عرض ما سيُبذر دون إدراجه")
     sp.set_defaults(fn=cmd_seed_official)
@@ -1605,8 +1827,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_hf_import)
 
     sp = sub.add_parser("wayback-crawl",
-                        help="ف٢: زحف الأصول المؤرشفة عبر Wayback "
-                             "(طبقة 1 — يرقّي المتبنّى من HF تلقائياً)")
+                        help="جلب Wayback فقط لروابط أصلية تابعة لمصادر approved")
     sp.add_argument("--limit", type=int, default=None,
                     help="حصر العدد (تجربة أولى مثلاً 5)")
     sp.add_argument("--dry", action="store_true",
@@ -1619,8 +1840,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_dedup_existing)
 
     sp = sub.add_parser("seed-community",
-                        help="ف٢-ج: بذر قوانين syria-law.com من خرائط "
-                             "sitemap (طبقة مجتمعية)")
+                        help="اكتشاف خرائط syria-law؛ الإدراج يتطلب مصدره approved")
     sp.add_argument("--dry", action="store_true",
                     help="عرض ما سيُبذر دون إدراجه")
     sp.set_defaults(fn=cmd_seed_community)
@@ -1816,6 +2036,66 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--out", metavar="FILE")
     sp.set_defaults(fn=cmd_dedup_audit)
 
+    sp = sub.add_parser("document-review",
+                        help="تسجيل مراجعة بشرية لنص قانوني مرتبطة ببصمته الحالية")
+    sp.add_argument("document_id", type=int)
+    sp.add_argument("--type", dest="review_type",
+                    choices=("full_text", "legal_status", "rights"), required=True)
+    sp.add_argument("--outcome", choices=("pass", "fail", "unknown"), required=True)
+    sp.add_argument("--reviewer", required=True)
+    sp.add_argument("--evidence-url", default=None)
+    sp.add_argument("--note", default=None)
+    sp.set_defaults(fn=cmd_document_review)
+
+    sp = sub.add_parser("current-audit",
+                        help="تقرير النصوص المؤهلة لبوابة التشريع النافذ والمراجع")
+    sp.add_argument("--limit", type=int, default=None)
+    sp.add_argument("--out", default=None)
+    sp.set_defaults(fn=cmd_current_audit)
+
+    sp = sub.add_parser("forms", help="اكتشاف ومراجعة النماذج — مساحة منفصلة عن القوانين")
+    forms_sub = sp.add_subparsers(dest="forms_action", required=True)
+    fs = forms_sub.add_parser("queries", help="عرض استعلامات سورية مقترحة بلا اتصال")
+    fs.add_argument("--type", dest="template_type",
+                    choices=("contract", "summons", "memorandum", "petition", "application"))
+    fs.set_defaults(fn=cmd_forms_queries)
+    fs = forms_sub.add_parser("discover", help="بحث خارجي اختياري؛ metadata فقط")
+    fs.add_argument("--type", dest="template_type", required=True,
+                    choices=("contract", "summons", "memorandum", "petition", "application"))
+    fs.add_argument("--via", choices=("ddg", "bing"), required=True,
+                    help="اختيار صريح لمزود البحث؛ لا يوجد مزود افتراضي")
+    fs.add_argument("--limit", type=int, default=5)
+    fs.add_argument("--record", action="store_true",
+                    help="تسجيل URL/title فقط في جدول النماذج، دون snippet أو fetch")
+    fs.set_defaults(fn=cmd_forms_discover)
+    fs = forms_sub.add_parser("fetch", help="جلب مرشح واحد من مصدر معتمد")
+    fs.add_argument("template_id", type=int)
+    fs.add_argument("--store-text", action="store_true",
+                    help="حفظ النص الكامل؛ يتطلب حقوقاً موثقة أدناه")
+    fs.add_argument("--rights-status", default="unknown",
+                    choices=("public_domain", "licensed", "permission", "unknown", "restricted"))
+    fs.add_argument("--rights-evidence-url", default=None)
+    fs.set_defaults(fn=cmd_forms_fetch)
+    fs = forms_sub.add_parser("review", help="مراجعة بشرية للحداثة/الاكتمال/الاختصاص/الحقوق")
+    fs.add_argument("template_id", type=int)
+    fs.add_argument("--reviewer", required=True)
+    fs.add_argument("--completeness", choices=("pass", "fail", "unknown"), required=True)
+    fs.add_argument("--currentness", choices=("pass", "fail", "unknown"), required=True)
+    fs.add_argument("--jurisdiction", choices=("SY", "non-SY", "unknown"), required=True)
+    fs.add_argument("--rights-status", choices=("public_domain", "licensed", "permission", "unknown", "restricted"), required=True)
+    fs.add_argument("--source-role", choices=("official_publisher", "court", "bar_association", "law_firm", "legal_aid", "academic", "private", "other"), required=True)
+    fs.add_argument("--completeness-evidence", default=None)
+    fs.add_argument("--currentness-evidence", default=None)
+    fs.add_argument("--jurisdiction-evidence", default=None)
+    fs.add_argument("--rights-evidence", default=None)
+    fs.add_argument("--note", default=None)
+    fs.set_defaults(fn=cmd_forms_review)
+    fs = forms_sub.add_parser("export", help="تصدير مستقل؛ المؤهل فقط يحمل النص الكامل")
+    fs.add_argument("--out", default="export/forms")
+    fs.add_argument("--include-pending", action="store_true",
+                    help="إضافة المرشحين metadata-only للمراجعة")
+    fs.set_defaults(fn=cmd_forms_export)
+
     sp = sub.add_parser("export", help="توليد حزمة محتوى لميزان (CSV+md+JSON)")
     sp.add_argument("--out", default="export/content_package")
     sp.add_argument("--prefix", default="content/legal_library/laws_decrees/")
@@ -1824,6 +2104,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="مسار قاعدة بديلة (افتراضياً data/syrian_law.db)")
     sp.add_argument("--no-manifest", action="store_true",
                     help="اكتفِ بالفهرس+md+JSON دون توسيع عقد المواد والمانيفست")
+    sp.add_argument("--current-only", action="store_true",
+                    help="تصدير الصكوك فقط بعد اجتياز مراجعات بشرية للبصمة/الاكتمال/النفاذ/الحقوق؛ لا يغير CSV")
     sp.set_defaults(fn=cmd_export)
 
     sp = sub.add_parser("verify",
@@ -1852,7 +2134,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("sources", help="إدارة سجل المصادر")
     sp.add_argument("action", choices=("list", "approve", "reject", "add", "reactivate"))
     sp.add_argument("id", nargs="?", help="معرّف المصدر — أو الرابط مع add")
-    sp.add_argument("--approve", action="store_true", help="مع add: اعتماد فوري")
     sp.set_defaults(fn=cmd_sources)
 
     sp = sub.add_parser("gaps", help="تحليل فجوات فروع القانون + استعلامات مقترحة")

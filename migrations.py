@@ -364,6 +364,127 @@ def _migration_012_precedents_v2(cursor) -> dict:
                        "decision_relations", "principle_articles"]}
 
 
+def _migration_013_review_and_forms_separation(cursor) -> dict:
+    """سجلات مراجعة مُؤرخة وبوابات محافظة للتشريعات والنماذج.
+
+    مراجعات القانون مرتبطة ببصمة النص الحالي؛ أي تحديث للمحتوى يبطل الاعتماد
+    السابق تلقائياً عند التقييم. النماذج تبقى مساحة منفصلة عن documents وMizan.
+    لا تُمنح أي مراجعة أو حق نشر افتراضياً للصفوف التاريخية.
+    """
+    added = 0
+    for col, decl in (
+        ("source_role", "TEXT DEFAULT 'unknown'"),
+        ("publisher_country", "TEXT"),
+        ("collection_scope", "TEXT"),
+        ("evaluation_verdict", "TEXT"),
+        ("evaluation_score", "REAL"),
+        ("evaluation_reasons_json", "TEXT"),
+    ):
+        added += _add_column_if_missing(cursor, "sources", col, decl)
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS document_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL,
+            review_type TEXT NOT NULL CHECK
+                (review_type IN ('full_text','legal_status','rights')),
+            outcome TEXT NOT NULL CHECK (outcome IN ('pass','fail','unknown')),
+            reviewer TEXT NOT NULL,
+            evidence_url TEXT,
+            note TEXT,
+            subject_sha256 TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            FOREIGN KEY (document_id) REFERENCES documents(id)
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_document_reviews_lookup "
+                   "ON document_reviews(document_id, review_type, id)")
+    # نسخة المنتدى الأساسية كانت تُدرج قديماً كـ approved/decided_by=user
+    # آلياً عند أول اكتشاف؛ لا يوجد دليل على قرار بشري حقيقي، لذا تُعاد
+    # إلى proposed مرة واحدة لتصحيح الفصل بين seed وapproval.
+    source_cols = {row[1] for row in cursor.execute("PRAGMA table_info(sources)")}
+    if {"status", "discovered_via", "decided_at", "decided_by"} <= source_cols:
+        demoted_seeds = cursor.execute(
+            "UPDATE sources SET status='proposed', decided_at=NULL, decided_by=NULL "
+            "WHERE discovered_via='seed-primary' AND status='approved'"
+        ).rowcount
+    else:
+        # بعض النسخ/الاختبارات القديمة تحمل جدول sources جزئياً؛ لا تجعل
+        # ترقية الجداول الأخرى تعتمد على أعمدة قرار اختيارية غائبة.
+        demoted_seeds = 0
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            template_type TEXT,
+            branch TEXT,
+            body TEXT,
+            based_on_articles_json TEXT,
+            source_url TEXT,
+            created_at TEXT
+        )
+    ''')
+    for col, decl in (
+        ("jurisdiction", "TEXT DEFAULT 'SY'"),
+        ("template_status", "TEXT DEFAULT 'candidate'"),
+        ("review_status", "TEXT DEFAULT 'pending'"),
+        ("source_role", "TEXT DEFAULT 'unknown'"),
+        ("rights_status", "TEXT DEFAULT 'unknown'"),
+        ("rights_evidence_url", "TEXT"),
+        ("discovered_via", "TEXT"),
+        ("is_complete_text", "INTEGER DEFAULT 0"),
+        ("content_sha256", "TEXT"),
+        ("retrieved_at", "TEXT"),
+        ("reviewed_by", "TEXT"),
+        ("reviewed_at", "TEXT"),
+        ("version_label", "TEXT"),
+        ("superseded_by", "INTEGER"),
+    ):
+        added += _add_column_if_missing(cursor, "templates", col, decl)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_templates_review_type "
+                   "ON templates(review_status, template_type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_templates_source_url "
+                   "ON templates(source_url)")
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS template_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_id INTEGER NOT NULL,
+            content_sha256 TEXT NOT NULL,
+            body TEXT NOT NULL,
+            source_url TEXT,
+            retrieved_at TEXT NOT NULL,
+            rights_status TEXT NOT NULL,
+            rights_evidence_url TEXT NOT NULL,
+            UNIQUE(template_id, content_sha256),
+            FOREIGN KEY (template_id) REFERENCES templates(id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS template_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_id INTEGER NOT NULL,
+            review_type TEXT NOT NULL CHECK
+                (review_type IN ('completeness','currentness','jurisdiction','rights')),
+            outcome TEXT NOT NULL CHECK (outcome IN ('pass','fail','unknown')),
+            reviewer TEXT NOT NULL,
+            evidence_url TEXT,
+            note TEXT,
+            subject_sha256 TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            FOREIGN KEY (template_id) REFERENCES templates(id)
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_template_reviews_lookup "
+                   "ON template_reviews(template_id, review_type, id)")
+    return {"columns_added": added,
+            "tables": ["document_reviews", "template_reviews",
+                       "template_versions"],
+            "seed_approvals_demoted": demoted_seeds,
+            "forms_separate_from_laws": True}
+
+
 MIGRATIONS = [
     (1, "sha256 fingerprints + snapshot link", _migration_001_sha256),
     (2, "chunks + FTS5 arabic text index", _migration_002_chunks_fts),
@@ -385,6 +506,8 @@ MIGRATIONS = [
     (11, "documents.legal_status_reason (A-3)", _migration_011_status_reason),
     (12, "precedents v2: decisions/principles/citations/relations/articles (ف٣)",
      _migration_012_precedents_v2),
+    (13, "review-bound legal-current gate + separate forms registry",
+     _migration_013_review_and_forms_separation),
 ]
 LATEST = MIGRATIONS[-1][0]
 

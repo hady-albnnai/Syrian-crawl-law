@@ -136,9 +136,77 @@ def create_tables():
         body TEXT,
         based_on_articles_json TEXT,
         source_url TEXT,
-        created_at TEXT
+        created_at TEXT,
+        jurisdiction TEXT DEFAULT 'SY',
+        template_status TEXT DEFAULT 'candidate',
+        review_status TEXT DEFAULT 'pending',
+        source_role TEXT DEFAULT 'unknown',
+        rights_status TEXT DEFAULT 'unknown',
+        rights_evidence_url TEXT,
+        discovered_via TEXT,
+        is_complete_text INTEGER DEFAULT 0,
+        content_sha256 TEXT,
+        retrieved_at TEXT,
+        reviewed_by TEXT,
+        reviewed_at TEXT,
+        version_label TEXT,
+        superseded_by INTEGER
     )
     ''')
+
+    # مراجعات غير قابلة للاستبدال، مربوطة ببصمة المحتوى الذي قُيّم.
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS document_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        document_id INTEGER NOT NULL,
+        review_type TEXT NOT NULL CHECK
+            (review_type IN ('full_text','legal_status','rights')),
+        outcome TEXT NOT NULL CHECK (outcome IN ('pass','fail','unknown')),
+        reviewer TEXT NOT NULL,
+        evidence_url TEXT,
+        note TEXT,
+        subject_sha256 TEXT NOT NULL,
+        reviewed_at TEXT NOT NULL,
+        FOREIGN KEY (document_id) REFERENCES documents(id)
+    )
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS template_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_id INTEGER NOT NULL,
+        content_sha256 TEXT NOT NULL,
+        body TEXT NOT NULL,
+        source_url TEXT,
+        retrieved_at TEXT NOT NULL,
+        rights_status TEXT NOT NULL,
+        rights_evidence_url TEXT NOT NULL,
+        UNIQUE(template_id, content_sha256),
+        FOREIGN KEY (template_id) REFERENCES templates(id)
+    )
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS template_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_id INTEGER NOT NULL,
+        review_type TEXT NOT NULL CHECK
+            (review_type IN ('completeness','currentness','jurisdiction','rights')),
+        outcome TEXT NOT NULL CHECK (outcome IN ('pass','fail','unknown')),
+        reviewer TEXT NOT NULL,
+        evidence_url TEXT,
+        note TEXT,
+        subject_sha256 TEXT NOT NULL,
+        reviewed_at TEXT NOT NULL,
+        FOREIGN KEY (template_id) REFERENCES templates(id)
+    )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_document_reviews_lookup "
+                   "ON document_reviews(document_id, review_type, id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_template_reviews_lookup "
+                   "ON template_reviews(template_id, review_type, id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_templates_review_type "
+                   "ON templates(review_status, template_type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_templates_source_url "
+                   "ON templates(source_url)")
 
     # جدول الاجتهادات والأحكام
     cursor.execute('''
@@ -230,7 +298,13 @@ def create_tables():
         decided_at TEXT,
         decided_by TEXT,
         domain_tier INTEGER DEFAULT 4,
-        rejection_count INTEGER DEFAULT 0
+        rejection_count INTEGER DEFAULT 0,
+        source_role TEXT DEFAULT 'unknown',
+        publisher_country TEXT,
+        collection_scope TEXT,
+        evaluation_verdict TEXT,
+        evaluation_score REAL,
+        evaluation_reasons_json TEXT
     )
     ''')
 

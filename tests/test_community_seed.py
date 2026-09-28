@@ -61,6 +61,12 @@ def _db(tmp_path, monkeypatch):
     return database.get_connection()
 
 
+def _approve(conn):
+    conn.execute("INSERT INTO sources (source_key, base_url, name, status) "
+                 "VALUES ('syria-law', 'https://syria-law.com/', 'syria-law', 'approved')")
+    conn.commit()
+
+
 def test_fetch_law_urls_only_law_sitemaps_and_pages():
     """خرائط القوانين وحدها تُقرأ، وصفحاتها فقط تُلتقط — الموسوعة
     (ijtihadat) والصفحات العامة ومؤلفو ووردبريس تُهمل أدباً."""
@@ -77,6 +83,7 @@ def test_fetch_law_urls_only_law_sitemaps_and_pages():
 def test_seed_syria_law_enqueues_idempotent(tmp_path, monkeypatch):
     import crawl_queue as taskqueue
     conn = _db(tmp_path, monkeypatch)
+    _approve(conn)
     rep = cs.seed_syria_law(conn, http_get=_http)
     assert rep["found"] == 4 and rep["added"] == 4
     rows = conn.execute("SELECT url, kind FROM crawl_tasks").fetchall()
@@ -93,6 +100,7 @@ def test_seed_dry_run_and_unreachable(tmp_path, monkeypatch):
     rep = cs.seed_syria_law(conn, http_get=_http, dry_run=True)
     n = conn.execute("SELECT COUNT(*) c FROM crawl_tasks").fetchone()["c"]
     assert n == 0 and rep["added"] == 0
+    assert rep["unapproved"] == 4
     # فهرس ميت — خلاصة فارغة بلا انفجار
     rep2 = cs.seed_syria_law(conn, http_get=lambda u: (503, ""))
     assert rep2["found"] == 0

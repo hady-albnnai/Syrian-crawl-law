@@ -34,6 +34,13 @@ def _fake_get(url):
     return 404, ""
 
 
+def _approve(conn, source_key, base_url):
+    conn.execute("INSERT INTO sources (source_key, base_url, name, status) "
+                 "VALUES (?, ?, ?, 'approved')",
+                 (source_key, base_url, source_key))
+    conn.commit()
+
+
 def test_fetch_post_urls_only_legal_types():
     pairs = oseed.fetch_post_urls(
         base_url="https://moj.gov.sy/",
@@ -59,6 +66,7 @@ def test_seed_moj_enqueues_idempotent(tmp_path, monkeypatch):
                         str(tmp_path / "seed.db"))
     database.create_tables()
     conn = database.get_connection()
+    _approve(conn, "moj", "https://moj.gov.sy/")
 
     first = oseed.seed_moj(conn, http_get=_fake_get,
                            post_types={"decision": "قرارات", "circular": "تعاميم"})
@@ -83,6 +91,7 @@ def test_seed_moj_dry_run_does_not_enqueue(tmp_path, monkeypatch):
     conn = database.get_connection()
     stats = oseed.seed_moj(conn, http_get=_fake_get, dry_run=True)
     assert stats["found"] == 3 and stats["added"] == 0
+    assert stats["unapproved"] == 3
     n = conn.execute("SELECT COUNT(*) FROM crawl_tasks").fetchone()[0]
     assert n == 0
 
@@ -108,6 +117,7 @@ def test_seed_wipo_index_enqueues_pins_and_links(tmp_path, monkeypatch):
     import crawl_queue as taskqueue
     from official_seed import seed_wipo
     conn = _wipo_db(tmp_path, monkeypatch)
+    _approve(conn, "wipo", "https://www.wipo.int/")
     stats = seed_wipo(conn, http_get=lambda u: (200, _WIPO_PROFILE_HTML))
     assert stats["pins"] == 1 and stats["index_found"] == 2
     assert stats["added"] == 2 and stats["skipped"] == 1  # 10918 مكررة
@@ -125,6 +135,7 @@ def test_seed_wipo_index_unreachable_falls_back_to_pins(tmp_path,
     """تعذّر الفهرس ← المثبتات وحدها — البذر لا يفشل كلياً."""
     from official_seed import seed_wipo
     conn = _wipo_db(tmp_path, monkeypatch)
+    _approve(conn, "wipo", "https://www.wipo.int/")
     stats = seed_wipo(conn, http_get=lambda u: (503, ""))
     assert stats["index_found"] == 0
     assert stats["added"] == 1  # مثبت العقوبات وحده
@@ -138,4 +149,5 @@ def test_seed_wipo_dry_run_does_not_enqueue(tmp_path, monkeypatch):
                       dry_run=True)
     n = conn.execute("SELECT COUNT(*) c FROM crawl_tasks").fetchone()["c"]
     assert n == 0 and stats["added"] == 0
+    assert stats["unapproved"] == 3
     conn.close()

@@ -273,10 +273,11 @@ class TestHomePageMetrics:
                                                            monkeypatch):
         p = self._page(app, ui_db, monkeypatch)
         assert p.auto_approve_box.isChecked() is False   # سياسة المالك لا قرار الشاشة
-        assert p.search_box.isChecked() is True
+        assert p.search_box.isChecked() is False
+        assert p.search_box.isEnabled() is False  # مزود البحث غير مختار
         import app.pages.home_page as hp
-        w = hp._AutopilotWorker(5, None, auto_approve=False, use_search=True)
-        assert w.auto_approve is False and w.use_search is True
+        w = hp._AutopilotWorker(5, None, auto_approve=False, use_search=False)
+        assert w.auto_approve is False and w.use_search is False
 
     def test_missing_database_does_not_crash_refresh(self, app, tmp_path,
                                                       monkeypatch):

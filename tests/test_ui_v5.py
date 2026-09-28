@@ -278,8 +278,8 @@ def test_run_autopilot_forwards_stop_event_and_dry_run(src_db, monkeypatch):
     from threading import Event
     ev = Event()
     stats = autopilot.run_autopilot(pages=7, use_search=False,
-                                    auto_approve=False, stop_event=ev,
-                                    dry_run=True)
+                                    auto_approve=False, crawl=True,
+                                    stop_event=ev, dry_run=True, discover=True)
     assert stats == {"evaluated": 0, "approved": 0}
     assert seen["crawl"]["dry_run"] is True
     assert seen["crawl"]["stop_event"] is ev
@@ -294,9 +294,12 @@ def test_run_autopilot_crawl_false_skips_crawler(src_db, monkeypatch):
     def boom(**kw):  # noqa: ANN001
         raise AssertionError("start_crawling استُدعي مع crawl=False")
 
-    monkeypatch.setattr(autopilot, "run_discovery", lambda conn, **kw: {})
+    monkeypatch.setattr(autopilot, "run_discovery",
+                        lambda *_a, **_kw: (_ for _ in ()).throw(
+                            AssertionError("discover=False استدعى التقييم")))
     monkeypatch.setattr(crawler, "start_crawling", boom)
-    assert autopilot.run_autopilot(pages=5, crawl=False) == {}
+    stats = autopilot.run_autopilot(pages=5, crawl=False, discover=False)
+    assert stats["seen"] == stats["evaluated"] == 0
 
 
 # ───────────────────────────────────────────────── 3) الشاشة الرابعة
@@ -485,7 +488,10 @@ def test_home_dry_run_default_off_and_forwarded(src_db, app, monkeypatch):
     w.run()
     assert seen["dry_run"] is True
     assert seen["stop_event"] is ev
-    assert seen["pages"] == 11
+    assert seen["pages"] == 0
+    assert seen["max_evaluate"] == 11
+    assert seen["discover"] is True
+    assert seen["crawl"] is False
     assert seen["use_search"] is False and seen["auto_approve"] is False
 
 

@@ -22,7 +22,7 @@ block_cipher = None
 hiddenimports = collect_submodules("app") + [
     # نواة تُستورد كسولاً من الشاشات/CLI
     "crawler", "crawl_queue", "exporter", "migrations", "database",
-    "discovery", "fetcher", "extractor", "extractor_v4", "urls", "config",
+    "discovery", "fetcher", "forms", "legal_quality", "extractor", "extractor_v4", "urls", "config",
     "logging_setup", "cli", "recon", "autopilot", "engines", "answer",
     "search", "chunker",
     # خطة الاكتشاف الذاتي (self-discovery) — تُستورد كسولاً من core_data

@@ -82,19 +82,26 @@ def fetch_law_urls(base_url: str = SYRIA_LAW_BASE_URL,
 
 
 def seed_syria_law(conn, http_get=None, dry_run: bool = False) -> dict:
-    """بذر روابط قوانين syria-law بالطابور كمهام topic — idempotent."""
+    """اكتشاف sitemap، ثم إدراج المهام فقط إذا كان syria-law approved."""
     import crawl_queue as taskqueue
 
     pairs = fetch_law_urls(http_get=http_get)
-    added = skipped = 0
+    added = skipped = unapproved = 0
     for url, section in pairs:
         if dry_run:
+            if taskqueue.approved_source_for_url(conn, url) is None:
+                unapproved += 1
             continue
-        if taskqueue.enqueue(conn, url, section, "topic"):
+        created, source_id = taskqueue.enqueue_approved_url(
+            conn, url, section, "topic")
+        if source_id is None:
+            unapproved += 1
+        elif created:
             added += 1
         else:
             skipped += 1
-    stats = {"found": len(pairs), "added": added, "skipped": skipped}
-    log.info(f"بذر syria-law: عُثر على {stats['found']}، أُضيف {added}، "
-             f"موجود سابقاً {skipped}")
+    stats = {"found": len(pairs), "added": added, "skipped": skipped,
+             "unapproved": unapproved}
+    log.info(f"بذر syria-law: عُثر على {stats['found']}، أُدرج {added}، "
+             f"موجود سابقاً {skipped}، بلا مصدر معتمد {unapproved}")
     return stats

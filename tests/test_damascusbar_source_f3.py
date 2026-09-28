@@ -1,5 +1,6 @@
 """ف٣: محرك منتدى محامي سوريا عبر Wayback — بلا شبكة (لقطتان حقيقيتان محفوظتان)."""
 from pathlib import Path
+import json
 
 import config
 import database
@@ -37,6 +38,19 @@ def fake_bytes(url):
     return None
 
 
+def _patch_fixture_threads(monkeypatch, mapping=None):
+    """لا تعتمد اختبارات اللقطات على ملف الإنتاج ذي آلاف الخيوط أو الشبكة."""
+    threads = mapping if mapping is not None else ds.thread_map(CDX)
+
+    def load(_http_get_text, refresh=False):
+        path = ds._threads_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(threads, ensure_ascii=False), encoding="utf-8")
+        return threads
+
+    monkeypatch.setattr(ds, "load_threads", load)
+
+
 def test_thread_map_latest_snapshot_per_thread():
     m = ds.thread_map(CDX)
     # الأنظف (بلا s=/&amp;) يُفضَّل على الأحدث
@@ -57,7 +71,8 @@ def test_decode_cp1256_roundtrip():
     assert "القضية" in ds.decode_snapshot(T1.encode("windows-1256", "replace"))
 
 
-def test_harvest_writes_pending_and_resumes(db):
+def test_harvest_writes_pending_and_resumes(db, monkeypatch):
+    _patch_fixture_threads(monkeypatch)
     rep = ds.harvest_damascusbar(db, fake_bytes)
     assert rep["threads"] == 2 and rep["fetched"] == 2 and rep["with_precedents"] == 1
     assert rep["citations"] >= 12 and rep["new_decisions"] == rep["citations"] - rep["unsourced"]
@@ -74,7 +89,8 @@ def test_harvest_writes_pending_and_resumes(db):
     assert ds._threads_file().exists() and ds._done_file().exists()
 
 
-def test_dry_run_writes_nothing(db):
+def test_dry_run_writes_nothing(db, monkeypatch):
+    _patch_fixture_threads(monkeypatch)
     rep = ds.harvest_damascusbar(db, fake_bytes, dry_run=True, limit=1)
     assert rep["fetched"] == 1
     assert db.execute("SELECT count(*) FROM decisions").fetchone()[0] == 0
@@ -90,7 +106,10 @@ def test_aborts_after_consecutive_connection_failures(db, monkeypatch):
         calls.append(url)
         return None
     big = "\n".join(f"http://www.damascusbar.org/AlMuntada/showthread.php?t={i} 2020010100000{i%10}" for i in range(20))
-    monkeypatch.setattr(ds, "thread_map", lambda txt: {str(i): ["20200101000000", f"http://x/?t={i}"] for i in range(20)})
+    monkeypatch.setattr(ds, "thread_map", lambda txt: {
+        str(i): ["20200101000000", f"http://x/?t={i}"] for i in range(20)})
+    monkeypatch.setattr(ds, "load_threads",
+                        lambda _get_text, refresh=False: ds.thread_map(CDX))
     rep = ds.harvest_damascusbar(db, dead)
     assert rep["failed"] == ds.MAX_CONSECUTIVE_FAILURES and len(calls) == ds.MAX_CONSECUTIVE_FAILURES
     assert "غير قابل للوصول" in rep["aborted"]

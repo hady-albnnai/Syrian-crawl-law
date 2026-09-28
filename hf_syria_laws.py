@@ -104,7 +104,7 @@ def import_hf_laws(conn, laws_path=None, articles_path=None,
 
     pairs = load_laws_with_articles(laws_path, articles_path)
     stats = {"imported": 0, "alternate": 0, "skipped": 0,
-             "needs_review": 0, "failed": 0, "empty": 0}
+             "needs_review": 0, "failed": 0, "empty": 0, "unapproved": 0}
     index = []
     for law, arts in pairs:
         index.append({"id": law.get("id"), "title": law.get("title"),
@@ -113,13 +113,24 @@ def import_hf_laws(conn, laws_path=None, articles_path=None,
             stats["empty"] += 1
             continue
         url = law["source_url"]
-        key = canonicalize_url(url)
-        taskqueue.enqueue(conn, url, SECTION, "topic")
-        row = conn.execute("SELECT id FROM crawl_tasks WHERE url=?",
-                           (key,)).fetchone()
-        # استيراد سابق لنفس الرابط بمحتوى مطابق/أفضل: المهام success
-        # لا تُعاد — والمحتوى نفسه سيُتخطى idempotently بفحص doc_id.
-        task = {"id": row["id"], "url": url, "section": SECTION,
+        if taskqueue.approved_source_for_url(conn, url) is None:
+            stats["unapproved"] += 1
+            continue
+        if dry_run:
+            task_id = -1  # محاكاة الأنبوب دون إنشاء/تغيير مهام الطابور
+        else:
+            _created, source_id = taskqueue.enqueue_approved_url(
+                conn, url, SECTION, "topic")
+            if source_id is None:
+                stats["unapproved"] += 1
+                continue
+            key = canonicalize_url(url)
+            row = conn.execute("SELECT id FROM crawl_tasks WHERE url=?",
+                               (key,)).fetchone()
+            task_id = row["id"]
+        # الاستيراد الحقيقي يسجل مهمة ناجحة للمصدر؛ dry-run يستخدم id سالباً
+        # كي لا يكتب في crawl_tasks.
+        task = {"id": task_id, "url": url, "section": SECTION,
                 "kind": "topic", "domain_tier": HF_IMPORT_DOMAIN_TIER}
         crawl_stats = {"pages": 0, "docs": 0, "articles": 0,
                        "skipped": 0, "failures": 0}
@@ -127,8 +138,9 @@ def import_hf_laws(conn, laws_path=None, articles_path=None,
             crawl_stats["pages"] = 1
         crawler._handle_topic(conn, task, to_import_html(law["title"], arts),
                               dry_run, crawl_stats)
-        status = conn.execute("SELECT status FROM crawl_tasks WHERE id=?",
-                              (row["id"],)).fetchone()["status"]
+        status_row = (conn.execute("SELECT status FROM crawl_tasks WHERE id=?",
+                                   (task_id,)).fetchone() if task_id > 0 else None)
+        status = status_row["status"] if status_row else None
         doc = conn.execute(
             "SELECT status FROM documents WHERE doc_id=?",
             (crawler.make_doc_id(url),)).fetchone()
@@ -142,9 +154,10 @@ def import_hf_laws(conn, laws_path=None, articles_path=None,
             stats["alternate"] += 1
         else:
             stats["imported"] += 1
-    conn.commit()
-    out = Path(__file__).parent / "output"
-    out.mkdir(exist_ok=True)
-    (out / "hf_index.json").write_text(
-        json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
+    if not dry_run:
+        conn.commit()
+        out = Path(__file__).parent / "output"
+        out.mkdir(exist_ok=True)
+        (out / "hf_index.json").write_text(
+            json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
     return stats

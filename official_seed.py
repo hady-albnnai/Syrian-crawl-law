@@ -4,8 +4,9 @@ official_seed.py — بذّار المصادر الرسمية بنى ووردب�
 
 بدل انتظار اكتشاف الروابط عبر تصفح الأقسام، يقرأ فهرس sitemap الخاص
 بوردبريس (wp-sitemap.xml) ويستخرج روابط أنواع المحتوى القانوني المحددة
-بconfig.MOJ_POST_TYPES (قرارات وتعاميم وزارة العدل)، ثم يبذرها بالطابور
-كمهام topic جاهزة — idempotent (enqueue لا يكرر موجوداً).
+بconfig.MOJ_POST_TYPES (قرارات وتعاميم وزارة العدل). لا تُدرج أي صفحة
+إلا إذا كان عنوانها ضمن مصدر approved؛ الاعتماد وإدراج هذه المهام مرحلتان
+مستقلتان، والإدراج idempotent.
 
 حدود الأدب: عدد صفحات sitemap لكل نوع محدود بconfig.MAX_SITEMAP_PAGES،
 والبذر نفسه لا يجلب أي صفحة محتوى — الجلب يبقى حصراً عبر fetcher
@@ -88,19 +89,26 @@ def seed_wipo(conn, http_get=None, dry_run: bool = False) -> dict:
     else:
         log.warning(f"فهرس ويبو غير متاح ({st}) — المثبتات فقط")
 
-    added = skipped = 0
+    added = skipped = unapproved = 0
     for url, section in pairs:
         if dry_run:
-            log.info(f"[dry] {section} ← {url[:70]}")
+            if taskqueue.approved_source_for_url(conn, url) is None:
+                unapproved += 1
+            else:
+                log.info(f"[dry] {section} ← {url[:70]}")
             continue
-        if taskqueue.enqueue(conn, url, section, "topic"):
+        created, source_id = taskqueue.enqueue_approved_url(
+            conn, url, section, "topic")
+        if source_id is None:
+            unapproved += 1
+        elif created:
             added += 1
         else:
             skipped += 1
     stats = {"pins": len(WIPO_SEED_LAWS), "index_found": index_found,
-             "added": added, "skipped": skipped}
+             "added": added, "skipped": skipped, "unapproved": unapproved}
     log.info(f"بذر ويبو: فهرس {index_found} + مثبتات {len(WIPO_SEED_LAWS)} — "
-             f"أُضيف {added}، موجود سابقاً {skipped}")
+            f"أُدرج {added}، موجود سابقاً {skipped}، بلا مصدر معتمد {unapproved}")
     return stats
 
 
@@ -110,18 +118,26 @@ def seed_moj(conn, http_get=None, post_types: dict = None,
     import crawl_queue as taskqueue
 
     pairs = fetch_post_urls(post_types=post_types, http_get=http_get)
-    added = skipped = 0
+    added = skipped = unapproved = 0
     for url, section in pairs:
         if dry_run:
-            log.info(f"[dry] {section} ← {url[:70]}")
+            if taskqueue.approved_source_for_url(conn, url) is None:
+                unapproved += 1
+            else:
+                log.info(f"[dry] {section} ← {url[:70]}")
             continue
-        if taskqueue.enqueue(conn, url, section, "topic"):
+        created, source_id = taskqueue.enqueue_approved_url(
+            conn, url, section, "topic")
+        if source_id is None:
+            unapproved += 1
+        elif created:
             added += 1
         else:
             skipped += 1
-    stats = {"found": len(pairs), "added": added, "skipped": skipped}
-    log.info(f"بذر moj: عُثر على {stats['found']}، أُضيف {added}، "
-             f"موجود سابقاً {skipped}")
+    stats = {"found": len(pairs), "added": added, "skipped": skipped,
+             "unapproved": unapproved}
+    log.info(f"بذر moj: عُثر على {stats['found']}، أُدرج {added}، "
+             f"موجود سابقاً {skipped}، بلا مصدر معتمد {unapproved}")
     return stats
 
 
@@ -141,14 +157,22 @@ def seed_bunud(conn, http_get=None, dry_run: bool = False) -> dict:
         log.warning(f"خريطة بنود غير متاحة: {exc}")
         return {"found": 0, "added": 0, "skipped": 0}
     urls = bunud_source.sitemap_law_urls(index_xml, http_get)
-    added = skipped = 0
+    added = skipped = unapproved = 0
     for url in urls:
         if dry_run:
+            if taskqueue.approved_source_for_url(conn, url) is None:
+                unapproved += 1
             continue
-        if taskqueue.enqueue(conn, url, bunud_source.SECTION, "topic"):
+        created, source_id = taskqueue.enqueue_approved_url(
+            conn, url, bunud_source.SECTION, "topic")
+        if source_id is None:
+            unapproved += 1
+        elif created:
             added += 1
         else:
             skipped += 1
-    stats = {"found": len(urls), "added": added, "skipped": skipped}
-    log.info(f"بذر بنود: خريطة {len(urls)} — أُضيف {added}، موجود سابقاً {skipped}")
+    stats = {"found": len(urls), "added": added, "skipped": skipped,
+             "unapproved": unapproved}
+    log.info(f"بذر بنود: خريطة {len(urls)} — أُدرج {added}، موجود سابقاً "
+             f"{skipped}، بلا مصدر معتمد {unapproved}")
     return stats

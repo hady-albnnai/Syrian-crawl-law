@@ -23,6 +23,13 @@ def _db(tmp_path, monkeypatch):
     return database.get_connection()
 
 
+def _approve_parliament_source(conn):
+    conn.execute("INSERT INTO sources (source_key, base_url, name, status) "
+                 "VALUES ('parliament-http', 'http://parliament.gov.sy/', "
+                 "'مجلس الشعب', 'approved')")
+    conn.commit()
+
+
 _FILLER = ("ينشأ الالتزام عن التراضي بين الطرفين ويجب أن يكون محله "
            "مشروعاً غير مخالف للقانون والنظام العام والآداب. ")
 
@@ -50,6 +57,7 @@ def test_import_gates_and_tier(tmp_path, monkeypatch):
     lp, ap = _write_parquets(
         tmp_path, laws, _arts("good", 6))
     conn = _db(tmp_path, monkeypatch)
+    _approve_parliament_source(conn)
     rep = hf.import_hf_laws(conn, lp, ap)
     assert rep["imported"] == 1 and rep["empty"] == 1
     doc = conn.execute("SELECT source_domain_tier, status, identity_key "
@@ -67,6 +75,35 @@ def test_import_gates_and_tier(tmp_path, monkeypatch):
     conn.close()
 
 
+def test_import_skips_unapproved_source_url(tmp_path, monkeypatch):
+    laws = [_law("candidate", "القانون رقم 5 لعام 2006",
+                 "http://parliament.gov.sy/laws/Law/2006/candidate.htm")]
+    lp, ap = _write_parquets(tmp_path, laws, _arts("candidate", 6))
+    conn = _db(tmp_path, monkeypatch)
+    rep = hf.import_hf_laws(conn, lp, ap)
+    assert rep["unapproved"] == 1 and rep["imported"] == 0
+    assert conn.execute("SELECT COUNT(*) FROM crawl_tasks").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    conn.close()
+
+
+def test_dry_import_does_not_enqueue_or_write_documents(tmp_path, monkeypatch):
+    import crawler
+    laws = [_law("dry", "القانون رقم 5 لعام 2006",
+                 "http://parliament.gov.sy/laws/Law/2006/dry.htm")]
+    lp, ap = _write_parquets(tmp_path, laws, _arts("dry", 6))
+    conn = _db(tmp_path, monkeypatch)
+    _approve_parliament_source(conn)
+    monkeypatch.setattr(crawler, "SAVE_RAW_HTML", True)
+    monkeypatch.setattr(crawler, "SNAPSHOT_DIR", tmp_path / "snapshots")
+    rep = hf.import_hf_laws(conn, lp, ap, dry_run=True)
+    assert rep["imported"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM crawl_tasks").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    assert not (tmp_path / "snapshots").exists()
+    conn.close()
+
+
 def test_import_idempotent_and_alternate_vs_better(tmp_path, monkeypatch):
     """إعادة الاستيراد تخطي؛ وهوية موجودة أفضل من ويبو (طبقة 2) تبقى
     والوافد يصير نسخة بديلة موثقة."""
@@ -76,6 +113,7 @@ def test_import_idempotent_and_alternate_vs_better(tmp_path, monkeypatch):
                  "http://parliament.gov.sy/laws/Decree/1949/p18.htm")]
     lp, ap = _write_parquets(tmp_path, laws, _arts("penal", 5))
     conn = _db(tmp_path, monkeypatch)
+    _approve_parliament_source(conn)
     # نسخة أفضل موجودة مسبقاً (هوية العقوبات، طبقة 2 كويبو)
     conn.execute(
         "INSERT INTO documents (doc_id, title, source_url, clean_content, "

@@ -62,6 +62,12 @@ def db(tmp_path, monkeypatch):
     conn.close()
 
 
+def _approve_source(conn):
+    conn.execute("INSERT INTO sources (source_key, base_url, name, status) "
+                 "VALUES ('syria-law', 'https://syria-law.com/', 'syria-law', 'approved')")
+    conn.commit()
+
+
 def _fake_big(url):
     """قانون بـ40 مادة يجتاز بوابات الجودة (المحاكاة الصغيرة تُرفض عمداً)."""
     if "lawss?" in url:
@@ -75,6 +81,7 @@ def _fake_big(url):
 
 
 def test_import_saves_document_and_articles(db, monkeypatch):
+    _approve_source(db)
     monkeypatch.setattr(sl, "POLITE_DELAY", 0)
     rep = sl.import_laws(db, dry_run=False, http_get=_fake_big)
     assert rep["laws"] == 1 and rep["imported"] == 1 and rep["failed"] == 0
@@ -86,7 +93,30 @@ def test_import_saves_document_and_articles(db, monkeypatch):
     assert rep2["skipped"] == 1 and db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
 
 
+def test_import_requires_approved_source(db):
+    called = []
+    rep = sl.import_laws(db, http_get=lambda url: called.append(url))
+    assert rep["unapproved"] == 1
+    assert called == []
+    assert db.execute("SELECT COUNT(*) FROM crawl_tasks").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+
+
+def test_dry_import_does_not_enqueue_or_write_documents(db, monkeypatch, tmp_path):
+    import crawler
+    _approve_source(db)
+    monkeypatch.setattr(sl, "POLITE_DELAY", 0)
+    monkeypatch.setattr(crawler, "SAVE_RAW_HTML", True)
+    monkeypatch.setattr(crawler, "SNAPSHOT_DIR", tmp_path / "snapshots")
+    rep = sl.import_laws(db, dry_run=True, http_get=_fake_big)
+    assert rep["laws"] == 1 and rep["imported"] == 1
+    assert db.execute("SELECT COUNT(*) FROM crawl_tasks").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    assert not (tmp_path / "snapshots").exists()
+
+
 def test_force_reparse_replaces_same_source(db, monkeypatch):
+    _approve_source(db)
     monkeypatch.setattr(sl, "POLITE_DELAY", 0)
     sl.import_laws(db, dry_run=False, http_get=_fake_big)
 

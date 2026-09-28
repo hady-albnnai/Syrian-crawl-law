@@ -6,8 +6,68 @@
 وإعادة التشغيل تكمل من حيث توقفت بلا تكرار (url UNIQUE + حالات صريحة).
 """
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 from urls import canonicalize_url
+
+
+def _valid_http_url(url: str):
+    try:
+        parsed = urlparse((url or "").strip())
+        if (parsed.scheme not in ("http", "https") or not parsed.hostname or
+                parsed.username or parsed.password):
+            return None
+        # الوصول إلى .port يكشف رقم منفذ مشوهاً.
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if not 1 <= port <= 65535:
+            return None
+        return parsed, port
+    except (AttributeError, ValueError):
+        return None
+
+
+def approved_source_for_url(conn, url: str):
+    """يعيد سجل المصدر approved الذي يغطي origin والمسار، وإلا None.
+
+    مطابقة www اختيارية؛ أما المخطط والمنفذ وحدود المسار فمطابقة صريحة،
+    لتجنب أن يغطي اعتماد HTTPS خدمة HTTP أو منفذاً/مجلداً آخر بالخطأ.
+    """
+    parsed_result = _valid_http_url(url)
+    if parsed_result is None:
+        return None
+    target, target_port = parsed_result
+    target_host = (target.hostname or "").lower().rstrip(".").removeprefix("www.")
+    target_path = (target.path or "/").rstrip("/") or "/"
+    rows = conn.execute(
+        "SELECT id, base_url, name, source_role, status FROM sources "
+        "WHERE status='approved' AND base_url IS NOT NULL ORDER BY id").fetchall()
+    for row in rows:
+        parsed_result = _valid_http_url(row["base_url"] or "")
+        if parsed_result is None:
+            continue
+        base, base_port = parsed_result
+        base_host = (base.hostname or "").lower().rstrip(".").removeprefix("www.")
+        if (base.scheme != target.scheme or base_port != target_port or
+                not base_host or base_host != target_host):
+            continue
+        base_path = (base.path or "/").rstrip("/") or "/"
+        if base_path != "/" and not (
+                target_path == base_path or target_path.startswith(base_path + "/")):
+            continue
+        return dict(row)
+    return None
+
+
+def enqueue_approved_url(conn, url: str, section: str, kind: str):
+    """يدرج رابطاً واحداً فقط إذا كان ضمن source approved.
+
+    يعيد ``(enqueued, source_id)``؛ ``source_id=None`` يعني أن الاعتماد أو
+    نطاقه لا يغطي الرابط، بينما False مع ID يعني أن المهمة موجودة مسبقاً.
+    """
+    source = approved_source_for_url(conn, url)
+    if source is None:
+        return False, None
+    return enqueue(conn, url, section, kind), source["id"]
 
 PARAMS_BY_KIND = {"section": ("start",), "topic": ()}
 
@@ -24,6 +84,46 @@ def enqueue(conn, url: str, section: str, kind: str) -> bool:
                 (key, section, kind, datetime.now().isoformat()))
     conn.commit()
     return True
+
+
+def enqueue_approved_sources(conn, source_ids=None) -> list[dict]:
+    """إدراج صريح لمصادر معتمدة في الطابور؛ الاعتماد وحده لا يدرج مهاماً.
+
+    إذا أُعطيت IDs، يجب أن يكون كل مصدر منها approved؛ وإلا يُرفض الطلب
+    كاملاً قبل أي إدراج لتجنب طابور جزئي ناتج عن خطأ في الاختيار.
+    """
+    requested = None if source_ids is None else [int(x) for x in source_ids]
+    if requested is not None and not requested:
+        return []
+    if requested is None:
+        rows = conn.execute(
+            "SELECT id, base_url, name FROM sources WHERE status='approved' "
+            "AND base_url IS NOT NULL ORDER BY id").fetchall()
+    else:
+        placeholders = ",".join("?" for _ in requested)
+        rows = conn.execute(
+            f"SELECT id, base_url, name, status FROM sources WHERE id IN "
+            f"({placeholders}) ORDER BY id", requested).fetchall()
+        by_id = {row["id"]: row for row in rows}
+        missing = [sid for sid in requested if sid not in by_id]
+        unapproved = [sid for sid in requested
+                      if sid in by_id and by_id[sid]["status"] != "approved"]
+        if missing or unapproved:
+            raise ValueError(f"مصادر غير قابلة للإدراج؛ مفقود={missing} "
+                             f"غير معتمد={unapproved}")
+
+    invalid_urls = [row["id"] for row in rows
+                    if _valid_http_url(row["base_url"] or "") is None]
+    if invalid_urls:
+        raise ValueError(f"مصادر approved ذات base_url غير صالح: {invalid_urls}")
+
+    added = []
+    for row in rows:
+        name = row["name"] or row["base_url"]
+        created = enqueue(conn, row["base_url"], name, "section")
+        added.append({"source_id": row["id"], "url": row["base_url"],
+                      "section": name, "enqueued": created})
+    return added
 
 
 def claim_next(conn, domain: str | None = None):

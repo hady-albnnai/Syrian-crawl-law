@@ -2,6 +2,8 @@
 """اختبارات الزحف القابل للاستئناف (التسليم 3) — محلية بلا شبكة."""
 from pathlib import Path
 
+import pytest
+
 import database
 import crawl_queue as taskqueue
 import crawler
@@ -46,6 +48,62 @@ def test_section_pagination_distinct_tasks(tmp_path, monkeypatch):
     taskqueue.enqueue(conn, "https://x.org/f3?start=25", "س", "section")
     n = conn.execute("SELECT COUNT(*) c FROM crawl_tasks").fetchone()["c"]
     assert n == 2
+    conn.close()
+
+
+def test_enqueue_approved_sources_is_explicit_and_validated(tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    conn.execute("INSERT INTO sources (source_key, base_url, name, status) "
+                 "VALUES ('a', 'https://approved.example/legal', 'approved', 'approved')")
+    approved_id = conn.execute("SELECT id FROM sources WHERE source_key='a'").fetchone()[0]
+    conn.execute("INSERT INTO sources (source_key, base_url, name, status) "
+                 "VALUES ('p', 'https://proposed.example/', 'proposed', 'proposed')")
+    proposed_id = conn.execute("SELECT id FROM sources WHERE source_key='p'").fetchone()[0]
+    conn.execute("INSERT INTO sources (source_key, base_url, name, status) "
+                 "VALUES ('bad', 'file:///tmp/source', 'bad', 'approved')")
+    bad_id = conn.execute("SELECT id FROM sources WHERE source_key='bad'").fetchone()[0]
+    conn.commit()
+
+    added = taskqueue.enqueue_approved_sources(conn, [approved_id])
+    assert len(added) == 1 and added[0]["enqueued"] is True
+    assert taskqueue.pending_count(conn) == 1
+    with pytest.raises(ValueError):
+        taskqueue.enqueue_approved_sources(conn, [proposed_id])
+    assert taskqueue.pending_count(conn) == 1  # validation قبل أي إدراج جزئي
+    with pytest.raises(ValueError, match="base_url غير صالح"):
+        taskqueue.enqueue_approved_sources(conn, [approved_id, bad_id])
+    assert taskqueue.pending_count(conn) == 1  # URL غير صالح لا يترك طابوراً جزئياً
+    conn.close()
+
+
+def test_approved_url_gate_checks_scheme_host_port_and_path(tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    conn.execute("INSERT INTO sources (source_key, base_url, name, status) "
+                 "VALUES ('scoped', 'https://law.example/legal', 'scoped', 'approved')")
+    conn.commit()
+    assert taskqueue.approved_source_for_url(
+        conn, "https://www.law.example/legal/2025/act") is not None
+    assert taskqueue.approved_source_for_url(
+        conn, "https://law.example/private/act") is None
+    assert taskqueue.approved_source_for_url(
+        conn, "http://law.example/legal/act") is None
+    assert taskqueue.approved_source_for_url(
+        conn, "https://law.example:8443/legal/act") is None
+    conn.close()
+
+
+def test_crawler_does_not_seed_or_enqueue_approved_sources(tmp_path, monkeypatch):
+    """تشغيل الزاحف يستهلك الطابور فقط؛ لا يبذر المنتدى ولا المصادر المعتمدة."""
+    fetches = []
+    monkeypatch.setattr(crawler.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(crawler, "fetch", lambda url: fetches.append(url))
+    conn = _tmp_db(tmp_path, monkeypatch)
+    conn.execute("INSERT INTO sources (source_key, base_url, name, status) "
+                 "VALUES ('a', 'https://approved.example/legal', 'approved', 'approved')")
+    conn.commit()
+    crawler.start_crawling(max_pages=5)
+    assert conn.execute("SELECT COUNT(*) FROM crawl_tasks").fetchone()[0] == 0
+    assert fetches == []
     conn.close()
 
 

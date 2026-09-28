@@ -1,21 +1,19 @@
 # -*- coding: utf-8 -*-
-"""autopilot.py — الطيار الآلي: الزاحف يلاقي مصادره لحالو ويتعامل معها.
+"""autopilot.py — تقييم مرشحي المصادر مع فصل صريح للمراحل.
 
-حلقة كاملة بلا إدخال يدوي:
-  توليد مرشحين ← تقييم مهذب (robots + استخراج v4 + درجة قانونية)
-  ← اعتماد تلقائي ببوابة أعلى من «موصى به» اليدوي ← بذر طابور الزحف.
+المسار الحالي: توليد/تقييم مرشحين مهذب (robots + استخراج + درجة) ثم تسجيل
+التقييم في sources بحالة proposed. لا اعتماد أو queue أو جلب للوثائق
+ينشأ ضمناً من مرحلة أخرى. الاعتماد الآلي متوقف افتراضياً؛ حتى allowlist
+المضيفين فارغة، ولا تُملأ إلا بعد معايرة سورية مستقلة.
 
-قنوات التوليد (كلها آلية):
-  1) دليل البذور المرفق (SEED_SOURCES).
-  2) بحث: DuckDuckGo بلا مفتاح، وBing بمفتاح إن وُجد (الصد يُعالج صراحة).
-  3) تنقيب المتن المخزون: الروابط الخارجية داخل لقطات data/snapshots —
-     المتن يقود إلى مصادره المجاورة («يلقّى مصادره لحالو» عملياً).
-  4) خرائط المواقع: robots.txt (Sitemap:) ثم /sitemap.xml للمصادر المعتمدة.
+قنوات التوليد:
+  1) دليل البذور: مرشح seed لا whitelist.
+  2) بحث خارجي عند اختيار search_via صراحةً؛ لا مزود افتراضياً.
+  3) تنقيب المتن المخزون (محلي).
+  4) خرائط المواقع للمصادر المعتمدة.
 
-بوابة الاعتماد التلقائي (auto_verdict) — أعلى من SOURCE_MIN_SCORE اليدوي:
-  حكم recommended + درجة ≥ AUTO_APPROVE_MIN_SCORE + مواد مستخرجة فعلية
-  ≥ AUTO_APPROVE_MIN_ARTICLES. كل قرار يُسجل في sources بـ decided_by='auto'
-  للتدقيق، ولا يزحف شيء قبل ذلك.
+إدراج المصدر المعتمد في الطابور له أمر منفصل (`queue-approved`)، وجلب
+صفحات الطابور له أمر/مرحلة crawl منفصلة.
 """
 import re
 from pathlib import Path
@@ -23,7 +21,6 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-import crawl_queue as taskqueue
 import law_identity
 from config import BASE_URL
 from crawler import SNAPSHOT_DIR
@@ -41,6 +38,9 @@ log = get_log("autopilot")
 # بوابة الاعتماد التلقائي — أعلى من «موصى به» اليدوي (55) لأن القرار آلي.
 AUTO_APPROVE_MIN_SCORE = 70.0
 AUTO_APPROVE_MIN_ARTICLES = 3
+# لا اعتماد آلي افتراضياً: لا تُضاف نطاقات إلى هذه المجموعة إلا بعد
+# قياسها على مجموعة مصادر سورية ذهبية ومراجعة الاختصاص/الدور/الحقوق.
+AUTO_APPROVE_TRUSTED_HOSTS = frozenset()
 
 # مضيفون لا يُقترحون مصادرَ تشريعية أبداً (شبكات/اختصارات روابط).
 _SKIP_HOSTS = {
@@ -95,10 +95,37 @@ def reference_driven_queries(conn, limit: int = MAX_REFERENCE_QUERIES) -> list:
 
 # ═══════════════════ المضيفون المعروفون (لا تُقترح مرة أخرى) ═══════════════════
 
+_COMPOUND_PUBLIC_SUFFIXES = {
+    # قائمة محافظة للنطاقات متعددة المستويات الشائعة؛ أهمها gov.sy حيث
+    # إن الاقتصار على آخر عنوانين يدمج moj.gov.sy وparliament.gov.sy خطأً.
+    "gov.sy", "edu.sy", "com.sy", "org.sy", "net.sy", "mil.sy",
+    "gov.jo", "edu.jo", "com.jo", "gov.lb", "edu.lb", "com.lb",
+    "gov.iq", "edu.iq", "com.iq", "gov.eg", "edu.eg", "com.eg",
+    "gov.sa", "edu.sa", "com.sa", "gov.ae", "edu.ae", "com.ae",
+    "gov.kw", "edu.kw", "com.kw", "gov.qa", "edu.qa", "com.qa",
+    "gov.bh", "edu.bh", "com.bh", "gov.om", "edu.om", "com.om",
+    "gov.ma", "edu.ma", "com.ma", "gov.tn", "edu.tn", "com.tn",
+    "gov.dz", "edu.dz", "com.dz", "gov.ye", "edu.ye", "com.ye",
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "com.au", "org.au",
+    "gov.au", "edu.au", "co.nz", "org.nz", "govt.nz",
+}
+
+
 def _registrable(netloc: str) -> str:
-    """أقرب تقدير للنطاق المسجَّل: آخر عنوانين (بلا www)."""
-    parts = (netloc or "").lower().removeprefix("www.").split(".")
-    return ".".join(parts[-2:]) if len(parts) >= 2 else (netloc or "").lower()
+    """تقدير محافظ لهوية الناشر، مع مراعاة نطاقات متعددة المستويات المعروفة.
+
+    ليس بديلاً عن Public Suffix List الكاملة؛ في حالة غير معروفة نرجع
+    آخر عنوانين، لكن لا نُسقط جهات سورية مستقلة تحت gov.sy/edu.sy.
+    """
+    host = (netloc or "").lower().split(":", 1)[0].rstrip(".")
+    host = host.removeprefix("www.")
+    parts = host.split(".") if host else []
+    if len(parts) < 2:
+        return host
+    suffix2 = ".".join(parts[-2:])
+    if suffix2 in _COMPOUND_PUBLIC_SUFFIXES:
+        return ".".join(parts[-3:]) if len(parts) >= 3 else suffix2
+    return suffix2
 
 
 def known_registrables(conn) -> set:
@@ -160,11 +187,13 @@ _LEGAL_URL_RE = re.compile(
     r"law|qanoon|qanun|marsom|decree|legal|tashri|قانون|مرسوم", re.IGNORECASE)
 
 
-def sitemap_candidates(base_url: str, limit: int = 15) -> list:
+def sitemap_candidates(base_url: str, limit: int = 15,
+                       record_log: bool = True) -> list:
     """Sitemap: من robots.txt ثم /sitemap.xml — روابط بنمط تشريعي فقط."""
     out = []
     maps = []
-    robots = fetch(base_url.rstrip("/") + "/robots.txt")
+    robots = fetch(base_url.rstrip("/") + "/robots.txt",
+                   record_log=record_log)
     if robots.get("ok"):
         for line in robots["html"].splitlines():
             if line.lower().startswith("sitemap:"):
@@ -172,7 +201,7 @@ def sitemap_candidates(base_url: str, limit: int = 15) -> list:
     if not maps:
         maps = [base_url.rstrip("/") + "/sitemap.xml"]
     for sm in maps[:2]:
-        result = fetch(sm)
+        result = fetch(sm, record_log=record_log)
         if not result.get("ok"):
             continue
         for loc in re.findall(r"<loc>\s*(.*?)\s*</loc>", result["html"]):
@@ -185,8 +214,10 @@ def sitemap_candidates(base_url: str, limit: int = 15) -> list:
 
 # ═══════════════════ توليد المرشحين (القنوات مجتمعة) ═══════════════════
 
-def generate_candidates(conn, use_search: bool = True,
-                        queries: list = None) -> list:
+def generate_candidates(conn, use_search: bool = False,
+                        queries: list = None,
+                        search_via: str | None = None,
+                        record_log: bool = True) -> list:
     """مرشحون من كل القنوات — مُلغى تكرارهم، وبلا نطاقات معروفة/مستثناة.
 
     الاستعلامات المستخدمة عند queries=None (السلوك الافتراضي): الثلاثة
@@ -213,12 +244,13 @@ def generate_candidates(conn, use_search: bool = True,
         add(cand)
 
     if use_search:
-        providers = [DuckDuckGoHtmlProvider()]
-        try:
+        if search_via not in {"ddg", "bing"}:
+            raise ValueError("يلزم اختيار search_via صراحةً من ddg أو bing")
+        if search_via == "ddg":
+            providers = [DuckDuckGoHtmlProvider()]
+        else:
             from discovery import BingApiProvider
-            providers.append(BingApiProvider())
-        except SearchUnavailable:
-            pass  # بلا مفتاح — DDG وحده
+            providers = [BingApiProvider()]
         from gap_analysis import gap_driven_queries
         # B-1: الفجوات المعلومة (صكوك مستهدَفة بتعديل/إلغاء/أمومة وغير
         # محصودة) تتقدّم على كل شيء — الزاحف يبحث عمّا يعرف أنه ينقصه.
@@ -243,7 +275,8 @@ def generate_candidates(conn, use_search: bool = True,
 
     for src in approved_sources(conn):
         try:
-            for cand in sitemap_candidates(src["base_url"]):
+            for cand in sitemap_candidates(src["base_url"],
+                                           record_log=record_log):
                 add(cand)
         except Exception as exc:
             log.info(f"خريطة موقع {src['base_url']} تعذرت: {exc}")
@@ -268,21 +301,39 @@ def auto_verdict(ev) -> tuple:
 
 
 def consider_auto_approve(conn, cand_url: str, ev) -> bool:
-    """يعتمد ويبذر الطابور إن اجتاز البوابة — يعيد هل اعتُمد."""
+    """اعتماد استثنائي لمضيف allowlist فقط؛ لا يدرج أي مهمة في الطابور.
+
+    الـallowlist فارغة عمداً حتى تُعاير على مجموعة مصادر سورية موثقة.
+    الاعتماد وإدراج المهام مرحلتان منفصلتان حتى عند السماح بهذا المسار.
+    """
+    host = (urlparse(cand_url).hostname or "").lower().removeprefix("www.")
+    trusted = {h.lower().removeprefix("www.") for h in AUTO_APPROVE_TRUSTED_HOSTS}
+    if host not in trusted:
+        log.info("   ⏸ المصدر بقي مقترحاً — لا يوجد مضيف موثوق للاعتماد الآلي")
+        return False
+    source = conn.execute(
+        "SELECT source_role, publisher_country, collection_scope, domain_tier "
+        "FROM sources WHERE source_key=?", (_source_key(cand_url),)).fetchone()
+    if (source is None or source["source_role"] not in
+            {"official_publisher", "court", "bar_association"} or
+            source["publisher_country"] not in {"SY", "Syria", "سوريا", "سورية"} or
+            not (source["collection_scope"] or "").strip() or
+            source["domain_tier"] is None or source["domain_tier"] > 1):
+        log.info("   ⏸ لا تكفي بيانات دور المصدر/الدولة/المجموعة/الرسمية للاعتماد")
+        return False
     ok, why = auto_verdict(ev)
     if not ok:
         log.info(f"   ⏸ مقترح فقط ({why}) — يحتاج موافقة يدوية")
         return False
     decide_source(conn, _source_key(cand_url), True, decided_by="auto")
-    taskqueue.enqueue(conn, cand_url, ev.title or cand_url, "section")
-    log.info(f"   🤖 اعتُمد تلقائياً وبُذر في الطابور — {why}")
+    log.info(f"   🤖 اعتُمد وفق allowlist الثابتة، بلا إدراج للطابور — {why}")
     return True
 
 
 # ═══════════════════ الحلقة الكاملة ═══════════════════
 
 def bootstrap_primary_source(conn):
-    """يسجل المنتدى الأساسي مصدراً معتمداً (مرة) — تُدار كل المصادر بجدول واحد."""
+    """يسجل المنتدى الأساسي كبذرة مرشحة فقط؛ لا whitelist ولا اعتماد."""
     key = _source_key(BASE_URL)
     if conn.execute("SELECT 1 FROM sources WHERE source_key = ?",
                     (key,)).fetchone():
@@ -290,23 +341,35 @@ def bootstrap_primary_source(conn):
     from datetime import datetime
     conn.execute('''
         INSERT INTO sources (source_key, base_url, name, engine, credibility,
-                             status, discovered_via, discovered_at,
-                             decided_at, decided_by)
-        VALUES (?, ?, ?, 'phpbb', 0.9, 'approved', 'seed-primary', ?, ?, 'user')
+                             status, discovered_via, discovered_at, source_role)
+        VALUES (?, ?, ?, 'phpbb', 0.6, 'proposed', 'seed-primary', ?, 'unknown')
     ''', (key, canonicalize_url(BASE_URL), "مكتبة القانون السوري (منتدى)",
-          datetime.now().isoformat(), datetime.now().isoformat()))
+          datetime.now().isoformat()))
     conn.commit()
     return True
 
 
-def run_discovery(conn, auto_approve: bool = True, use_search: bool = True,
-                  max_evaluate: int = 12) -> dict:
-    """يولّد ← يقيّم ← يسجل ← (يعتمد تلقائياً + يبذر) — يعيد إحصاءات التدقيق."""
-    stats = {"seen": 0, "evaluated": 0, "new": 0, "approved": 0,
-             "rejected": 0, "blocked": 0, "approved_list": [], "errors": []}
-    bootstrap_primary_source(conn)
+def run_discovery(conn, auto_approve: bool = False, use_search: bool = False,
+                  max_evaluate: int = 12,
+                  search_via: str | None = None,
+                  dry_run: bool = False) -> dict:
+    """يولّد ويقيّم مرشحين فقط؛ لا يعتمد ولا يدرج مهاماً.
 
-    candidates = generate_candidates(conn, use_search=use_search)
+    ``dry_run=True`` يمنع أي كتابة DB (بما فيها تسجيل seed الأساسي
+    والمرشحين) لكنه لا يمنع الشبكة التي يحتاجها تقييم المصادر.
+    ``auto_approve`` محفوظ لتوافق المستدعين التاريخيين ولا يغيّر الحالة.
+    """
+    if auto_approve:
+        log.info("تجاهل auto_approve: قرار الاعتماد منفصل عن الاكتشاف وموقوف هنا")
+    stats = {"seen": 0, "evaluated": 0, "new": 0, "approved": 0,
+             "proposed": 0, "rejected": 0, "blocked": 0,
+             "approved_list": [], "errors": []}
+    if not dry_run:
+        bootstrap_primary_source(conn)
+
+    candidates = generate_candidates(conn, use_search=use_search,
+                                     search_via=search_via,
+                                     record_log=not dry_run)
     log.info(f"🔎 {len(candidates)} مرشحاً جديداً من القنوات الآلية")
 
     for cand in candidates:
@@ -317,58 +380,95 @@ def run_discovery(conn, auto_approve: bool = True, use_search: bool = True,
         log.info(f"[{stats['evaluated']}/{max_evaluate}] تقييم: "
                  f"{cand.url[:80]} (عبر: {cand.via})")
         try:
-            ev = evaluate_candidate(cand.url)
+            ev = evaluate_candidate(cand.url, record_log=not dry_run)
         except Exception as exc:
             stats["errors"].append(f"{cand.url}: {exc}")
             log.info(f"   ❌ عطل تقييم: {exc}")
             continue
-        _id, created = register_candidate(conn, cand.url, cand.via, ev)
-        if created:
-            stats["new"] += 1
+        if dry_run:
+            created = False
+        else:
+            _id, created = register_candidate(conn, cand.url, cand.via, ev)
+            if created:
+                stats["new"] += 1
         if ev.verdict == "blocked":
-            stats["blocked"] += 1  # يبقى proposed — robots قد تتغير لاحقاً
-        if ev.verdict == "recommended":
-            if auto_approve and consider_auto_approve(conn, cand.url, ev):
-                stats["approved"] += 1
-                stats["approved_list"].append(
-                    {"url": canonicalize_url(cand.url),
-                     "title": ev.title or cand.url, "engine": ev.engine,
-                     "score": ev.score, "articles": ev.articles,
-                     "via": cand.via})
-                continue
-        if ev.verdict != "blocked":
+            stats["blocked"] += 1  # يبقى مرشحاً؛ robots قد تتغير لاحقاً
+            stats["proposed"] += 1
+        elif ev.verdict == "recommended":
+            # التوصية ليست اعتماداً؛ لا يحوّل هذا المسار status إلى approved.
+            stats["proposed"] += 1
+        else:
+            # الدرجة الآلية ليست قرار رفض نهائياً؛ يمكن أن يكون الاستخراج
+            # ناقصاً أو نوع المصدر مختلفاً. يسجل السبب ويبقى مصدره proposed.
             stats["rejected"] += 1
-        if ev.verdict == "rejected":
-            # الحكم يُسجل في صف المصدر نفسه (لا في الإحصاء فقط) — للتدقيق.
-            decide_source(conn, _source_key(cand.url), False,
-                          decided_by="auto")
-        conn.commit()
+            stats["proposed"] += 1
+        if not dry_run:
+            conn.commit()
 
-    conn.commit()
-    log.info(f"🏁 الطيار: رُئي {stats['seen']} | قُيّم {stats['evaluated']} | "
-             f"جديد {stats['new']} | اعتُمد {stats['approved']} | "
-             f"مقترح/مرفوض {stats['rejected']} | محجوب {stats['blocked']}")
+    if not dry_run:
+        conn.commit()
+    log.info(f"🏁 التقييم: رُئي {stats['seen']} | قُيّم {stats['evaluated']} | "
+             f"جديد {stats['new']} | اعتُمد allowlist={stats['approved']} | "
+             f"بقي مقترحاً {stats['proposed']} | غير موصى آلياً {stats['rejected']} | "
+             f"محجوب robots {stats['blocked']}")
     return stats
 
 
-def run_autopilot(pages: int = 20, use_search: bool = True,
-                  auto_approve: bool = True, crawl: bool = True,
+def run_autopilot(pages: int = 20, use_search: bool = False,
+                  auto_approve: bool = False, crawl: bool = False,
                   max_evaluate: int = 12, stop_event=None,
-                  dry_run: bool = False) -> dict:
-    """اكتشاف ذاتي كامل ثم زحف المعتمد — نقطة الدخول للأمر **والواجهة**.
+                  dry_run: bool = False,
+                  search_via: str | None = None,
+                  discover: bool = False) -> dict:
+    """يشغّل المراحل التي طُلبت صراحة فقط.
 
-    دفعة 5: الواجهة كانت تكرّر ترتيب الخطوات هنا (‏`run_discovery` ثم
-    `start_crawling`) لأن الدالة لم تكن تقبل `stop_event` — ازدواجية تنجرف.
-    صارت المعبر الوحيد: مفتاح الإيقاف والوضع التجريبي يمرّان من هنا.
+    افتراضياً لا يفتح قاعدة البيانات ولا يتصل بالشبكة. ``discover=True``
+    يشغّل التقييم ويسجل المقترحات؛ مع ``dry_run=True`` لا تُكتب المقترحات.
+    ``crawl=True`` يستهلك المهام الموجودة مسبقاً. لا يربط الاعتماد أو الإدراج
+    بأحد الخيارين.
     """
-    from database import create_tables, get_connection
-    create_tables()
-    conn = get_connection()
-    try:
-        stats = run_discovery(conn, auto_approve=auto_approve,
-                              use_search=use_search, max_evaluate=max_evaluate)
-    finally:
-        conn.close()
+    stats = {"seen": 0, "evaluated": 0, "new": 0, "approved": 0,
+             "proposed": 0, "rejected": 0, "blocked": 0,
+             "approved_list": [], "errors": []}
+    if discover:
+        if dry_run:
+            import sqlite3
+            from urllib.parse import quote
+            from database import DB_PATH
+            db_path = Path(DB_PATH)
+            if db_path.exists():
+                uri = "file:" + quote(str(db_path.resolve()), safe="/:") + "?mode=ro"
+                conn = sqlite3.connect(uri, uri=True)
+            else:
+                if use_search:
+                    raise ValueError("dry-run مع البحث يحتاج قاعدة موجودة؛ "
+                                     "لن تُنشأ قاعدة تلقائياً للمعاينة")
+                conn = sqlite3.connect(":memory:")
+                conn.executescript("""
+                    CREATE TABLE documents (source_url TEXT, clean_content TEXT,
+                                            status TEXT, identity_key TEXT);
+                    CREATE TABLE sources (id INTEGER, base_url TEXT, name TEXT,
+                                          credibility REAL, status TEXT);
+                """)
+            conn.row_factory = sqlite3.Row
+        else:
+            from database import create_tables, get_connection
+            create_tables()
+            conn = get_connection()
+        try:
+            if dry_run and use_search:
+                tables = {row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                if not {"documents", "law_amendments"}.issubset(tables):
+                    raise ValueError("dry-run مع البحث يحتاج مخطط قاعدة مكتمل؛ "
+                                     "لم يُنشأ أو يُهاجر أي مخطط تلقائياً")
+            stats = run_discovery(conn, auto_approve=auto_approve,
+                                  use_search=use_search,
+                                  max_evaluate=max_evaluate,
+                                  search_via=search_via,
+                                  dry_run=dry_run)
+        finally:
+            conn.close()
     if crawl and pages > 0:
         from crawler import start_crawling
         start_crawling(max_pages=pages, dry_run=dry_run,

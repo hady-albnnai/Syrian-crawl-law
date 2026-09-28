@@ -131,14 +131,16 @@ def doc_json(doc, articles) -> dict:
 
 def build_package(db_path=DB_PATH, out_dir="export/content_package",
                   prefix=DEFAULT_PREFIX, min_articles=0,
-                  with_manifest: bool = True) -> dict:
+                  with_manifest: bool = True,
+                  current_only: bool = False) -> dict:
     """يبني الحزمة كاملة ويعيد إحصاءات للتقرير.
 
     with_manifest=True (الافتراضي) يوسّع كل JSON جانبي بعقد المواد الغني
     (الحالة القانونية، سلسلة التعديل، طبقة الرسمية، بصمة كل مادة) ويكتب
     mizan_package_manifest.json، ثم يجتاز بوابة التحقق ذاتها التي يجتازها
-    ميزان (verify_package). الإخفاق في التوسيع لا يُفشل التصدير: الحزمة
-    تبقى صالحة للفهرس القديم، ويُبلَّغ السبب في إحصاءات التقرير.
+    ميزان (verify_package). current_only=True خيار مستقل ومحافظ يرشّح إلى
+    وثائق اجتازت مراجعة بشرية للمتن/النفاذ/الحقوق مرتبطة ببصمة النص الحالية؛
+    لا يغير عقد CSV ذي الأعمدة الأربعة عشر.
     """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -158,6 +160,14 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
     docs = conn.execute(
         "SELECT * FROM documents WHERE status = 'active' "
         f"{nature_filter}{parts_filter}ORDER BY year, number, id").fetchall()
+    current_assessments = {}
+    current_excluded = []
+    if current_only:
+        from legal_quality import filter_current_laws
+        eligible_docs, current_excluded = filter_current_laws(conn, docs)
+        docs = [doc for doc, _assessment in eligible_docs]
+        current_assessments = {doc["id"]: assessment
+                               for doc, assessment in eligible_docs}
     folded_parts = conn.execute(
         "SELECT COUNT(*) FROM documents WHERE status='active' "
         "AND part_of IS NOT NULL").fetchone()[0] if has_parts else 0
@@ -218,11 +228,18 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
         md_path = out / "markdown" / f"{stem}.md"
         js_path = out / "markdown" / f"{stem}.json"
         md_path.write_bytes(md_bytes)
+        sidecar = doc_json(doc, articles)
+        if current_only:
+            sidecar["current_law_eligibility"] = {
+                "eligible": True,
+                "policy": current_assessments[doc["id"]]["policy"],
+                "subject_sha256": current_assessments[doc["id"]]["subject_sha256"],
+                "human_reviewed_types": ["full_text", "legal_status", "rights"],
+            }
         with open(js_path, "w", encoding="utf-8", newline="\n") as jf:
             # LF صريح: بايت الجانبي لا تتبدّل بين ويندوز وLinux (النص نفسه،
             # لكن «الحجم = البايتات» يجب أن يبقى صادقاً على كل منصة)
-            jf.write(json.dumps(doc_json(doc, articles),
-                                ensure_ascii=False, indent=2))
+            jf.write(json.dumps(sidecar, ensure_ascii=False, indent=2))
         # sha256 = بصمة **الملف الذي سيحمّصه ميزان فعلياً** (= ملف md المذكور
         # في local_path). الدلالة القديمة كانت «بصمة الملف المصدري» (لقطة
         # HTML الخام إن وُجدت)، وبوابة السلامة في csv_legal_library_importer
@@ -275,6 +292,11 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
     rep = {"docs": len(rows), "skipped": skipped,
            "renamed": renamed, "non_instruments": non_instruments,
            "folded_parts": folded_parts,
+           "current_only": bool(current_only),
+           "current_excluded": len(current_excluded),
+           "current_exclusion_reasons": [
+               {"document_id": doc["id"], "reasons": assessment["reasons"]}
+               for doc, assessment in current_excluded],
            "csv": str(csv_path), "out_dir": str(out)}
     if with_manifest:
         rep.update(_finalize(out, db_path, rows))

@@ -10,6 +10,13 @@ import wayback_source as wb
 ORIG = "http://parliament.gov.sy/laws/Law/1950/essential_04.htm"
 
 
+def _approve_original_source(conn):
+    conn.execute("INSERT INTO sources (source_key, base_url, name, status) "
+                 "VALUES ('parliament-http', 'http://parliament.gov.sy/', "
+                 "'parliament.gov.sy', 'approved')")
+    conn.commit()
+
+
 def _http(url):
     """CDX بلقطات + لقطة خام — محقون بالكامل."""
     if wb.CDX_BASE in url:
@@ -75,6 +82,7 @@ def test_wayback_crawl_upgrades_adopted_row_in_place(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "w.db"))
     database.create_tables()
     conn = database.get_connection()
+    _approve_original_source(conn)
 
     monkeypatch.setattr(
         hf_syria_laws, "load_laws_with_articles",
@@ -122,12 +130,15 @@ def test_wayback_crawl_skips_pdf_and_counts(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "w2.db"))
     database.create_tables()
     conn = database.get_connection()
+    _approve_original_source(conn)
     monkeypatch.setattr(
         hf_syria_laws, "load_laws_with_articles",
         lambda *a, **k: [
             ({"id": "p", "title": "pdf", "source_url":
               "http://jus.moj.gov.sy/sites/default/files/x.pdf"}, []),
-            ({"id": "h", "title": "htm", "source_url": ORIG}, [])])
+            ({"id": "h", "title": "htm", "source_url": ORIG}, []),
+            ({"id": "x", "title": "unapproved", "source_url":
+              "https://other.example/law"}, [])])
     calls = []
 
     def _fake(u):

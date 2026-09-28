@@ -24,7 +24,7 @@ import law_status
 import source_quality
 import wipo_source
 import bunud_source
-from config import (BASE_URL, CIRCUIT_BREAKER_CONSECUTIVE_FAILURES,
+from config import (CIRCUIT_BREAKER_CONSECUTIVE_FAILURES,
                     MAX_CLEAN_CONTENT_CHARS, SAVE_RAW_HTML)
 from database import get_connection
 from extractor import detect_branch, is_legal_content, legal_score
@@ -119,7 +119,7 @@ def _handle_topic(conn, task, html, dry_run, stats):
         return
     title, clean = ext["title"], ext["clean_text"]
     articles = ext["articles"]
-    snapshot_sha256 = save_snapshot(html) if SAVE_RAW_HTML else None
+    snapshot_sha256 = save_snapshot(html) if SAVE_RAW_HTML and not dry_run else None
     if not is_legal_content(clean, title):
         taskqueue.mark(conn, task["id"], "needs_review", "غير قانوني ظاهرياً")
         log.info("   ⚠️ لم يجتز الفحص القانوني — needs_review")
@@ -341,36 +341,10 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None, domain: str | N
     if revived:
         log.info(f"♻️ أُنقذت {revived} مهمة عالقة من دورة منكسرة")
 
-    # بذر الطابور إن كان فارغاً تماماً (أول تشغيل)
-    if taskqueue.pending_count(conn) == 0 and not conn.execute(
-            "SELECT 1 FROM crawl_tasks WHERE status='success' LIMIT 1").fetchone():
-        for path, section in [(f"{BASE_URL}f3-montada", "القانون المدني"),
-                              (f"{BASE_URL}f9-montada", "القانون الجزائي"),
-                              (f"{BASE_URL}f15-montada", "أصول المحاكمات"),
-                              (f"{BASE_URL}f24-montada", "الأحوال الشخصية"),
-                              (f"{BASE_URL}f14-montada", "القانون التجاري"),
-                              (f"{BASE_URL}f4-montada", "الدساتير")]:
-            taskqueue.enqueue(conn, path, section, "section")
-        log.info(" بُذر الطابور بأقسام البداية")
-
-    # المصادر المعتمدة (يدوياً أو بالطيار الآلي) تُبذر كل دورة — idempotent:
-    # الرابط المكرر لا يُدرج، والمكتمل سابقاً يبقى مكتملاً. الترتيب هنا
-    # يتبع أداء كل مصدر تاريخياً (learning.prioritized_active_sources,
-    # §5 من خطة الاكتشاف الذاتي): الأكثر إنتاجاً لقوانين فريدة يُبذر أولاً
-    # فيُزار أولاً (الطابور FIFO)؛ المصادر «المستنفدة» (3 دورات فارغة
-    # متتالية) تُستبعد تلقائياً من إعادة الزحف — توفير موارد شبكة. مصدر
-    # تراكمت عليه 3 رفضات بشرية صريحة من شاشة المراجعة (learning.
-    # record_rejection، طلب المالك 2026-09-06) يُستبعد بنفس الطريقة —
-    # بوابة استبعاد ثانية مستقلة مصدرها قرار بشري لا عدّاد آلي فارغ.
-    try:
-        import learning
-        for src in learning.prioritized_active_sources(conn):
-            name = src["name"] or src["base_url"]
-            if taskqueue.enqueue(conn, src["base_url"], name, "section"):
-                log.info(f"🌐 مصدر معتمد أُضيف للطابور: {name} "
-                         f"({src['base_url']})")
-    except Exception as exc:  # جدول sources غير موجود (قاعدة قديمة) — نتجاوزه
-        log.info(f"تخطي بذر المصادر المعتمدة: {exc}")
+    # لا بذر افتراضياً هنا: هذا المسار يستهلك المهام الموجودة فقط.
+    # أضف المهام بأمر مستقل (`queue-approved`) بعد اعتماد المصدر ومراجعته.
+    if taskqueue.pending_count(conn) == 0:
+        log.info("📭 لا مهام زحف مُدرجة صراحةً — لم تتم إضافة بذور أو مصادر تلقائياً")
 
     stats = {"pages": 0, "docs": 0, "articles": 0, "skipped": 0, "failures": 0}
     consecutive_failures = 0

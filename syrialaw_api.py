@@ -156,7 +156,12 @@ def import_laws(conn, post_type: str = "laws", only_names: list[str] | None = No
     from source_quality import domain_tier_for_url
 
     stats = {"laws": 0, "imported": 0, "alternate": 0, "skipped": 0,
-             "needs_review": 0, "failed": 0, "empty": 0}
+             "needs_review": 0, "failed": 0, "empty": 0, "unapproved": 0}
+    if taskqueue.approved_source_for_url(conn, BASE) is None:
+        stats["unapproved"] = 1
+        log.warning("توقّف الاستيراد: syria-law ليس مصدراً معتمداً؛ "
+                    "اعتمده أولاً ثم أعد الأمر")
+        return stats
     terms = list_laws(post_type, http_get)
     if only_names:
         terms = [t for t in terms if any(n in t["name"] for n in only_names)]
@@ -165,6 +170,9 @@ def import_laws(conn, post_type: str = "laws", only_names: list[str] | None = No
     for t in terms:
         stats["laws"] += 1
         url = t["link"]
+        if taskqueue.approved_source_for_url(conn, url) is None:
+            stats["unapproved"] += 1
+            continue
         done = conn.execute(
             "SELECT 1 FROM crawl_tasks WHERE url=? AND status='success'",
             (canonicalize_url(url),)).fetchone()
@@ -183,17 +191,28 @@ def import_laws(conn, post_type: str = "laws", only_names: list[str] | None = No
             stats["empty"] += 1
             continue
         key = canonicalize_url(url)
-        taskqueue.enqueue(conn, url, SECTION, "topic")
-        row = conn.execute("SELECT id FROM crawl_tasks WHERE url=?", (key,)).fetchone()
-        if force:
-            conn.execute("UPDATE crawl_tasks SET status='pending' WHERE id=?", (row["id"],))
-        task = {"id": row["id"], "url": url, "section": SECTION, "kind": "topic",
+        if dry_run:
+            # المعاينة لا تُنشئ مهمة طابور ولا تغيّر حالتها.
+            task_id = -1
+        else:
+            _created, source_id = taskqueue.enqueue_approved_url(
+                conn, url, SECTION, "topic")
+            if source_id is None:
+                stats["unapproved"] += 1
+                continue
+            row = conn.execute("SELECT id FROM crawl_tasks WHERE url=?", (key,)).fetchone()
+            task_id = row["id"]
+            if force:
+                conn.execute("UPDATE crawl_tasks SET status='pending' WHERE id=?", (task_id,))
+        task = {"id": task_id, "url": url, "section": SECTION, "kind": "topic",
                 "domain_tier": domain_tier_for_url(url), "reparse": bool(force)}
         cs = {"pages": 0, "docs": 0, "articles": 0, "skipped": 0, "failures": 0}
         if dry_run:
             cs["pages"] = 1
         crawler._handle_topic(conn, task, to_import_html(t["name"], arts), dry_run, cs)
-        status = conn.execute("SELECT status FROM crawl_tasks WHERE id=?", (row["id"],)).fetchone()["status"]
+        status_row = (conn.execute("SELECT status FROM crawl_tasks WHERE id=?",
+                                   (task_id,)).fetchone() if task_id > 0 else None)
+        status = status_row["status"] if status_row else None
         doc = conn.execute("SELECT status FROM documents WHERE doc_id=?", (crawler.make_doc_id(url),)).fetchone()
         if cs["failures"]:
             stats["failed"] += 1

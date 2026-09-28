@@ -40,8 +40,9 @@ def test_detect_engine_generic():
 def _patch_fetch(monkeypatch, html):
     import fetcher
     monkeypatch.setattr(fetcher, "fetch",
-                        lambda url: {"ok": True, "status": 200, "html": html,
-                                     "ms": 1, "final_url": url, "encoding": "utf-8"})
+                        lambda url, **_kw: {"ok": True, "status": 200, "html": html,
+                                            "ms": 1, "final_url": url,
+                                            "encoding": "utf-8"})
     # evaluate_candidate يستورد fetch داخل discovery — نربطه بالمسخ أيضاً
     monkeypatch.setattr(discovery, "fetch", fetcher.fetch)
 
@@ -66,8 +67,8 @@ def test_evaluate_rejects_non_legal_source(monkeypatch):
 def test_evaluate_marks_robots_blocked(monkeypatch):
     import fetcher
     monkeypatch.setattr(fetcher, "fetch",
-                        lambda url: {"ok": False, "status": None, "html": "",
-                                     "error": "blocked_by_robots"})
+                        lambda url, **_kw: {"ok": False, "status": None, "html": "",
+                                            "error": "blocked_by_robots"})
     monkeypatch.setattr(discovery, "fetch", fetcher.fetch)
     ev = evaluate_candidate("https://nope.example/x")
     assert ev.verdict == "blocked"

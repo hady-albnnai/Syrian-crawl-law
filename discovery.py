@@ -16,7 +16,9 @@
 المرشح يُسجل في جدول sources بحالة proposed — idempotent بمفتاح مستقر.
 """
 import hashlib
+import json
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from urllib.parse import urlparse
@@ -63,13 +65,13 @@ class Evaluation:
 
 # ═════════════════════════ بوابة التقييم ═════════════════════════
 
-def evaluate_candidate(url: str) -> Evaluation:
+def evaluate_candidate(url: str, record_log: bool = True) -> Evaluation:
     """يقيّم مرشح مصدر بجلب مهذب (يحترم robots) ثم استخراج وتحليل.
 
     الاستخراج بالمستخرج v4 (سقوط عام مُقيَّم) — يقيّم المصادر غير المنتديات
     بعدالة، ويعيد عدد المواد الفعلية لبوابة الاعتماد التلقائي.
     """
-    result = fetch(url)
+    result = fetch(url, record_log=record_log)
     if not result.get("ok"):
         err = result.get("error", "fetch_failed")
         verdict = "blocked" if err == "blocked_by_robots" else "rejected"
@@ -178,20 +180,29 @@ def _source_key(url: str) -> str:
 
 def register_candidate(conn, candidate_url: str, via: str,
                        ev: Evaluation) -> tuple:
-    """يسجل مرشحاً في sources — idempotent بمفتاح مستقر. يعيد (id, created)."""
+    """يسجل/يحدّث تقييم مرشح المصدر دون اعتماده أو إدراجه للطابور."""
     key = _source_key(candidate_url)
+    reasons_json = json.dumps(list(ev.reasons or []), ensure_ascii=False)
     cur = conn.cursor()
     cur.execute("SELECT id FROM sources WHERE source_key = ?", (key,))
     row = cur.fetchone()
     if row is not None:
+        cur.execute('''
+            UPDATE sources SET engine=?, evaluation_verdict=?, evaluation_score=?,
+                evaluation_reasons_json=?, discovered_via=COALESCE(discovered_via, ?)
+            WHERE id=?
+        ''', (ev.engine, ev.verdict, float(ev.score or 0.0), reasons_json,
+              via, row["id"]))
         return row["id"], False
     cur.execute('''
         INSERT INTO sources
         (source_key, base_url, name, engine, credibility, status,
-         discovered_via, discovered_at)
-        VALUES (?, ?, ?, ?, ?, 'proposed', ?, ?)
+         discovered_via, discovered_at, source_role, evaluation_verdict,
+         evaluation_score, evaluation_reasons_json)
+        VALUES (?, ?, ?, ?, ?, 'proposed', ?, ?, 'unknown', ?, ?, ?)
     ''', (key, canonicalize_url(candidate_url), ev.title or candidate_url,
-          ev.engine, 0.6, via, datetime.now().isoformat()))
+          ev.engine, 0.6, via, datetime.now().isoformat(), ev.verdict,
+          float(ev.score or 0.0), reasons_json))
     return cur.lastrowid, True
 
 
@@ -212,8 +223,11 @@ def decide_source(conn, source_key: str, approve: bool,
 
 def approved_sources(conn) -> list:
     cur = conn.cursor()
-    cur.execute("SELECT base_url, name, credibility FROM sources "
-                "WHERE status = 'approved' ORDER BY id")
+    try:
+        cur.execute("SELECT base_url, name, credibility FROM sources "
+                    "WHERE status = 'approved' ORDER BY id")
+    except sqlite3.OperationalError:
+        return []
     return [dict(r) for r in cur.fetchall()]
 
 

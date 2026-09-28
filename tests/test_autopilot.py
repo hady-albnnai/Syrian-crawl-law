@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""اختبارات الطيار الآلي — الزاحف يلاقي مصادره لحالو ويتعامل معها.
+"""اختبارات تقييم المرشحين وفصل الاعتماد والطابور والجلب.
 
-محلية بالكامل (بلا شبكة): استخراج روابط حسب المحرك، تنقيب المتن،
-قناة الخرائط، بوابة الاعتماد التلقائي، الحلقة الكاملة (تقييم ← اعتماد ←
-بذر الطابور)، وزحف قائمة WordPress من طرف لطرف بمسار الزاحف الحقيقي.
+محلية بالكامل (بلا شبكة): استخراج/تنقيب الروابط، تقييمات ثابتة، وسياسات
+عدم الاعتماد أو إدراج المهام أو الزحف ضمناً، مع fixtures للزاحف.
 """
 from pathlib import Path
 
@@ -75,6 +74,101 @@ def test_wp_pagination_respects_same_host():
 
 # ═════════════════ القناة 3: تنقيب المتن المخزون ═════════════════
 
+def test_registrable_keeps_independent_sy_government_publishers():
+    assert autopilot._registrable("moj.gov.sy") == "moj.gov.sy"
+    assert autopilot._registrable("parliament.gov.sy") == "parliament.gov.sy"
+    assert autopilot._registrable("law-library.syriaforums.net") == "syriaforums.net"
+
+
+def test_external_search_provider_must_be_selected(tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="search_via"):
+        autopilot.generate_candidates(conn, use_search=True)
+    conn.close()
+
+
+def test_cli_autopilot_crawl_is_independent_of_discovery(monkeypatch):
+    from types import SimpleNamespace
+    import cli
+    import crawler
+    calls = []
+    monkeypatch.setattr(crawler, "start_crawling",
+                        lambda **kwargs: calls.append(kwargs))
+    args = SimpleNamespace(discover=False, crawl=True, search=False,
+                           search_via=None, pages=7, max_evaluate=12)
+    assert cli.cmd_autopilot(args) == 0
+    assert calls == [{"max_pages": 7, "dry_run": False}]
+
+
+def test_cli_autopilot_search_requires_explicit_discovery():
+    from types import SimpleNamespace
+    import cli
+    args = SimpleNamespace(discover=False, crawl=False, search=True,
+                           search_via="ddg", pages=10, max_evaluate=12)
+    assert cli.cmd_autopilot(args) == 2
+
+
+def test_run_autopilot_default_is_side_effect_free(monkeypatch):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("default autopilot must not evaluate or crawl")
+    monkeypatch.setattr(autopilot, "run_discovery", forbidden)
+    import crawler
+    monkeypatch.setattr(crawler, "start_crawling", forbidden)
+    stats = autopilot.run_autopilot()
+    assert stats["seen"] == stats["evaluated"] == stats["new"] == 0
+
+
+def test_run_autopilot_preview_without_database_does_not_create_one(
+        tmp_path, monkeypatch):
+    db_path = tmp_path / "absent.sqlite"
+    monkeypatch.setattr(database, "DB_PATH", db_path)
+    monkeypatch.setattr(autopilot, "generate_candidates",
+                        lambda *_a, **_kw: [])
+    stats = autopilot.run_autopilot(discover=True, dry_run=True)
+    assert stats["seen"] == 0
+    assert not db_path.exists()
+
+
+def test_run_autopilot_preview_opens_existing_database_read_only(
+        tmp_path, monkeypatch):
+    import sqlite3
+    db_path = tmp_path / "existing.sqlite"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE marker (value TEXT)")
+        conn.execute("INSERT INTO marker VALUES ('kept')")
+    monkeypatch.setattr(database, "DB_PATH", db_path)
+    observed = {}
+
+    def probe(conn, **kwargs):
+        observed["value"] = conn.execute("SELECT value FROM marker").fetchone()[0]
+        assert kwargs["dry_run"] is True
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            conn.execute("CREATE TABLE forbidden (id INTEGER)")
+        return {"preview": True}
+
+    monkeypatch.setattr(autopilot, "run_discovery", probe)
+    assert autopilot.run_autopilot(discover=True, dry_run=True) == {"preview": True}
+    assert observed["value"] == "kept"
+    with sqlite3.connect(db_path) as conn:
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "forbidden" not in tables
+
+
+def test_run_autopilot_crawl_only_skips_discovery(monkeypatch):
+    from threading import Event
+    calls = []
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("crawl-only path must not discover")
+    import crawler
+    monkeypatch.setattr(autopilot, "run_discovery", forbidden)
+    monkeypatch.setattr(crawler, "start_crawling",
+                        lambda **kwargs: calls.append(kwargs))
+    event = Event()
+    autopilot.run_autopilot(pages=4, crawl=True, stop_event=event)
+    assert calls == [{"max_pages": 4, "dry_run": False, "stop_event": event}]
+
+
 def test_mine_corpus_links_picks_external_legal_only(tmp_path, tmp_path_factory,
                                                      monkeypatch):
     conn = _tmp_db(tmp_path, monkeypatch)
@@ -107,17 +201,22 @@ def test_mine_corpus_skips_known_registrable(tmp_path, monkeypatch):
 # ═════════════════ القناة 4: خرائط المواقع ═════════════════
 
 def test_sitemap_candidates_from_robots_then_sitemap(monkeypatch):
+    calls = []
+
     def fake_fetch(url, **kw):
+        calls.append(kw.get("record_log", True))
         body = ROBOTS if url.endswith("robots.txt") else SITEMAP
         return {"ok": True, "status": 200, "html": body, "ms": 1,
                 "final_url": url, "encoding": "utf-8"}
+
     monkeypatch.setattr(autopilot, "fetch", fake_fetch)
-    cands = sitemap_candidates("https://src.example/")
+    cands = sitemap_candidates("https://src.example/", record_log=False)
     urls = [c.url for c in cands]
     assert "https://src.example/laws/civil-law" in urls
     assert "https://src.example/qanoon/penal-code" in urls
     assert all("blog/hello" not in u for u in urls)
     assert all(c.via == "sitemap" for c in cands)
+    assert calls == [False, False]
 
 
 # ═════════════════ بوابة الاعتماد التلقائي ═════════════════
@@ -127,7 +226,33 @@ def _ev(verdict="recommended", score=80.0, articles=4):
                       "عنوان", verdict, [], articles)
 
 
+def test_discovery_dry_run_does_not_register_primary_or_candidates(
+        tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    candidate = Candidate("https://new.example/law", "قانون", via="fixture")
+    seen = {}
+
+    def fake_generate(_conn, **kwargs):
+        seen["generation_record_log"] = kwargs["record_log"]
+        return [candidate]
+
+    def fake_evaluate(_url, **kwargs):
+        seen["evaluation_record_log"] = kwargs["record_log"]
+        return _ev()
+
+    monkeypatch.setattr(autopilot, "generate_candidates", fake_generate)
+    monkeypatch.setattr(autopilot, "evaluate_candidate", fake_evaluate)
+    stats = run_discovery(conn, dry_run=True, max_evaluate=1)
+    assert stats["evaluated"] == 1 and stats["proposed"] == 1
+    assert seen == {"generation_record_log": False,
+                    "evaluation_record_log": False}
+    assert conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 0
+    assert taskqueue.pending_count(conn) == 0
+    conn.close()
+
+
 def test_auto_gate_passes_strong_source():
+
     ok, why = auto_verdict(_ev())
     assert ok and "محرك wordpress" in why
 
@@ -147,16 +272,37 @@ def test_auto_gate_rejects_non_recommended():
     assert not ok
 
 
-def test_consider_auto_approve_records_decided_by_auto_and_enqueues(
+def test_auto_approval_is_disabled_without_trusted_host_and_never_queues(
         tmp_path, monkeypatch):
     conn = _tmp_db(tmp_path, monkeypatch)
     ev = _ev()
     discovery.register_candidate(conn, ev.url, "test", ev)
+    monkeypatch.setattr(autopilot, "AUTO_APPROVE_TRUSTED_HOSTS",
+                        frozenset({"x.example"}))
+    # النطاق وحده لا يكفي؛ الدور/الدولة/المجموعة/فئة الرسمية مجهولة.
+    assert consider_auto_approve(conn, ev.url, ev) is False
+    row = conn.execute("SELECT status, decided_by FROM sources WHERE "
+                       "source_key = ?", (_source_key(ev.url),)).fetchone()
+    assert row["status"] == "proposed" and row["decided_by"] is None
+    assert taskqueue.pending_count(conn) == 0
+    conn.close()
+
+
+def test_allowlisted_auto_approval_still_does_not_enqueue(tmp_path, monkeypatch):
+    conn = _tmp_db(tmp_path, monkeypatch)
+    ev = _ev()
+    discovery.register_candidate(conn, ev.url, "test", ev)
+    conn.execute("UPDATE sources SET source_role='official_publisher', "
+                 "publisher_country='SY', collection_scope='legislation', "
+                 "domain_tier=0 WHERE source_key=?", (_source_key(ev.url),))
+    conn.commit()
+    monkeypatch.setattr(autopilot, "AUTO_APPROVE_TRUSTED_HOSTS",
+                        frozenset({"x.example"}))
     assert consider_auto_approve(conn, ev.url, ev) is True
     row = conn.execute("SELECT status, decided_by FROM sources WHERE "
                        "source_key = ?", (_source_key(ev.url),)).fetchone()
     assert row["status"] == "approved" and row["decided_by"] == "auto"
-    assert taskqueue.pending_count(conn) == 1
+    assert taskqueue.pending_count(conn) == 0
     conn.close()
 
 
@@ -176,8 +322,9 @@ def test_bootstrap_primary_source_idempotent(tmp_path, monkeypatch):
     conn = _tmp_db(tmp_path, monkeypatch)
     assert bootstrap_primary_source(conn) is True
     assert bootstrap_primary_source(conn) is False
-    n = conn.execute("SELECT COUNT(*) c FROM sources").fetchone()["c"]
-    assert n == 1
+    row = conn.execute("SELECT status, decided_by FROM sources").fetchone()
+    assert row["status"] == "proposed" and row["decided_by"] is None
+    assert taskqueue.pending_count(conn) == 0
     conn.close()
 
 
@@ -199,7 +346,7 @@ def test_run_discovery_full_loop_offline(tmp_path, monkeypatch):
     conn = _tmp_db(tmp_path, monkeypatch)
     monkeypatch.setattr(discovery, "fetch", _patched_fetch)
     monkeypatch.setattr(autopilot, "generate_candidates",
-                        lambda c, use_search=True: [
+                        lambda c, use_search=False, search_via=None, **_kw: [
                             Candidate(URL_PASS, "قانون العقوبات", via="corpus"),
                             Candidate(URL_WEAK, "قرار 7", via="corpus"),
                             Candidate(URL_JUNK, "مدونة طبخ", via="search:ddg"),
@@ -207,28 +354,26 @@ def test_run_discovery_full_loop_offline(tmp_path, monkeypatch):
     stats = run_discovery(conn, auto_approve=True, use_search=False)
 
     assert stats["evaluated"] == 3
-    assert stats["approved"] == 1
-    assert stats["approved_list"][0]["url"] == URL_PASS
-    assert stats["approved_list"][0]["articles"] >= AUTO_APPROVE_MIN_ARTICLES
+    assert stats["approved"] == 0  # لا allowlist موثوقة افتراضياً
+    assert stats["proposed"] == 3
+    assert stats["rejected"] == 1  # الصفحة الضعيفة ما زالت مرشحاً لا قرار رفض
+    assert stats["approved_list"] == []
 
-    strong = conn.execute("SELECT status, decided_by, engine FROM sources "
-                          "WHERE base_url = ?", (URL_PASS,)).fetchone()
-    assert (strong["status"], strong["decided_by"], strong["engine"]) == \
-        ("approved", "auto", "wordpress")
+    strong = conn.execute("SELECT status, decided_by, engine, evaluation_verdict "
+                          "FROM sources WHERE base_url = ?", (URL_PASS,)).fetchone()
+    assert (strong["status"], strong["decided_by"], strong["engine"],
+            strong["evaluation_verdict"]) == ("proposed", None, "wordpress", "recommended")
 
-    weak = conn.execute("SELECT status FROM sources WHERE base_url = ?",
+    weak = conn.execute("SELECT status, evaluation_verdict FROM sources WHERE base_url = ?",
                         (URL_WEAK,)).fetchone()
-    assert weak["status"] == "proposed"  # اجتاز اليدوي لا الآلي — يبقى مقترحاً
+    assert (weak["status"], weak["evaluation_verdict"]) == ("proposed", "recommended")
 
-    junk = conn.execute("SELECT status FROM sources WHERE base_url = ?",
+    junk = conn.execute("SELECT status, evaluation_verdict FROM sources WHERE base_url = ?",
                         (URL_JUNK,)).fetchone()
-    assert junk["status"] == "rejected"
+    assert (junk["status"], junk["evaluation_verdict"]) == ("proposed", "rejected")
 
-    # المعتمد وحده بُذر في طابور الزحف (+ المنتدى الأساسي لا يُبذر هنا —
-    # البذر في start_crawling):
-    queued = [r["url"] for r in conn.execute(
-        "SELECT url FROM crawl_tasks WHERE status='queued'")]
-    assert URL_PASS in queued and URL_WEAK not in queued
+    # التقييم والاعتماد لا يُدرجان أي URL تلقائياً.
+    assert taskqueue.pending_count(conn) == 0
     conn.close()
 
 
