@@ -384,3 +384,26 @@ def test_proposed_source_with_rejected_first_verdict_is_still_probed(tmp_path, m
                                sample_count=0, ok=True, articles=0, url=url)
     probation.run_probation(conn, evaluate_fn=ev, measure_fn=lambda c, u: {})
     assert seen == ["https://sana.sy/presidency/"]
+
+
+def test_seed_sources_are_probed_before_wikipedia_junk_of_same_state(tmp_path, monkeypatch):
+    import database, probation
+    from types import SimpleNamespace
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "s.db"))
+    database.create_tables()
+    conn = database.get_connection()
+    for i, (url, via, score) in enumerate([("https://junk.example/", "wikipedia:2", 90),
+                                            ("https://sana.sy/presidency/", "seed", 0)]):
+        conn.execute("INSERT INTO sources (source_key, base_url, name, engine, credibility, status,"
+                     " discovered_via, discovered_at, evaluation_score, evaluation_verdict)"
+                     " VALUES (?,?,?,?,0.6,'proposed',?,'2026-01-01',?,'blocked')",
+                     (f"k{i}", url, url, "unknown", via, score))
+    conn.commit()
+    seen = []
+    def ev(url, record_log=False):
+        seen.append(url)
+        return SimpleNamespace(verdict="rejected", jurisdiction="unknown", source_type="nonlegal",
+                               source_score=0, engine="x", domain_tier=4, reasons=[], details={},
+                               sample_count=0, ok=True, articles=0, url=url)
+    probation.run_probation(conn, max_sources=1, evaluate_fn=ev, measure_fn=lambda c, u: {})
+    assert seen == ["https://sana.sy/presidency/"]
