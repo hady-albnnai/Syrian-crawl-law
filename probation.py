@@ -114,7 +114,7 @@ def measure_sample(conn, base_url: str, fetch_fn=fetch, sample_fn=sample_urls,
                    limit: int = SAMPLE_PAGES) -> dict:
     """يجلب العينة ويقيس؛ لا يكتب في DB ولا في crawl_log."""
     m = {"pages_ok": 0, "pages_failed": 0, "law_pages": 0, "syrian_pages": 0,
-         "foreign_pages": 0, "compatible_law_pages": 0, "unknown_pages": 0,
+         "foreign_pages": 0, "foreign_law_pages": 0, "compatible_law_pages": 0, "unknown_pages": 0,
          "new_pages": 0, "foreign_countries": [], "sampled": []}
     first = fetch_fn(base_url, record_log=False)
     if not first.get("ok"):
@@ -154,6 +154,8 @@ def measure_sample(conn, base_url: str, fetch_fn=fetch, sample_fn=sample_urls,
         if arts and title_key not in seen_titles:   # نسخ الرابط نفسه لا تُعدّ مرتين
             seen_titles.add(title_key)
             m["law_pages"] += 1
+            if v in ("foreign", "mixed"):
+                m["foreign_law_pages"] += 1
             if v == "syrian" or (v == "unknown" and j["foreign_score"] == 0):
                 m["compatible_law_pages"] += 1
         if not _is_known(conn, final):
@@ -170,7 +172,9 @@ def entry_gate(ev) -> tuple:
     """
     if not getattr(ev, "ok", True):
         return False, "تعذر الجلب"
-    if ev.jurisdiction == "foreign":
+    if ev.jurisdiction == "foreign" and not urlparse(ev.url or "").netloc.lower().endswith(".sy"):
+        # نطاق .sy مع حكم «أجنبي» من صفحته الرئيسية يعني عادة أخباراً تذكر دولاً أخرى
+        # (زيارات/اتفاقيات)؛ تحسم العينة على صفحات التشريع نفسها لا على الواجهة.
         return False, "اختصاص أجنبي"
     if ev.source_type not in {"legislation", "mixed"}:
         return False, f"نوع المحتوى {ev.source_type}"
@@ -190,13 +194,20 @@ def decide_from_metrics(m: dict, juris: str = "syrian") -> tuple:
         return "hold", f"تعذر جلب المصدر: {m['error']}"
     if ok < MIN_OK_PAGES:
         return "hold", f"عينة غير كافية: {ok} صفحة ناجحة (المطلوب {MIN_OK_PAGES})"
-    foreign_share = m["foreign_pages"] / ok
-    if foreign_share > MAX_FOREIGN_SHARE and m["foreign_pages"] < 2:
-        return "hold", (f"صفحة أجنبية واحدة من {ok} — قرار بشري (عيّنة صغيرة لا تكفي "
+    # التلوث الأجنبي المهم هو في الصفحات التي ستُحفظ فعلاً (فيها مواد)؛ خبر دبلوماسي
+    # يذكر دولاً أخرى في موقع سوري (sana.sy/presidency) لا يُحفظ أصلاً ولا يُرفض المصدر
+    # بسببه. إن غاب المقياس (بيانات قديمة) عدنا للحساب على كل الصفحات.
+    if "foreign_law_pages" in m:
+        fp, denom, what = m["foreign_law_pages"], m["law_pages"], "قانونية"
+    else:
+        fp, denom, what = m["foreign_pages"], ok, ""
+    foreign_share = fp / denom if denom else 0.0
+    if foreign_share > MAX_FOREIGN_SHARE and fp < 2:
+        return "hold", (f"صفحة {what} أجنبية واحدة من {denom} — قرار بشري (عيّنة صغيرة لا تكفي "
                         f"للرفض): {', '.join(m.get('foreign_countries') or []) or 'غير محدد'}")
     if foreign_share > MAX_FOREIGN_SHARE:
         c = "، ".join(sorted(set(m.get("foreign_countries") or []))) or "غير محدد"
-        return "reject", (f"تسرب أجنبي: {m['foreign_pages']}/{ok} صفحة "
+        return "reject", (f"تسرب أجنبي: {fp}/{denom} صفحة {what} "
                           f"({foreign_share:.0%}) — {c}")
     if m["law_pages"] < MIN_LAW_PAGES:
         return "hold", (f"صفحات بمواد قانونية {m['law_pages']} فقط "

@@ -339,3 +339,27 @@ def test_never_probed_sources_go_before_previously_held(tmp_path, monkeypatch):
     probation.run_probation(conn, max_sources=1, evaluate_fn=ev,
                             measure_fn=lambda c, u: {})
     assert seen == ["https://fresh.example/"]
+
+
+def test_foreign_news_pages_do_not_reject_when_law_pages_are_syrian():
+    import probation
+    m = {"pages_ok": 13, "pages_failed": 0, "law_pages": 4, "syrian_pages": 11,
+         "foreign_pages": 2, "foreign_law_pages": 0, "compatible_law_pages": 4,
+         "unknown_pages": 0, "new_pages": 13, "foreign_countries": ["الإمارات", "العراق"]}
+    assert probation.decide_from_metrics(m, "foreign")[0] == "promote"
+
+
+def test_foreign_law_pages_still_reject():
+    import probation
+    m = {"pages_ok": 12, "pages_failed": 0, "law_pages": 5, "syrian_pages": 8,
+         "foreign_pages": 3, "foreign_law_pages": 2, "compatible_law_pages": 3,
+         "unknown_pages": 0, "new_pages": 12, "foreign_countries": ["مصر"]}
+    assert probation.decide_from_metrics(m, "syrian")[0] == "reject"
+
+
+def test_entry_gate_lets_sy_domain_with_foreign_homepage_through_but_not_others():
+    import probation
+    from types import SimpleNamespace as S
+    base = dict(ok=True, jurisdiction="foreign", source_type="mixed", source_score=79)
+    assert probation.entry_gate(S(url="https://sana.sy/presidency/", **base))[0] is True
+    assert probation.entry_gate(S(url="https://laws.example.eg/", **base))[0] is False
