@@ -212,6 +212,9 @@ def decide_from_metrics(m: dict, juris: str = "syrian") -> tuple:
                        f"جديد علينا {m['new_pages']}")
 
 
+PROBED_MARKER = "اختبار آلي"
+
+
 def _annotate(conn, source_id: int, note: str):
     row = conn.execute("SELECT evaluation_reasons_json FROM sources WHERE id=?",
                        (source_id,)).fetchone()
@@ -259,7 +262,11 @@ def run_probation(conn, max_sources: int = MAX_PER_RUN, dry_run: bool = False,
         "AND COALESCE(decided_by,'') != 'user' "
         "AND (evaluation_verdict IN ('recommended','needs_review','unknown','') "
         "     OR evaluation_verdict IS NULL) "
-        "ORDER BY COALESCE(evaluation_score, 0) DESC, id LIMIT ?", (max_sources,)).fetchall()
+        # الذين لم يُختبروا قط أولاً؛ المُعلَّقون/المحجوبون سابقاً بعدهم، وإلا احتلّوا
+        # حصة الدورة كل مرة وجاع الجدد (moj.gov.sy بدرجة 87 لم يُختبر لهذا السبب).
+        "ORDER BY (COALESCE(evaluation_reasons_json,'') LIKE ?) ASC, "
+        "COALESCE(evaluation_score, 0) DESC, id LIMIT ?",
+        (f"%{PROBED_MARKER}%", max_sources)).fetchall()
     for row in rows:
         if stop_event is not None and stop_event.is_set():
             break
@@ -279,6 +286,9 @@ def run_probation(conn, max_sources: int = MAX_PER_RUN, dry_run: bool = False,
             stats["decisions"].append({"id": sid, "url": url, "decision": "gate",
                                        "reason": reason})
             log.info(f"   PROBATION| #{sid} GATE: {reason}")
+            if not dry_run:
+                _annotate(conn, sid, f"{PROBED_MARKER} (gate): {reason}")
+                conn.commit()
             continue
         m = measure_fn(conn, url)
         decision, reason = decide_from_metrics(m, ev.jurisdiction)
@@ -288,7 +298,7 @@ def run_probation(conn, max_sources: int = MAX_PER_RUN, dry_run: bool = False,
         log.info(f"   PROBATION| #{sid} {decision.upper()}: {reason}")
         if dry_run:
             continue
-        note = f"اختبار آلي ({decision}): {reason}"
+        note = f"{PROBED_MARKER} ({decision}): {reason}"
         _annotate(conn, sid, note)
         if decision == "promote":
             _decide(conn, sid, True)

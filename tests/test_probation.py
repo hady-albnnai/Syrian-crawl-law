@@ -314,3 +314,28 @@ def test_sample_prefers_topic_like_links_over_section_indexes():
     got = sample_urls(f"<html><body>{sections}{topics}</body></html>",
                       "https://s.example/", limit=12)
     assert sum("/t" in u for u in got) >= 8
+
+
+def test_never_probed_sources_go_before_previously_held(tmp_path, monkeypatch):
+    import database, probation
+    from types import SimpleNamespace
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "p.db"))
+    database.create_tables()
+    conn = database.get_connection()
+    def add(url, score, reasons):
+        conn.execute("INSERT INTO sources (source_key, base_url, name, engine, credibility, status,"
+                     " discovered_via, discovered_at, evaluation_score, evaluation_verdict,"
+                     " evaluation_reasons_json) VALUES (?,?,?,?,0.6,'proposed','x','2026-01-01',?,"
+                     "'recommended',?)", (url, url, url, "unknown", score, reasons))
+    add("https://held.example/", 99, '["%s (hold): x"]' % probation.PROBED_MARKER)
+    add("https://fresh.example/", 60, "[]")
+    conn.commit()
+    seen = []
+    def ev(url, record_log=False):
+        seen.append(url)
+        return SimpleNamespace(verdict="rejected", jurisdiction="unknown", source_type="nonlegal",
+                               source_score=0, engine="x", domain_tier=4, reasons=[], details={},
+                               sample_count=0, ok=True, articles=0)
+    probation.run_probation(conn, max_sources=1, evaluate_fn=ev,
+                            measure_fn=lambda c, u: {})
+    assert seen == ["https://fresh.example/"]
