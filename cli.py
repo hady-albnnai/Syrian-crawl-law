@@ -586,9 +586,10 @@ def cmd_discover(args):
     for cand in candidates:
         log.info(f"• {cand.title}  ←  {cand.url}")
         if args.evaluate:
-            ev = evaluate_candidate(cand.url)
+            ev = evaluate_candidate(cand.url, cand.title, cand.snippet)
             register_candidate(conn, cand.url, cand.via, ev)
-            log.info(f"   الحكم: {ev.verdict} | الدرجة {ev.score:.1f} | "
+            log.info(f"   التقييم: {ev.verdict} | المصدر {ev.source_score:.1f}/100 "
+                     f"({ev.source_type}) | الدرجة القانونية {ev.score:.1f} | "
                      f"المحرك {ev.engine} | {'؛ '.join(ev.reasons)}")
     conn.commit()
     conn.close()
@@ -757,14 +758,35 @@ def cmd_sources(args):
     conn = get_connection()
     cur = conn.cursor()
     if args.action == "list":
-        cur.execute("SELECT id, source_key, base_url, name, engine, status "
+        cur.execute("SELECT id, source_key, base_url, name, engine, status, "
+                    "evaluation_score, evaluation_verdict, source_type, "
+                    "evaluation_reasons_json, evaluated_at "
                     "FROM sources ORDER BY id")
         rows = cur.fetchall()
         if not rows:
-            log.info("لا مصادر مسجلة بعد — استخدم discover أو seeds")
+            log.info("لا مصادر مسجلة بعد — استخدم autopilot أو discover")
+        verdict_ar = {"recommended": "موصى به", "needs_review": "يحتاج تدقيقاً",
+                      "rejected": "ضعيف الصلة", "blocked": "محجوب",
+                      "unknown": "غير مقيّم"}
+        type_ar = {"legislation": "تشريعات", "precedent": "اجتهادات",
+                   "mixed": "مختلط", "potential_legal": "قانوني محتمل",
+                   "nonlegal": "غير قانوني", "unknown": "غير محدد"}
+        import json as _json
         for r in rows:
+            score = r["evaluation_score"]
+            evaluation = (f" | تقييم {score:.0f}/100 · "
+                          f"{type_ar.get(r['source_type'], r['source_type'] or '—')} · "
+                          f"{verdict_ar.get(r['evaluation_verdict'], r['evaluation_verdict'] or '—')}"
+                          if score is not None else " | لم يُقيّم بعد")
             log.info(f"[{r['id']}] {r['status']:9s} {r['engine']:10s} "
-                     f"{r['name'][:40]:42s} {r['base_url']}")
+                     f"{r['name'][:40]:42s} {r['base_url']}{evaluation}")
+            if r["evaluation_reasons_json"]:
+                try:
+                    reasons = _json.loads(r["evaluation_reasons_json"])
+                except (TypeError, ValueError):
+                    reasons = []
+                for reason in reasons[:3]:
+                    log.info(f"     ↳ {reason}")
     elif args.action in ("approve", "reject"):
         decide_source(conn, _key_of(conn, args.id), args.action == "approve")
         log.info(f"{'اعتُمد' if args.action == 'approve' else 'رُفض'} المصدر {args.id}")
@@ -773,8 +795,10 @@ def cmd_sources(args):
         from discovery import evaluate_candidate, register_candidate
         ev = evaluate_candidate(args.id)
         sid, created = register_candidate(conn, args.id, "manual", ev)
-        log.info(f"[{sid}] {'سُجّل' if created else 'موجود سابقاً'} — الحكم الآلي: {ev.verdict} | "
-                 f"مواد {ev.articles} | {ev.title[:50]}")
+        log.info(f"[{sid}] {'سُجّل' if created else 'موجود سابقاً'} — تقييم آلي "
+                 f"{ev.source_score:.1f}/100 | {ev.source_type} | الحكم: "
+                 f"{ev.verdict} | مواد {ev.articles} | {ev.title[:50]}"
+                 " | الاعتماد بأمر منفصل: sources approve")
     elif args.action == "reactivate":
         # مصدر «مستنفد» (3 دورات فارغة) يعود للبذر — لصفحات جديدة نُشرت لاحقاً.
         n = conn.execute("UPDATE source_performance SET consecutive_empty_runs=0, learned_status='active' "

@@ -69,3 +69,26 @@ def test_preamble_excluded_from_gap_check():
     articles = [{"article_number": 0, "is_preamble": True}] + _arts(1, 2, 3)
     text = "نص طبيعي."
     assert sq.is_complete_text(text, articles) is True
+
+
+def test_source_assessment_explains_components_and_officiality():
+    official = sq.source_assessment_score(
+        domain_tier=1, source_type="legislation", accessible=True,
+        article_count=4, text_chars=2000, complete_text=True,
+        engine="wordpress")
+    community = sq.source_assessment_score(
+        domain_tier=4, source_type="legislation", accessible=True,
+        article_count=4, text_chars=2000, complete_text=True,
+        engine="wordpress")
+    assert official["score"] > community["score"]
+    assert official["components"]["authority"] == 23
+    assert official["components"]["accessibility"] == 15
+    assert sum(official["components"].values()) == official["score"]
+
+
+def test_nonlegal_source_cannot_score_as_a_recommendation():
+    result = sq.source_assessment_score(
+        domain_tier=4, source_type="nonlegal", accessible=True,
+        engine="generic")
+    assert result["score"] < 55
+    assert result["components"]["relevance"] == 0

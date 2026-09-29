@@ -53,12 +53,20 @@ DEFAULT_QUERIES = [
     "القانون المدني السوري نص كامل",
     "قانون العقوبات السوري مواد",
     "مرسوم تشريعي سوري كامل",
+    "اجتهادات محكمة النقض السورية قرار أساس",
+    "اجتهاد سوري المبدأ القانوني المحكمة الإدارية العليا",
 ]
 
 # أقصى عدد استعلامات مولَّدة من إشارات نصية بكل دورة — يمنع انفجار عدد
 # طلبات البحث لو حوى المتن مئات الإشارات (وثيقة قانونية واحدة قد تشير
 # لعشرات التعديلات التاريخية).
 MAX_REFERENCE_QUERIES = 10
+# حد أعلى لطلبات البحث في الدورة، مع حصة صغيرة لكل قناة كي لا تطغى فجوات
+# التشريع على الاستعلامات العامة واجتهادات المحاكم.
+MAX_SEARCH_QUERIES_PER_RUN = 12
+MAX_MISSING_TARGET_QUERIES_PER_RUN = 4
+MAX_REFERENCE_SEARCH_QUERIES_PER_RUN = 2
+MAX_GAP_SEARCH_QUERIES_PER_RUN = 1
 
 
 # ═══════════════════ القطعة الثانية: إشارات نصية → استعلامات بحث ═══════════════════
@@ -255,20 +263,33 @@ def generate_candidates(conn, use_search: bool = False,
         # B-1: الفجوات المعلومة (صكوك مستهدَفة بتعديل/إلغاء/أمومة وغير
         # محصودة) تتقدّم على كل شيء — الزاحف يبحث عمّا يعرف أنه ينقصه.
         from missing_targets import missing_target_queries
-        effective_queries = list(queries) if queries is not None else (
-            missing_target_queries(conn) + list(DEFAULT_QUERIES)
-            + reference_driven_queries(conn) + gap_driven_queries(conn))
-        effective_queries = list(dict.fromkeys(effective_queries))
+        if queries is not None:
+            effective_queries = list(queries)
+        else:
+            # حصة B-1 تحافظ على أولوية الصكوك الناقصة، مع إبقاء الاستعلامات
+            # العامة/القضائية في الدورة؛ لا تُرسل عشرات الطلبات دفعة واحدة.
+            effective_queries = (
+                missing_target_queries(conn, limit=MAX_MISSING_TARGET_QUERIES_PER_RUN)
+                + list(DEFAULT_QUERIES)
+                + reference_driven_queries(conn, limit=MAX_REFERENCE_SEARCH_QUERIES_PER_RUN)
+                + gap_driven_queries(conn)[:MAX_GAP_SEARCH_QUERIES_PER_RUN])
+        effective_queries = list(dict.fromkeys(effective_queries))[:MAX_SEARCH_QUERIES_PER_RUN]
+        # مزوّد يحجبنا أو تنتهي مهلته يُعطَّل لباقي الدورة؛ لا نكرر 202/403.
+        disabled_providers = set()
         for query in effective_queries:
             for provider in providers:
+                if provider.name in disabled_providers:
+                    continue
                 try:
                     for cand in provider.search(query, limit=6):
                         add(cand)
                     break  # مزود واحد كافٍ لكل استعلام
                 except SearchUnavailable as exc:
-                    log.info(f"قناة {provider.name} غير متاحة: {exc}")
-                except Exception as exc:  # عطل شبكة عابر — القناة تُتجاوز
-                    log.info(f"قناة {provider.name} تعطلت: {exc}")
+                    disabled_providers.add(provider.name)
+                    log.info(f"قناة {provider.name} أُوقفت لهذه الدورة: {exc}")
+                except Exception as exc:  # عطل شبكة/مهلة — القناة تُتجاوز
+                    disabled_providers.add(provider.name)
+                    log.info(f"قناة {provider.name} أُوقفت بعد عطل: {exc}")
 
     for cand in mine_corpus_links(conn):
         add(cand)
@@ -290,6 +311,8 @@ def auto_verdict(ev) -> tuple:
     """(ok, سبب) — أعلى من «موصى به» اليدوي لأن القرار بلا تدخل بشري."""
     if ev.verdict != "recommended":
         return False, f"الحكم {ev.verdict}"
+    if ev.source_type not in {"legislation", "mixed"} or not ev.legal:
+        return False, f"نوع المحتوى {ev.source_type} لا يجتاز الاعتماد الآلي"
     if ev.score < AUTO_APPROVE_MIN_SCORE:
         return False, (f"الدرجة {ev.score:.1f} دون حد الاعتماد التلقائي "
                        f"{AUTO_APPROVE_MIN_SCORE}")
@@ -380,7 +403,9 @@ def run_discovery(conn, auto_approve: bool = False, use_search: bool = False,
         log.info(f"[{stats['evaluated']}/{max_evaluate}] تقييم: "
                  f"{cand.url[:80]} (عبر: {cand.via})")
         try:
-            ev = evaluate_candidate(cand.url, record_log=not dry_run)
+            ev = evaluate_candidate(cand.url, title_hint=cand.title,
+                                   snippet=cand.snippet,
+                                   record_log=not dry_run)
         except Exception as exc:
             stats["errors"].append(f"{cand.url}: {exc}")
             log.info(f"   ❌ عطل تقييم: {exc}")

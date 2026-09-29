@@ -302,9 +302,13 @@ def create_tables():
         source_role TEXT DEFAULT 'unknown',
         publisher_country TEXT,
         collection_scope TEXT,
-        evaluation_verdict TEXT,
         evaluation_score REAL,
-        evaluation_reasons_json TEXT
+        evaluation_verdict TEXT,
+        source_type TEXT,
+        evaluation_reasons_json TEXT,
+        evaluation_details_json TEXT,
+        evaluated_at TEXT,
+        evaluation_sample_count INTEGER DEFAULT 0
     )
     ''')
 

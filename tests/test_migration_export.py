@@ -88,7 +88,7 @@ class TestMigrations:
         assert pathlib.Path(rep["backups"][0]).exists()
 
 
-def test_migration_013_creates_review_forms_and_demotes_seed(tmp_path, monkeypatch):
+def test_migration_014_creates_review_forms_and_demotes_seed(tmp_path, monkeypatch):
     """seed-primary historical auto-approval is not treated as human consent."""
     db = tmp_path / "review_forms_legacy.db"
     conn = sqlite3.connect(db)
@@ -110,7 +110,7 @@ def test_migration_013_creates_review_forms_and_demotes_seed(tmp_path, monkeypat
     conn.commit(); conn.close()
     monkeypatch.setattr(migrations, "BACKUP_DIR", tmp_path / "backups")
     report = migrations.migrate(db)
-    assert report["end_version"] == 13
+    assert report["end_version"] == 14
     conn = sqlite3.connect(db)
     row = conn.execute("SELECT status, decided_at, decided_by, source_role "
                        "FROM sources WHERE id=1").fetchone()

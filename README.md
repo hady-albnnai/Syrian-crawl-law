@@ -44,10 +44,12 @@ python -m cli crawl --pages 10 --mode dry
 python -m cli crawl --pages 30 --mode limited
 python -m cli crawl --pages 500 --mode full --yes
 
-# استكشاف المصادر
-python -m cli discover "القانون المدني السوري" --via ddg --evaluate
-python -m cli seeds
-python -m cli sources list|approve 1|reject 1
+# اكتشاف وتقييم المصادر — لا اعتماد ولا زحف تلقائياً
+python -m cli autopilot --max-evaluate 12
+python -m cli sources list
+# بعد مراجعتك فقط:
+python -m cli sources approve 1
+python -m cli crawl --pages 20 --mode limited
 
 # حزمة ميزان: توليد + بوابة واحدة تُطابق planCsvImport في ميزان
 python -m cli export --out export/content_package     # يكتب المانيفست ويطبع البوابة

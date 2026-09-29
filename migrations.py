@@ -364,21 +364,51 @@ def _migration_012_precedents_v2(cursor) -> dict:
                        "decision_relations", "principle_articles"]}
 
 
-def _migration_013_review_and_forms_separation(cursor) -> dict:
+def _migration_013_source_assessment(cursor) -> dict:
+    """حفظ التقييم الآلي للمصادر المكتشفة (طلب المالك 2026-09-26).
+
+    الدرجة والأسباب/الأدلة منفصلة عن status: التوصية الآلية لا تعتمد المصدر
+    ولا ترفضه في وضع «المقترحات فقط». كل التغييرات إضافية ومتوافقة مع القاعدة.
+    """
+    added = 0
+    for column, decl in (
+        ("evaluation_score", "REAL"),
+        ("evaluation_verdict", "TEXT"),
+        ("source_type", "TEXT"),
+        ("evaluation_reasons_json", "TEXT"),
+        ("evaluation_details_json", "TEXT"),
+        ("evaluated_at", "TEXT"),
+        ("evaluation_sample_count", "INTEGER DEFAULT 0"),
+    ):
+        added += _add_column_if_missing(cursor, "sources", column, decl)
+    return {"columns_added": added}
+
+
+def _migration_014_review_and_forms_separation(cursor) -> dict:
     """سجلات مراجعة مُؤرخة وبوابات محافظة للتشريعات والنماذج.
 
     مراجعات القانون مرتبطة ببصمة النص الحالي؛ أي تحديث للمحتوى يبطل الاعتماد
     السابق تلقائياً عند التقييم. النماذج تبقى مساحة منفصلة عن documents وMizan.
     لا تُمنح أي مراجعة أو حق نشر افتراضياً للصفوف التاريخية.
     """
+    # قد تكون القاعدة مرّت بأحد مسارين تاريخيين للرقم 13 (تقييم المصادر، أو
+    # نسخة مراجعات سابقة رُقّمت 13)؛ لذا نُتمّ هنا كل أعمدة sources بلا افتراض.
+    # وإعادة تطبيق هذه الهجرة لا تُعيد خفض مصدر seed مرّ عليه القرار سابقاً.
+    already_had_reviews = cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_reviews'"
+    ).fetchone() is not None
     added = 0
     for col, decl in (
         ("source_role", "TEXT DEFAULT 'unknown'"),
         ("publisher_country", "TEXT"),
         ("collection_scope", "TEXT"),
-        ("evaluation_verdict", "TEXT"),
         ("evaluation_score", "REAL"),
+        ("evaluation_verdict", "TEXT"),
+        ("source_type", "TEXT"),
         ("evaluation_reasons_json", "TEXT"),
+        ("evaluation_details_json", "TEXT"),
+        ("evaluated_at", "TEXT"),
+        ("evaluation_sample_count", "INTEGER DEFAULT 0"),
     ):
         added += _add_column_if_missing(cursor, "sources", col, decl)
 
@@ -403,7 +433,9 @@ def _migration_013_review_and_forms_separation(cursor) -> dict:
     # آلياً عند أول اكتشاف؛ لا يوجد دليل على قرار بشري حقيقي، لذا تُعاد
     # إلى proposed مرة واحدة لتصحيح الفصل بين seed وapproval.
     source_cols = {row[1] for row in cursor.execute("PRAGMA table_info(sources)")}
-    if {"status", "discovered_via", "decided_at", "decided_by"} <= source_cols:
+    if already_had_reviews:
+        demoted_seeds = 0
+    elif {"status", "discovered_via", "decided_at", "decided_by"} <= source_cols:
         demoted_seeds = cursor.execute(
             "UPDATE sources SET status='proposed', decided_at=NULL, decided_by=NULL "
             "WHERE discovered_via='seed-primary' AND status='approved'"
@@ -506,8 +538,9 @@ MIGRATIONS = [
     (11, "documents.legal_status_reason (A-3)", _migration_011_status_reason),
     (12, "precedents v2: decisions/principles/citations/relations/articles (ف٣)",
      _migration_012_precedents_v2),
-    (13, "review-bound legal-current gate + separate forms registry",
-     _migration_013_review_and_forms_separation),
+    (13, "sources.evaluation: score/type/verdict/evidence", _migration_013_source_assessment),
+    (14, "review-bound legal-current gate + separate forms registry",
+     _migration_014_review_and_forms_separation),
 ]
 LATEST = MIGRATIONS[-1][0]
 

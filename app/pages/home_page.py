@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel,
 from app import core_data as md
 from ._common import Collapsible, card, page_header
 
-DEFAULT_MAX_PAGES = 60
+DEFAULT_MAX_EVALUATE = 12
 
 
 def _stat_card(label: str) -> QWidget:
@@ -117,10 +117,11 @@ class HomePage(QWidget):
         self.results_btn.setEnabled(False)
         self.results_btn.clicked.connect(self._open_results)
 
-        self.dry_box = QCheckBox("تجريبي — بلا حفظ في القاعدة")
+        self.dry_box = QCheckBox("تجريبي للزحف فقط")
         self.dry_box.setToolTip(
-            "نفس مسار `cli crawl --mode dry`: يُقرأ ويُستخرج ويُعدّ، ولا "
-            "يُكتب أي سطر في documents/articles. معاينة آمنة قبل دورة حقيقية")
+            "هذه الشاشة لا تبدأ الزحف؛ تقييم المصادر المقترحة يُحفظ دائماً "
+            "للمراجعة. يظل الوضع التجريبي خاصاً بأمر الزحف المنفصل.")
+        self.dry_box.setEnabled(False)
         btn_row.addWidget(self.start_btn)
         btn_row.addWidget(self.stop_btn)
         btn_row.addStretch()
@@ -137,12 +138,12 @@ class HomePage(QWidget):
         mv.addLayout(dry_row)
         root.addWidget(main_card)
 
-        adv = Collapsible("خيارات متقدّمة (حدّ الصفحات)")
+        adv = Collapsible("خيارات متقدّمة (حدّ المرشحين)")
         limits_row = QHBoxLayout(); limits_row.setSpacing(12)
         limits_row.addWidget(QLabel("أقصى عدد مرشحين لتقييمهم:"))
         from PySide6.QtWidgets import QSpinBox
-        self.spin = QSpinBox(); self.spin.setRange(5, 5000)
-        self.spin.setValue(DEFAULT_MAX_PAGES)
+        self.spin = QSpinBox(); self.spin.setRange(1, 100)
+        self.spin.setValue(DEFAULT_MAX_EVALUATE)
         limits_row.addWidget(self.spin)
         limits_row.addStretch()
         adv.addLayout(limits_row)
