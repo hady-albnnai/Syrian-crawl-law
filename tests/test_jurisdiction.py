@@ -47,3 +47,11 @@ def test_syrian_bar_branch_wordings_are_recognized():
     assert r["verdict"] == "syrian", r
     assert j("https://x.org/", "", "نقابة المحامين المصرية القانون المصري "
              "جمهورية مصر العربية")["verdict"] == "foreign"
+
+
+def test_legislative_decree_with_definite_article_counts_as_syrian_form():
+    from jurisdiction import assess_jurisdiction
+    text = ("المرسوم التشريعي 7 لعام 1978 المتضمن قبول البدل النقدي من المقيمين في "
+            "المملكة العربية السعودية")
+    j = assess_jurisdiction("https://x.example/a", "المرسوم التشريعي 7 لعام 1978", text, "")
+    assert j["verdict"] != "foreign", j
