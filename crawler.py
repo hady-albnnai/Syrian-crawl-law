@@ -28,6 +28,7 @@ from config import (CIRCUIT_BREAKER_CONSECUTIVE_FAILURES,
                     MAX_CLEAN_CONTENT_CHARS, SAVE_RAW_HTML)
 from database import get_connection
 from extractor import detect_branch, is_legal_content, legal_score
+from jurisdiction import assess_jurisdiction
 from extractor_v4 import extract_main_content
 from fetcher import classify_error, fetch
 from logging_setup import get_log
@@ -134,6 +135,18 @@ def _handle_topic(conn, task, html, dry_run, stats):
         log.info(f"   ⚠️ {len(real_articles)} مادة — دون بوابة الجودة "
                  f"— needs_review")
         return
+    # بوابة الاختصاص على مستوى الوثيقة: «حمّل كل شيء» لا يعني حفظ تشريع دولة أخرى
+    # (منتدى/مكتبة قد تحوي أقساماً عربية أجنبية). الوثيقة الأجنبية تُعزل needs_review
+    # بسبب مكتوب ولا تُحفظ ولا تُسقط بصمت؛ ومصدر المستوى الأول (رسمي) معفى.
+    if source_quality.domain_tier_for_url(task["url"]) > 1:
+        _j = assess_jurisdiction(task["url"], title, clean[:60_000], "")
+        if _j["verdict"] == "foreign":
+            taskqueue.mark(conn, task["id"], "needs_review",
+                           f"اختصاص أجنبي: {_j['foreign_country'] or 'غير محدد'} "
+                           f"(سوري {_j['syrian_score']} / أجنبي {_j['foreign_score']})")
+            stats["skipped"] += 1
+            log.info(f"   JURIS| foreign {_j['foreign_country']} — needs_review: {title[:50]}")
+            return
     content_hash = get_hash(clean)
     if dry_run:
         taskqueue.mark(conn, task["id"], "success")

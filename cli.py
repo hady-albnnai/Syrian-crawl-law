@@ -679,6 +679,34 @@ def cmd_runs(args):
     return 0
 
 
+def cmd_audit_jurisdiction(args):
+    """قراءة فقط: يقيس بوابة الاختصاص على وثائق المتن الفعلي لمعايرة العتبات.
+
+    لا يعدّل شيئاً. يعرض توزيع الأحكام وعناوين ما سيُعزل «أجنبياً» للتدقيق اليدوي.
+    """
+    from database import create_tables, get_connection
+    from jurisdiction import assess_jurisdiction
+    create_tables()
+    conn = get_connection()
+    rows = conn.execute("SELECT id, title, source_url, clean_content FROM documents "
+                        "WHERE status='active'").fetchall()
+    counts, flagged = {}, []
+    for r in rows:
+        j = assess_jurisdiction(r["source_url"] or "", r["title"] or "",
+                                (r["clean_content"] or "")[:60_000], "")
+        counts[j["verdict"]] = counts.get(j["verdict"], 0) + 1
+        if j["verdict"] in ("foreign", "mixed"):
+            flagged.append((j["verdict"], j["foreign_country"], j["syrian_score"],
+                            j["foreign_score"], r["id"], r["title"] or ""))
+    conn.close()
+    log.info(f"AUDIT| documents={len(rows)} " + " ".join(
+        f"{k}={v}" for k, v in sorted(counts.items())))
+    for verdict, country, s, f, did, title in flagged[:args.limit]:
+        log.info(f"AUDIT| {verdict} id={did} syr={s} for={f} {country} | {title[:70]}")
+    log.info("AUDIT| read-only: nothing changed")
+    return 0
+
+
 def cmd_harvest(args):
     """الحصاد بضغطة واحدة: اكتشاف ← اختبار ← اعتماد ← إدراج ← زحف (انظر harvest.py)."""
     from harvest import run_harvest
@@ -1836,6 +1864,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--evaluate", action="store_true",
                     help="تقييم كل مرشح وتسجيله proposed")
     sp.set_defaults(fn=cmd_discover)
+
+    sp = sub.add_parser("audit-jurisdiction",
+                        help="قراءة فقط: قياس بوابة الاختصاص على المتن الحالي")
+    sp.add_argument("--limit", type=int, default=40, help="عدد الوثائق المعروضة")
+    sp.set_defaults(fn=cmd_audit_jurisdiction)
 
     sp = sub.add_parser("harvest",
                         help="الحصاد بضغطة واحدة: اكتشاف ← اختبار ← اعتماد ← إدراج ← زحف")
