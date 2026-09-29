@@ -679,6 +679,26 @@ def cmd_runs(args):
     return 0
 
 
+def cmd_harvest(args):
+    """الحصاد بضغطة واحدة: اكتشاف ← اختبار ← اعتماد ← إدراج ← زحف (انظر harvest.py)."""
+    from harvest import run_harvest
+    rep = run_harvest(pages=args.pages, use_search=bool(args.search_via),
+                      search_via=args.search_via, max_evaluate=args.max_evaluate,
+                      refresh_days=args.refresh_days, crawl=not args.no_crawl,
+                      dry_run=args.dry)
+    d, p = rep["discovery"], rep["probation"]
+    log.info("=" * 60)
+    log.info(f"اكتشاف: رُئي {d.get('seen', 0)} | قُيّم {d.get('evaluated', 0)} | "
+             f"جديد {d.get('new', 0)}")
+    log.info(f"اختبار: {p.get('tested', 0)} | اعتُمد {p.get('promoted', 0)} | "
+             f"رُفض {p.get('rejected', 0)} | معلّق {p.get('held', 0)} | "
+             f"لم يجتز البوابة {p.get('skipped_gate', 0)}")
+    log.info(f"أُدرج {rep['enqueued']} | تجديد فهارس {rep['refreshed']} | "
+             f"زحف حتى {rep['crawl_pages']} صفحة"
+             + (" | تجريبي: لا كتابة" if rep["dry_run"] else ""))
+    return 0
+
+
 def cmd_queue_approved(args):
     """المرحلة الصريحة لإدراج مصدر approved في طابور الزحف فقط."""
     from database import create_tables, get_connection
@@ -1804,6 +1824,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--evaluate", action="store_true",
                     help="تقييم كل مرشح وتسجيله proposed")
     sp.set_defaults(fn=cmd_discover)
+
+    sp = sub.add_parser("harvest",
+                        help="الحصاد بضغطة واحدة: اكتشاف ← اختبار ← اعتماد ← إدراج ← زحف")
+    sp.add_argument("--pages", type=int, default=100,
+                    help="حد صفحات الزحف في هذه الدورة (افتراضي 100)")
+    sp.add_argument("--no-crawl", action="store_true", help="اكتشاف واعتماد بلا زحف")
+    sp.add_argument("--dry", action="store_true",
+                    help="تقييم واختبار بلا أي كتابة أو إدراج أو زحف")
+    sp.add_argument("--max-evaluate", type=int, default=12)
+    sp.add_argument("--refresh-days", type=int, default=7,
+                    help="إعادة فحص فهارس المصادر المعتمدة بعد N يوماً لالتقاط الجديد")
+    sp.add_argument("--search-via", choices=("ddg", "bing"), default=None,
+                    help="قناة بحث اختيارية (غير مضبوطة افتراضياً)")
+    sp.set_defaults(fn=cmd_harvest)
 
     sp = sub.add_parser("autopilot",
                         help="مراحل منفصلة: لا يعمل شيء حتى اختيار --discover/--search/--crawl")
