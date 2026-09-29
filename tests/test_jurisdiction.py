@@ -38,3 +38,12 @@ def test_lebanese_legislative_decree_marker_is_foreign():
 
 def test_no_evidence_is_unknown_not_syrian():
     assert j("https://example.org", "قانون العقوبات", "المادة 1 ...")["verdict"] == "unknown"
+
+
+def test_syrian_bar_branch_wordings_are_recognized():
+    txt = ("نقابة المحامين – فرع حمص  قرار مجلس فرع نقابة المحامين بحمص  "
+           "الموسوعة القانونية السورية")
+    r = j("https://www.homsbar.org/", "", txt)
+    assert r["verdict"] == "syrian", r
+    assert j("https://x.org/", "", "نقابة المحامين المصرية القانون المصري "
+             "جمهورية مصر العربية")["verdict"] == "foreign"
