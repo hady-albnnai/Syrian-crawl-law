@@ -41,6 +41,35 @@ _last_fetch_time = 0
 # ════════════════════════════════════════
 #  الانتظار المهذب بين الطلبات
 # ════════════════════════════════════════
+_CRAWL_DELAY: dict = {}          # origin -> ثوانٍ من توجيه Crawl-delay في robots.txt
+MAX_CRAWL_DELAY = 30.0           # سقف: توجيه مبالغ فيه لا يجمّد الدورة
+
+
+def crawl_delay_for(url: str) -> float:
+    try:
+        p = urlparse(url)
+        return _CRAWL_DELAY.get(f"{p.scheme.lower()}://{p.netloc}", 0.0)
+    except ValueError:
+        return 0.0
+
+
+_ORIGIN_LAST: dict = {}          # origin -> وقت آخر طلب لنحترم Crawl-delay لكل موقع
+
+
+def honor_crawl_delay(url: str):
+    """ينام ما يكفي ليفصل Crawl-delay المنشور بين طلبين لنفس الموقع (إن وُجد)."""
+    delay = crawl_delay_for(url)
+    if not delay:
+        return
+    p = urlparse(url)
+    key = f"{p.scheme.lower()}://{p.netloc}"
+    wait = delay - (time.time() - _ORIGIN_LAST.get(key, 0.0))
+    if wait > 0:
+        log.info(f"      ... Crawl-delay {delay:.0f}ث لدى {p.netloc}: انتظار {wait:.1f}ث")
+        time.sleep(wait)
+    _ORIGIN_LAST[key] = time.time()
+
+
 def polite_sleep():
     global _last_fetch_time
     elapsed = time.time() - _last_fetch_time
@@ -172,6 +201,12 @@ def is_allowed(url: str, record_log: bool = True) -> bool:
         parser = _load_robot_parser(netloc, scheme, record_log=record_log)
         _ROBOT_CACHE[key] = parser
     try:
+        delay = parser.crawl_delay(USER_AGENT)
+        if delay:
+            _CRAWL_DELAY[key] = min(float(delay), MAX_CRAWL_DELAY)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    try:
         return bool(parser.can_fetch(USER_AGENT, url))
     except Exception:
         return False
@@ -215,6 +250,7 @@ def _get_with_safe_redirects(url: str, record_log: bool = True):
             return None, current, ("blocked_by_robots" if hop == 0
                                    else "blocked_by_robots_redirect")
         polite_sleep()
+        honor_crawl_delay(current)
         response = SESSION.get(current, timeout=TIMEOUT, allow_redirects=False)
         if response.status_code not in _REDIRECT_STATUSES:
             return response, current, None
