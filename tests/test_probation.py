@@ -115,8 +115,9 @@ def test_run_probation_dry_run_writes_nothing(tmp_path, monkeypatch):
 def test_measure_sample_counts_syrian_and_foreign_pages(tmp_path, monkeypatch):
     conn = _db(tmp_path, monkeypatch)
     neutral = WP_POST.replace("السوري", "").replace("السورية", "")
-    foreign = neutral.replace("</body>", "<p>جمهورية مصر العربية القانون المصري "
-                              "محكمة النقض المصرية الوقائع المصرية</p></body>")
+    # الإشارات الأجنبية داخل متن الوثيقة نفسه (لا في قالب الموقع)
+    foreign = neutral.replace("رئيس الجمهورية", "جمهورية مصر العربية القانون المصري "
+                              "محكمة النقض المصرية الوقائع المصرية", 1)
     pages = {"https://s.example/": WP_POST, "https://s.example/a": WP_POST,
              "https://s.example/b": foreign}
 
@@ -247,3 +248,69 @@ def test_entry_gate_accepts_index_portals_without_articles_but_not_foreign():
     ev = _ev()
     ev.source_type = "nonlegal"
     assert not entry_gate(ev)[0]
+
+
+def test_jurisdiction_uses_main_text_not_site_template(tmp_path, monkeypatch):
+    """قالب موقع يسرد قوانين دول أخرى في كل صفحة لا يجعل الصفحة السورية أجنبية."""
+    conn = _db(tmp_path, monkeypatch)
+    nav = ("<div class=\"sidebar\">قسم القانون المصري جمهورية مصر العربية محكمة النقض "
+           "المصرية الوقائع المصرية القانون السعودي نظام المرافعات الشرعية المملكة "
+           "العربية السعودية ديوان المظالم السعودي</div>")
+    page = WP_POST.replace("<body>", "<body>" + nav, 1) if "<body>" in WP_POST else nav + WP_POST
+    pages = {"https://s.example/": page, "https://s.example/a": page,
+             "https://s.example/b": page.replace("رقم 148", "رقم 149")}
+
+    def fake_fetch(url, record_log=True):
+        html = pages.get(url)
+        return ({"ok": True, "html": html, "final_url": url} if html
+                else {"ok": False, "error": "404"})
+    m = measure_sample(conn, "https://s.example/", fetch_fn=fake_fetch,
+                       sample_fn=lambda h, b, l: ["https://s.example/a",
+                                                  "https://s.example/b"])
+    assert m["foreign_pages"] == 0, m
+    assert m["syrian_pages"] >= 2
+    conn.close()
+
+
+def test_duplicate_url_variants_count_as_one_law_page(tmp_path, monkeypatch):
+    conn = _db(tmp_path, monkeypatch)
+    pages = {"https://s.example/": WP_POST, "https://s.example/a": WP_POST,
+             "https://s.example/ar/a": WP_POST}
+
+    def fake_fetch(url, record_log=True):
+        html = pages.get(url)
+        return ({"ok": True, "html": html, "final_url": url} if html
+                else {"ok": False, "error": "404"})
+    m = measure_sample(conn, "https://s.example/", fetch_fn=fake_fetch,
+                       sample_fn=lambda h, b, l: ["https://s.example/a",
+                                                  "https://s.example/ar/a"])
+    assert m["pages_ok"] == 3 and m["law_pages"] == 1
+    conn.close()
+
+
+def test_cli_sources_reset_returns_source_to_proposed(tmp_path, monkeypatch):
+    import cli
+    conn = _db(tmp_path, monkeypatch)
+    _add_source(conn, 1, status="rejected", decided_by="auto-probation")
+    sid = conn.execute("SELECT id FROM sources").fetchone()[0]
+    conn.close()
+    assert cli.cmd_sources(argparse.Namespace(action="reset", id=str(sid))) == 0
+    conn = database.get_connection()
+    row = conn.execute("SELECT status, decided_by FROM sources").fetchone()
+    assert (row["status"], row["decided_by"]) == ("proposed", None)
+    conn.close()
+
+
+def test_single_foreign_page_in_small_sample_is_hold_not_reject():
+    d, why = decide_from_metrics(_m(pages_ok=9, foreign_pages=1, law_pages=5,
+                                    compatible_law_pages=5, foreign_countries=["مصر"]))
+    assert d == "hold" and "مصر" in why
+    assert decide_from_metrics(_m(pages_ok=9, foreign_pages=2))[0] == "reject"
+
+
+def test_sample_prefers_topic_like_links_over_section_indexes():
+    sections = "".join(f'<a href="/f{i}-section">قوانين قسم {i}</a>' for i in range(30))
+    topics = "".join(f'<a href="/t{100 + i}-topic">قانون رقم {i}</a>' for i in range(30))
+    got = sample_urls(f"<html><body>{sections}{topics}</body></html>",
+                      "https://s.example/", limit=12)
+    assert sum("/t" in u for u in got) >= 8

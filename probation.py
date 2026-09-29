@@ -39,6 +39,10 @@ PRE_MIN_SCORE = 60.0         # درجة الصفحة الرئيسية لدخول
 MIN_SYRIAN_SHARE_WHEN_UNPROVEN = 0.30   # اختصاص المصدر غير محسوم → دليل سوري في العينة
 
 
+_TOPIC_LIKE_RE = re.compile(r"/t\d+-|viewtopic|topic|/\d{3,}|/post/|/page/|[?&]p=\d+|[?&]id=\d+",
+                            re.IGNORECASE)
+
+
 def sample_urls(html: str, base_url: str, limit: int = SAMPLE_PAGES) -> list:
     """روابط داخلية قانونية موزّعة على القائمة (لا أول N فقط)."""
     host = _normal_host(base_url)
@@ -61,8 +65,41 @@ def sample_urls(html: str, base_url: str, limit: int = SAMPLE_PAGES) -> list:
         found.append(href)
     if len(found) <= limit:
         return found
-    step = len(found) / limit
-    return [found[int(i * step)] for i in range(limit)]
+
+    def spread(items, k):
+        if k <= 0 or not items:
+            return []
+        if len(items) <= k:
+            return list(items)
+        step = len(items) / k
+        return [items[int(i * step)] for i in range(k)]
+    # نفضّل روابط تبدو صفحة موضوع/مادة على صفحات الأقسام (فهارس بلا نص)
+    topic = [u for u in found if _TOPIC_LIKE_RE.search(urlparse(u).path + "?" + urlparse(u).query)]
+    rest = [u for u in found if u not in set(topic)]
+    n_topic = min(len(topic), (limit * 2 + 2) // 3)
+    return spread(topic, n_topic) + spread(rest, limit - n_topic)
+
+
+_BOILERPLATE_RE = re.compile(r"menu|sidebar|side-bar|nav|footer|widget|breadcrumb", re.I)
+
+
+def page_text_for_jurisdiction(html: str, ext: dict) -> str:
+    """نص الصفحة الذي يُحكم عليه بالاختصاص: المتن لا قوالب الموقع.
+
+    قِيس على المنتدى الأساسي: قائمته الجانبية تسرد أقسام قوانين دول عربية
+    (السعودية، مصر…) في **كل** صفحة، فكانت كل صفحة سورية تُصنَّف أجنبية
+    (foreign 84 ثابتة) ورُفض المصدر خطأً. المتن وحده (مكتبة القوانين السورية)
+    سوري بوضوح. عند فشل استخراج المتن نجرّد الوسوم والقوالب الشائعة.
+    """
+    if ext.get("success") and len(ext.get("clean_text") or "") >= 200:
+        return (ext.get("title") or "") + " " + ext["clean_text"]
+    soup = BeautifulSoup(html or "", "lxml")
+    for tag in soup(["nav", "aside", "header", "footer", "script", "style", "form"]):
+        tag.decompose()
+    for tag in soup.find_all(attrs={"class": _BOILERPLATE_RE}) + \
+            soup.find_all(attrs={"id": _BOILERPLATE_RE}):
+        tag.decompose()
+    return (soup.body or soup).get_text(" ", strip=True)
 
 
 def _is_known(conn, url: str) -> bool:
@@ -90,6 +127,7 @@ def measure_sample(conn, base_url: str, fetch_fn=fetch, sample_fn=sample_urls,
             pages.append((u, fetch_fn(u, record_log=False)))
         except Exception as exc:  # عطل صفحة لا يُسقط العينة
             pages.append((u, {"ok": False, "error": str(exc)}))
+    seen_titles = set()
     for url, res in pages:
         if not res.get("ok"):
             m["pages_failed"] += 1
@@ -101,8 +139,7 @@ def measure_sample(conn, base_url: str, fetch_fn=fetch, sample_fn=sample_urls,
         ext = extract_main_content(html, final)
         arts = [a for a in (ext.get("articles") or []) if not a.get("is_preamble")] \
             if ext.get("success") else []
-        soup = BeautifulSoup(html, "lxml")
-        text = (soup.body or soup).get_text(" ", strip=True)
+        text = page_text_for_jurisdiction(html, ext)
         j = assess_jurisdiction(final, ext.get("title") or "", text, "")
         v = j["verdict"]
         if v == "syrian":
@@ -113,7 +150,9 @@ def measure_sample(conn, base_url: str, fetch_fn=fetch, sample_fn=sample_urls,
                 m["foreign_countries"].append(j["foreign_country"])
         else:
             m["unknown_pages"] += 1
-        if arts:
+        title_key = (ext.get("title") or "").strip()
+        if arts and title_key not in seen_titles:   # نسخ الرابط نفسه لا تُعدّ مرتين
+            seen_titles.add(title_key)
             m["law_pages"] += 1
             if v == "syrian" or (v == "unknown" and j["foreign_score"] == 0):
                 m["compatible_law_pages"] += 1
@@ -152,6 +191,9 @@ def decide_from_metrics(m: dict, juris: str = "syrian") -> tuple:
     if ok < MIN_OK_PAGES:
         return "hold", f"عينة غير كافية: {ok} صفحة ناجحة (المطلوب {MIN_OK_PAGES})"
     foreign_share = m["foreign_pages"] / ok
+    if foreign_share > MAX_FOREIGN_SHARE and m["foreign_pages"] < 2:
+        return "hold", (f"صفحة أجنبية واحدة من {ok} — قرار بشري (عيّنة صغيرة لا تكفي "
+                        f"للرفض): {', '.join(m.get('foreign_countries') or []) or 'غير محدد'}")
     if foreign_share > MAX_FOREIGN_SHARE:
         c = "، ".join(sorted(set(m.get("foreign_countries") or []))) or "غير محدد"
         return "reject", (f"تسرب أجنبي: {m['foreign_pages']}/{ok} صفحة "

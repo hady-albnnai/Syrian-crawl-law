@@ -824,6 +824,13 @@ def cmd_sources(args):
                  f"{ev.source_score:.1f}/100 | {ev.source_type} | الحكم: "
                  f"{ev.verdict} | مواد {ev.articles} | {ev.title[:50]}"
                  " | الاعتماد بأمر منفصل: sources approve")
+    elif args.action == "reset":
+        # يعكس قراراً (آلياً كان أو يدوياً): المصدر يعود «مقترحاً» بلا قرار،
+        # فيُعاد اختباره في الحصاد التالي.
+        n = conn.execute("UPDATE sources SET status='proposed', decided_at=NULL, "
+                         "decided_by=NULL WHERE id=?", (args.id,)).rowcount
+        conn.commit()
+        log.info(f"أُعيد المصدر {args.id} إلى «مقترح»" if n else f"لا مصدر بالمعرّف {args.id}")
     elif args.action == "check":
         # قراءة فقط: يقيّم المصادر الحالية بفحص الاختصاص الجديد دون أي كتابة
         # (لا تغيير حالة، لا تسجيل في crawl_log). صفحة رئيسية واحدة لكل مصدر.
@@ -2213,7 +2220,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_seeds)
 
     sp = sub.add_parser("sources", help="إدارة سجل المصادر")
-    sp.add_argument("action", choices=("list", "approve", "reject", "add", "reactivate", "check"))
+    sp.add_argument("action", choices=("list", "approve", "reject", "add", "reactivate", "check", "reset"))
     sp.add_argument("id", nargs="?", help="معرّف المصدر — أو الرابط مع add")
     sp.set_defaults(fn=cmd_sources)
 
