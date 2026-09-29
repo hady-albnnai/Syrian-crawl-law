@@ -35,6 +35,8 @@ MIN_OK_PAGES = 4             # أقل عدد صفحات ناجحة لقرار
 MIN_LAW_PAGES = 3            # أقل عدد صفحات قانونية (بها مواد)
 MIN_COMPATIBLE_SHARE = 0.7   # حصة الصفحات القانونية غير المخالفة لسورية
 MAX_FOREIGN_SHARE = 0.10     # فوقها: تسرب أجنبي → رفض
+PRE_MIN_SCORE = 60.0         # درجة الصفحة الرئيسية لدخول الاختبار
+MIN_SYRIAN_SHARE_WHEN_UNPROVEN = 0.30   # اختصاص المصدر غير محسوم → دليل سوري في العينة
 
 
 def sample_urls(html: str, base_url: str, limit: int = SAMPLE_PAGES) -> list:
@@ -120,8 +122,30 @@ def measure_sample(conn, base_url: str, fetch_fn=fetch, sample_fn=sample_urls,
     return m
 
 
-def decide_from_metrics(m: dict) -> tuple:
-    """(promote|reject|hold, سبب) — دالة نقية قابلة للاختبار."""
+def entry_gate(ev) -> tuple:
+    """بوابة الدخول إلى الاختبار (أخف من auto_verdict عمداً).
+
+    الصفحة الرئيسية لبوابة قانونية جيدة قد تكون فهرساً بلا مواد ولا علامات
+    سورية صريحة (alhurriyah.sy وgcb.sy: 0 مادة)؛ العينة هي التي تحسم. لكن
+    المصدر الأجنبي أو غير القانوني لا يدخل.
+    """
+    if not getattr(ev, "ok", True):
+        return False, "تعذر الجلب"
+    if ev.jurisdiction == "foreign":
+        return False, "اختصاص أجنبي"
+    if ev.source_type not in {"legislation", "mixed"}:
+        return False, f"نوع المحتوى {ev.source_type}"
+    if ev.source_score < PRE_MIN_SCORE:
+        return False, f"الدرجة {ev.source_score:.0f} دون {PRE_MIN_SCORE:.0f}"
+    return True, "ok"
+
+
+def decide_from_metrics(m: dict, juris: str = "syrian") -> tuple:
+    """(promote|reject|hold, سبب) — دالة نقية قابلة للاختبار.
+
+    juris: اختصاص المصدر من صفحته الرئيسية. إن لم يكن «سوري» صراحة اشترطنا
+    دليلاً سورياً صريحاً في العينة نفسها (≥ 30% من صفحاتها).
+    """
     ok = m.get("pages_ok", 0)
     if m.get("error"):
         return "hold", f"تعذر جلب المصدر: {m['error']}"
@@ -138,6 +162,9 @@ def decide_from_metrics(m: dict) -> tuple:
     share = m["compatible_law_pages"] / m["law_pages"]
     if share < MIN_COMPATIBLE_SHARE:
         return "hold", f"الصفحات القانونية المتوافقة مع سورية {share:.0%} دون {MIN_COMPATIBLE_SHARE:.0%}"
+    if juris != "syrian" and m["syrian_pages"] < max(2, MIN_SYRIAN_SHARE_WHEN_UNPROVEN * ok):
+        return "hold", (f"اختصاص المصدر {juris} ولا دليل سوري كافٍ في العينة "
+                        f"({m['syrian_pages']}/{ok} صفحة سورية صراحة)")
     return "promote", (f"عينة {ok} صفحة: {m['law_pages']} قانونية "
                        f"({share:.0%} متوافقة مع سورية)، أجنبي {m['foreign_pages']}، "
                        f"جديد علينا {m['new_pages']}")
@@ -183,14 +210,13 @@ def run_probation(conn, max_sources: int = MAX_PER_RUN, dry_run: bool = False,
                   evaluate_fn=evaluate_candidate, measure_fn=measure_sample,
                   stop_event=None) -> dict:
     """يختبر المقترحات الموصى بها آلياً ويقرر. يعيد إحصاءات + قائمة القرارات."""
-    from autopilot import auto_verdict   # استيراد متأخر: تفادي الدوران
     stats = {"tested": 0, "promoted": 0, "rejected": 0, "held": 0,
              "skipped_gate": 0, "decisions": []}
     rows = conn.execute(
         "SELECT id, base_url FROM sources WHERE status='proposed' "
         "AND COALESCE(decided_by,'') != 'user' "
-        "AND (evaluation_verdict='recommended' OR evaluation_verdict IS NULL "
-        "     OR evaluation_verdict='' OR evaluation_verdict='unknown') "
+        "AND (evaluation_verdict IN ('recommended','needs_review','unknown','') "
+        "     OR evaluation_verdict IS NULL) "
         "ORDER BY COALESCE(evaluation_score, 0) DESC, id LIMIT ?", (max_sources,)).fetchall()
     for row in rows:
         if stop_event is not None and stop_event.is_set():
@@ -204,16 +230,16 @@ def run_probation(conn, max_sources: int = MAX_PER_RUN, dry_run: bool = False,
         if not dry_run:
             # نخزّن التقييم الطازج (كان المقترحون القدامى «غير مقيَّمين» فلا يُختبرون)
             _store_evaluation(conn, sid, ev)
-        ok, why = auto_verdict(ev)
-        if not ok or ev.jurisdiction != "syrian":
+        ok, why = entry_gate(ev)
+        if not ok:
             stats["skipped_gate"] += 1
-            reason = why if not ok else f"الاختصاص {ev.jurisdiction} لا يجتاز الاعتماد الآلي"
+            reason = why
             stats["decisions"].append({"id": sid, "url": url, "decision": "gate",
                                        "reason": reason})
             log.info(f"   PROBATION| #{sid} GATE: {reason}")
             continue
         m = measure_fn(conn, url)
-        decision, reason = decide_from_metrics(m)
+        decision, reason = decide_from_metrics(m, ev.jurisdiction)
         stats["tested"] += 1
         stats["decisions"].append({"id": sid, "url": url, "decision": decision,
                                    "reason": reason, "metrics": m})

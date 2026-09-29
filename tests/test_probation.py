@@ -80,7 +80,7 @@ def test_run_probation_promotes_rejects_holds_and_respects_user(tmp_path, monkey
     for n in (1, 2, 3, 4, 5):
         _add_source(conn, n)
     _add_source(conn, 6, decided_by="user")          # قرار المالك لا يُمسّ
-    evs = {"https://s4.example/": _ev(jur="unknown")}  # لا يجتاز بوابة الاختصاص
+    evs = {"https://s4.example/": _ev(jur="foreign")}  # لا يجتاز بوابة الدخول
     metrics = {"https://s1.example/": _m(),
                "https://s2.example/": _m(foreign_pages=6, foreign_countries=["مصر"]),
                "https://s3.example/": _m(pages_ok=1),
@@ -227,3 +227,23 @@ def test_harvest_no_crawl_approves_but_does_not_enqueue(tmp_path, monkeypatch):
     conn = database.get_connection()
     assert conn.execute("SELECT COUNT(*) FROM crawl_tasks").fetchone()[0] == 0
     conn.close()
+
+
+def test_unproven_jurisdiction_needs_syrian_evidence_in_sample():
+    weak = _m(syrian_pages=1, unknown_pages=11)
+    assert decide_from_metrics(weak, "unknown")[0] == "hold"
+    assert decide_from_metrics(weak, "syrian")[0] == "promote"
+    strong = _m(syrian_pages=6)
+    assert decide_from_metrics(strong, "unknown")[0] == "promote"
+    assert decide_from_metrics(_m(foreign_pages=4), "mixed")[0] == "reject"
+
+
+def test_entry_gate_accepts_index_portals_without_articles_but_not_foreign():
+    from probation import entry_gate
+    assert entry_gate(_ev(jur="unknown", verdict="needs_review", articles=0,
+                          score=74.0))[0]
+    assert not entry_gate(_ev(jur="foreign"))[0]
+    assert not entry_gate(_ev(score=40.0))[0]
+    ev = _ev()
+    ev.source_type = "nonlegal"
+    assert not entry_gate(ev)[0]
