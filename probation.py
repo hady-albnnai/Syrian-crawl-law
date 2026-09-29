@@ -163,6 +163,22 @@ def _decide(conn, source_id: int, approve: bool):
                   datetime.now().isoformat(), "auto-probation", source_id))
 
 
+def _store_evaluation(conn, source_id: int, ev):
+    """يحدّث حقول التقييم بمعرّف المصدر (register_candidate يبحث بمفتاح مُعاد
+    حسابه فقد يصطدم بمصدر قديم مفتاحه مختلف وbase_url فريد)."""
+    from datetime import datetime
+    conn.execute(
+        "UPDATE sources SET engine=?, domain_tier=?, evaluation_score=?, "
+        "evaluation_verdict=?, source_type=?, evaluation_reasons_json=?, "
+        "evaluation_details_json=?, evaluated_at=?, evaluation_sample_count=? "
+        "WHERE id=?",
+        (ev.engine or "unknown", ev.domain_tier, ev.source_score, ev.verdict,
+         ev.source_type, json.dumps(ev.reasons or [], ensure_ascii=False),
+         json.dumps(ev.details or {}, ensure_ascii=False, sort_keys=True),
+         datetime.now().isoformat(), ev.sample_count, source_id))
+    conn.commit()
+
+
 def run_probation(conn, max_sources: int = MAX_PER_RUN, dry_run: bool = False,
                   evaluate_fn=evaluate_candidate, measure_fn=measure_sample,
                   stop_event=None) -> dict:
@@ -173,8 +189,9 @@ def run_probation(conn, max_sources: int = MAX_PER_RUN, dry_run: bool = False,
     rows = conn.execute(
         "SELECT id, base_url FROM sources WHERE status='proposed' "
         "AND COALESCE(decided_by,'') != 'user' "
-        "AND evaluation_verdict='recommended' "
-        "ORDER BY evaluation_score DESC, id LIMIT ?", (max_sources,)).fetchall()
+        "AND (evaluation_verdict='recommended' OR evaluation_verdict IS NULL "
+        "     OR evaluation_verdict='' OR evaluation_verdict='unknown') "
+        "ORDER BY COALESCE(evaluation_score, 0) DESC, id LIMIT ?", (max_sources,)).fetchall()
     for row in rows:
         if stop_event is not None and stop_event.is_set():
             break
@@ -184,6 +201,9 @@ def run_probation(conn, max_sources: int = MAX_PER_RUN, dry_run: bool = False,
         except Exception as exc:
             log.info(f"   ❌ probation #{sid}: عطل تقييم {exc}")
             continue
+        if not dry_run:
+            # نخزّن التقييم الطازج (كان المقترحون القدامى «غير مقيَّمين» فلا يُختبرون)
+            _store_evaluation(conn, sid, ev)
         ok, why = auto_verdict(ev)
         if not ok or ev.jurisdiction != "syrian":
             stats["skipped_gate"] += 1

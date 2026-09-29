@@ -173,3 +173,33 @@ def test_cli_sources_check_is_read_only(tmp_path, monkeypatch):
     conn = database.get_connection()
     assert conn.execute("SELECT status, evaluation_verdict FROM sources").fetchall() == before
     conn.close()
+
+
+def test_english_only_legal_links_and_platform_hosts_are_ignored():
+    html = ('<a href="https://foundation.wikimedia.org/wiki/Legal:Terms">Legal</a>'
+            '<a href="https://some-law.example/laws">Laws and Legislation</a>'
+            '<a href="https://ok.example/qanoon">القوانين السورية</a>'
+            '<a href="https://gov.sy/laws">Laws</a>')
+    got = external_legal_links(html, "https://a-source.example/",
+                               autopilot.known_registrables_for_test()
+                               if hasattr(autopilot, "known_registrables_for_test")
+                               else set(autopilot._SKIP_HOSTS))
+    hosts = {u.split("/")[2] for u, _ in got.values()}
+    assert hosts == {"ok.example", "gov.sy"}
+
+
+def test_corpus_mining_rotates_over_all_snapshots(tmp_path, monkeypatch):
+    conn = _db(tmp_path, monkeypatch)
+    snap = tmp_path / "snaps"
+    snap.mkdir()
+    for i in range(10):
+        (snap / f"{i:02d}.html").write_text(
+            f'<a href="https://site{i}.example/laws">القوانين رقم {i}</a>',
+            encoding="utf-8")
+    seen = set()
+    for d in range(5):
+        for c in autopilot.mine_corpus_links(conn, snapshot_dir=snap, max_files=2,
+                                             today=date.fromordinal(739000 + d)):
+            seen.add(c.url)
+    assert len(seen) == 10  # كل الملفات العشرة قُرئت عبر 5 أيام
+    conn.close()

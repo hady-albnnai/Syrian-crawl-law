@@ -49,7 +49,27 @@ _SKIP_HOSTS = {
     "facebook.com", "twitter.com", "x.com", "youtube.com", "instagram.com",
     "telegram.org", "t.me", "wa.me", "whatsapp.com", "google.com", "goo.gl",
     "blogspot.com", "wikipedia.org", "archive.org", "linkedin.com",
+    # بنية تحتية/منصات لا مصادر تشريعية (ظهر wikimedia «Legal:» في أول تشغيل حي)
+    "wikimedia.org", "wikidata.org", "mediawiki.org", "wikimediafoundation.org",
+    "github.com", "creativecommons.org", "apple.com", "microsoft.com",
+    "bit.ly", "tinyurl.com", "pinterest.com", "tiktok.com", "snapchat.com",
+    "reddit.com", "wordpress.org", "wordpress.com", "gravatar.com",
 }
+
+_ARABIC_RE = re.compile(r"[\u0600-\u06FF]")
+
+
+def _arabic_signal(text: str, href: str) -> bool:
+    """مصدر عربي: نص الرابط أو مساره بالعربية، أو نطاق .sy.
+
+    كلمة إنجليزية مثل Legal/Law وحدها تجلب شروط استخدام ومنصات لا تشريعات
+    سورية؛ الزاحف لتشريع عربي فنطلب أثراً عربياً.
+    """
+    from urllib.parse import unquote
+    pr = urlparse(href or "")
+    if (pr.hostname or "").lower().endswith(".sy"):
+        return True
+    return bool(_ARABIC_RE.search((text or "") + unquote(pr.path or "")))
 
 DEFAULT_QUERIES = [
     "القانون المدني السوري نص كامل",
@@ -156,15 +176,20 @@ def known_registrables(conn) -> set:
 
 # ═══════════════════ القناة 3: تنقيب المتن المخزون ═══════════════════
 
-def mine_corpus_links(conn, snapshot_dir: Path = None, max_files: int = 60,
-                      limit: int = 12) -> list:
+def mine_corpus_links(conn, snapshot_dir: Path = None, max_files: int = 300,
+                      limit: int = 12, today=None) -> list:
     """روابط خارجية بإشارات قانونية من لقطات HTML المخزنة — نقية بقدر الإمكان:
     لا شبكة هنا، فقط قراءة اللقطات. تُقيَّم لاحقاً كأي مرشح."""
     snapshot_dir = Path(snapshot_dir) if snapshot_dir else SNAPSHOT_DIR
     known = known_registrables(conn)
     scores = {}
-    files = sorted(snapshot_dir.glob("*.html"))[:max_files] \
-        if snapshot_dir.exists() else []
+    files = sorted(snapshot_dir.glob("*.html")) if snapshot_dir.exists() else []
+    if len(files) > max_files:
+        # تدوير يومي: كل دورة تقرأ شريحة مختلفة، فيُغطى المتن كله عبر الدورات
+        # (كان يقرأ أول 60 ملفاً فقط أبداً).
+        from datetime import date
+        start = ((today or date.today()).toordinal() * max_files) % len(files)
+        files = (files + files)[start:start + max_files]
     for path in files:
         try:
             soup = BeautifulSoup(path.read_text(encoding="utf-8",
@@ -179,7 +204,8 @@ def mine_corpus_links(conn, snapshot_dir: Path = None, max_files: int = 60,
             if not reg or reg in known:
                 continue
             text = a.get_text(" ", strip=True)
-            score = 2 if is_legal_anchor(text, href) else 0
+            score = 2 if (is_legal_anchor(text, href)
+                          and _arabic_signal(text, href)) else 0
             if score == 0:
                 continue
             key = canonicalize_url(href)
@@ -193,8 +219,8 @@ def mine_corpus_links(conn, snapshot_dir: Path = None, max_files: int = 60,
 
 # ═══════════════════ القناة 5: التتبع بين المصادر (snowball) ═══════════════════
 
-MAX_SNOWBALL_SOURCES = 8            # مصادر معتمدة تُفحص في الدورة الواحدة
-MAX_SNOWBALL_PAGES_PER_SOURCE = 3   # الصفحة الرئيسية + أحدث صفحات مزحوفة
+MAX_SNOWBALL_SOURCES = 10           # مصادر معتمدة تُفحص في الدورة الواحدة
+MAX_SNOWBALL_PAGES_PER_SOURCE = 4   # الصفحة الرئيسية + أحدث صفحات مزحوفة
 SNOWBALL_LIMIT = 15                 # أقصى مرشحين ينتجهم هذا المسار
 
 
@@ -217,7 +243,7 @@ def external_legal_links(html: str, page_url: str, known: set) -> dict:
         if not reg or reg == own or reg in known:
             continue
         text = a.get_text(" ", strip=True)
-        if not is_legal_anchor(text, href):
+        if not is_legal_anchor(text, href) or not _arabic_signal(text, href):
             continue
         out.setdefault(canonicalize_url(href), (href, text[:80]))
     return out

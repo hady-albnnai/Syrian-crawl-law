@@ -194,3 +194,16 @@ def test_harvest_live_enqueues_then_crawls_and_cli_wiring(tmp_path, monkeypatch)
     assert conn.execute("SELECT COUNT(*) FROM crawl_tasks WHERE status='queued'"
                         ).fetchone()[0] == 1
     conn.close()
+
+
+def test_probation_also_tests_never_evaluated_proposed_sources_and_stores_evaluation(
+        tmp_path, monkeypatch):
+    conn = _db(tmp_path, monkeypatch)
+    _add_source(conn, 1, verdict=None)   # مقترح قديم بلا تقييم (حالة مصادر المالك)
+    stats = run_probation(conn, evaluate_fn=lambda url, record_log=True: _ev(),
+                          measure_fn=lambda c, url: _m())
+    assert stats["promoted"] == 1
+    row = conn.execute("SELECT evaluation_verdict, evaluated_at FROM sources "
+                       "WHERE source_key='k1'").fetchone()
+    assert row["evaluation_verdict"] == "recommended" and row["evaluated_at"]
+    conn.close()
