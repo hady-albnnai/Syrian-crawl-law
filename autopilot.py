@@ -11,6 +11,8 @@
   2) بحث خارجي عند اختيار search_via صراحةً؛ لا مزود افتراضياً.
   3) تنقيب المتن المخزون (محلي).
   4) خرائط المواقع للمصادر المعتمدة.
+  6) مراجع ويكيبيديا العربية: الروابط الخارجية لمقالات التشريع السوري
+     (واجهة رسمية مجانية، ليست مزوّد بحث).
   5) التتبع بين المصادر (snowball): الروابط القانونية الخارجية في صفحات
      مصادرنا المعتمدة — اكتشاف مستقل بلا محرك بحث.
 
@@ -54,6 +56,11 @@ _SKIP_HOSTS = {
     "github.com", "creativecommons.org", "apple.com", "microsoft.com",
     "bit.ly", "tinyurl.com", "pinterest.com", "tiktok.com", "snapchat.com",
     "reddit.com", "wordpress.org", "wordpress.com", "gravatar.com",
+    # وسائل إعلام دولية (تظهر كثيراً في مراجع ويكيبيديا، ليست مصادر تشريع)
+    "bbc.com", "bbc.co.uk", "aljazeera.net", "aljazeera.com", "apnews.com",
+    "reuters.com", "aawsat.com", "independentarabia.com", "nytimes.com",
+    "theguardian.com", "cnn.com", "dw.com", "france24.com", "alarabiya.net",
+    "skynewsarabia.com", "washingtonpost.com", "sciencedirect.com",
 }
 
 _ARABIC_RE = re.compile(r"[\u0600-\u06FF]")
@@ -316,6 +323,117 @@ def snowball_candidates(conn, record_log: bool = True,
             for k in ranked]
 
 
+# ═══════════════════ القناة 6: مراجع ويكيبيديا العربية ═══════════════════
+
+WIKI_API = "https://ar.wikipedia.org/w/api.php"
+WIKI_QUERIES = [
+    "قانون سوري", "مرسوم تشريعي سوري", "القضاء السوري", "محكمة النقض السورية",
+    "نقابة المحامين السوريين", "وزارة العدل السورية", "الدستور السوري",
+    "التشريعات في سوريا", "الجريدة الرسمية السورية",
+]
+WIKI_TITLES_PER_QUERY = 10
+WIKI_LIMIT = 15
+
+
+def _wiki_get(params: dict) -> dict:
+    """طلب واحد مهذّب: مهلة، وإعادة بتمهل عند 429 (حدّ المعدل)."""
+    import time
+
+    import requests
+    from config import USER_AGENT
+    for attempt in range(3):
+        resp = requests.get(WIKI_API, params={**params, "format": "json"},
+                            headers={"User-Agent": USER_AGENT}, timeout=20)
+        if resp.status_code == 429 and attempt < 2:
+            time.sleep(5 * (attempt + 1))
+            continue
+        resp.raise_for_status()
+        return resp.json()
+    return {}
+
+
+WIKI_PAUSE_SECONDS = 1.5   # بين الطلبات الحية
+
+
+def wikipedia_candidates(conn, queries=None, limit: int = WIKI_LIMIT,
+                         http_get=None) -> list:
+    """مصادر جديدة من «وصلات خارجية» ومراجع مقالات ويكيبيديا العربية عن التشريع السوري.
+
+    واجهة رسمية مجانية بلا مفتاح؛ ليست محرك بحث تجارياً ولا يُختار بها مزوّد.
+    نأخذ الروابط الخارجية لمقالات تطابق استعلامات التشريع السوري، ونُسقط
+    المعروف والمنصات، ونرتّب: نطاق .sy أولاً ثم عدد المقالات المشيرة إليه.
+    رابط واحد لكل نطاق. كل مرشح يمر بالتقييم وفحص الاختصاص والاختبار كأي مرشح.
+    """
+    from urllib.parse import unquote
+    import time
+    raw_get = http_get or _wiki_get
+    pause = 0.0 if http_get else WIKI_PAUSE_SECONDS
+
+    def get(params):
+        if pause:
+            time.sleep(pause)
+        return raw_get(params)
+    known = known_registrables(conn)
+    titles = []
+    for q in (queries or WIKI_QUERIES):
+        try:
+            data = get({"action": "query", "list": "search", "srsearch": q,
+                        "srlimit": WIKI_TITLES_PER_QUERY, "srnamespace": 0})
+        except Exception as exc:
+            log.info(f"ويكيبيديا: تعذر البحث عن «{q}»: {exc}")
+            continue
+        for hit in data.get("query", {}).get("search", []):
+            if hit.get("title") and hit["title"] not in titles:
+                titles.append(hit["title"])
+    per_host: dict = {}   # registrable -> {"links": {url: n}, "pages": set}
+    for i in range(0, len(titles), 25):
+        batch = titles[i:i + 25]
+        params = {"action": "query", "prop": "extlinks", "titles": "|".join(batch),
+                  "ellimit": 500}
+        for _ in range(4):   # تتابع الصفحات، بسقف
+            try:
+                data = get(params)
+            except Exception as exc:
+                log.info(f"ويكيبيديا: تعذر جلب الروابط: {exc}")
+                break
+            for page in data.get("query", {}).get("pages", {}).values():
+                for link in page.get("extlinks", []):
+                    url = (link.get("*") or link.get("url") or "").strip()
+                    if url.startswith("//"):
+                        url = "https:" + url
+                    if not url.startswith(("http://", "https://")):
+                        continue
+                    reg = _registrable(urlparse(url).netloc)
+                    if not reg or reg in known:
+                        continue
+                    entry = per_host.setdefault(reg, {"links": {}, "pages": set()})
+                    entry["links"][url] = entry["links"].get(url, 0) + 1
+                    entry["pages"].add(page.get("title"))
+            cont = data.get("continue")
+            if not cont:
+                break
+            params = {**params, **cont}
+    def best_url(entry):
+        # الرابط الأقوى قانونياً أولاً ثم الأكثر تكراراً
+        return max(entry["links"], key=lambda u: (
+            is_legal_anchor("", u), entry["links"][u], -len(u)))
+
+    def rank(item):
+        reg, entry = item
+        url = best_url(entry)
+        score = (3 * is_legal_anchor(unquote(urlparse(url).path), url)
+                 + 2 * (".gov.sy" in reg or reg.endswith("gov.sy"))
+                 + 1 * reg.endswith(".sy") + 0.5 * min(len(entry["pages"]), 3))
+        return (-score, reg)
+    ranked = sorted(per_host.items(), key=rank)
+    out = []
+    for reg, entry in ranked[:limit]:
+        url = best_url(entry)
+        out.append(Candidate(url=url, title=unquote(urlparse(url).path)[:80],
+                             via=f"wikipedia:{len(entry['pages'])}"))
+    return out
+
+
 # ═══════════════════ القناة 4: خرائط المواقع ═══════════════════
 
 _LEGAL_URL_RE = re.compile(
@@ -353,7 +471,8 @@ def generate_candidates(conn, use_search: bool = False,
                         queries: list = None,
                         search_via: str | None = None,
                         record_log: bool = True,
-                        snowball: bool = True) -> list:
+                        snowball: bool = True,
+                        wikipedia: bool = True) -> list:
     """مرشحون من كل القنوات — مُلغى تكرارهم، وبلا نطاقات معروفة/مستثناة.
 
     الاستعلامات المستخدمة عند queries=None (السلوك الافتراضي): الثلاثة
@@ -436,6 +555,13 @@ def generate_candidates(conn, use_search: bool = False,
                 add(cand)
         except Exception as exc:
             log.info(f"قناة التتبع بين المصادر تعذرت: {exc}")
+
+    if wikipedia:
+        try:
+            for cand in wikipedia_candidates(conn):
+                add(cand)
+        except Exception as exc:
+            log.info(f"قناة ويكيبيديا تعذرت: {exc}")
 
     return cands
 

@@ -226,6 +226,7 @@ def _disable_candidate_side_channels(monkeypatch):
     monkeypatch.setattr(autopilot, "known_registrables", lambda conn: set())
     monkeypatch.setattr(autopilot, "mine_corpus_links", lambda conn: [])
     monkeypatch.setattr(autopilot, "approved_sources", lambda conn: [])
+    monkeypatch.setattr(autopilot, "wikipedia_candidates", lambda conn: [])
     monkeypatch.setattr(autopilot, "reference_driven_queries", lambda conn, limit=10: [])
     monkeypatch.setattr(missing_targets, "missing_target_queries",
                         lambda conn, limit=40: [])

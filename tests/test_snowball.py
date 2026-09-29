@@ -203,3 +203,47 @@ def test_corpus_mining_rotates_over_all_snapshots(tmp_path, monkeypatch):
             seen.add(c.url)
     assert len(seen) == 10  # كل الملفات العشرة قُرئت عبر 5 أيام
     conn.close()
+
+
+def _wiki_fake(pages, hits):
+    def get(params):
+        if params.get("list") == "search":
+            return {"query": {"search": [{"title": t} for t in hits]}}
+        return {"query": {"pages": pages}}
+    return get
+
+
+def test_wikipedia_channel_ranks_sy_first_and_dedupes_per_host(tmp_path, monkeypatch):
+    conn = _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(autopilot, "known_registrables",
+                        lambda c: {"known-site.example"} | set(autopilot._SKIP_HOSTS))
+    pages = {
+        "1": {"title": "قانون أ", "extlinks": [
+            {"*": "https://moj.gov.sy/laws/1"}, {"*": "https://portal.example/a"},
+            {"*": "https://known-site.example/x"},
+            {"*": "//protocol-relative.example/home"},
+            {"*": "https://commons.wikimedia.org/x"}, {"*": "mailto:x@y.z"}]},
+        "2": {"title": "قانون ب", "extlinks": [
+            {"*": "https://portal.example/b"}, {"*": "https://portal.example/a"},
+            {"*": "https://moj.gov.sy/laws/2"}]},
+    }
+    cands = autopilot.wikipedia_candidates(
+        conn, queries=["قانون سوري"], http_get=_wiki_fake(pages, ["قانون أ", "قانون ب"]))
+    hosts = [c.url.split("/")[2] for c in cands]
+    assert hosts[0] == "moj.gov.sy"                        # .sy أولاً
+    assert hosts[1] == "portal.example"                    # مؤيَّد بمقالين
+    assert len(hosts) == len(set(hosts))                   # رابط واحد لكل نطاق
+    assert "known-site.example" not in hosts
+    assert "commons.wikimedia.org" not in hosts
+    assert "protocol-relative.example" in hosts
+    assert cands[0].via == "wikipedia:2"
+    conn.close()
+
+
+def test_wikipedia_channel_survives_api_failure(tmp_path, monkeypatch):
+    conn = _db(tmp_path, monkeypatch)
+
+    def boom(params):
+        raise RuntimeError("offline")
+    assert autopilot.wikipedia_candidates(conn, queries=["x"], http_get=boom) == []
+    conn.close()
