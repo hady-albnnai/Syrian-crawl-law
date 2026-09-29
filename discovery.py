@@ -123,6 +123,16 @@ def _precedent_citation_count(text: str) -> int:
         return 0
 
 
+def _block_reason(url: str) -> str:
+    """سبب الحجب للتشخيص: robots (سياسة) أم موقع لا يستجيب أم تحويل لمضيف آخر."""
+    try:
+        import fetcher
+        p = urlparse(url)
+        return fetcher.BLOCK_REASONS.get(f"{p.scheme}://{p.netloc}", "")
+    except Exception:
+        return ""
+
+
 def evaluate_candidate(url: str, title_hint: str = "",
                        snippet: str = "", record_log: bool = True) -> Evaluation:
     """يفحص مرشحاً آلياً: الوصول، رسمية النطاق، صلة المحتوى، بنيته، واكتماله.
@@ -142,10 +152,13 @@ def evaluate_candidate(url: str, title_hint: str = "",
                    else "rejected")
         return Evaluation(
             url=url, ok=False, verdict=verdict,
-            reasons=[f"فشل الجلب: {err}", f"فئة النطاق: {tier}"],
+            reasons=[f"فشل الجلب: {err}"
+                     + (f" ({_block_reason(url)})" if _block_reason(url) else ""),
+                     f"فئة النطاق: {tier}"],
             domain_tier=tier,
             details={"error": err, "domain_tier": tier,
-                     "http_status": result.get("status")},
+                     "http_status": result.get("status"),
+                     "block_reason": _block_reason(url)},
             http_status=result.get("status"), sample_count=0)
 
     html = result.get("html") or ""

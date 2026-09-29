@@ -72,6 +72,9 @@ def run_harvest(pages: int = 100, use_search: bool = False,
         if dry_run:
             log.info("تجريبي: لا إدراج ولا زحف")
             return report
+        if not crawl:
+            log.info("--no-crawl: اكتشاف واعتماد فقط؛ لا إدراج ولا زحف (يُدرج في الدورة التالية)")
+            return report
         log.info("③ إدراج المصادر المعتمدة + تجديد الفهارس القديمة")
         items = enqueue_approved_sources(conn)
         report["enqueued"] = sum(1 for i in items if i["enqueued"])

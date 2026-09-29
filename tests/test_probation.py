@@ -207,3 +207,23 @@ def test_probation_also_tests_never_evaluated_proposed_sources_and_stores_evalua
                        "WHERE source_key='k1'").fetchone()
     assert row["evaluation_verdict"] == "recommended" and row["evaluated_at"]
     conn.close()
+
+
+def test_harvest_no_crawl_approves_but_does_not_enqueue(tmp_path, monkeypatch):
+    import autopilot
+    import crawler
+    import harvest
+    conn = _db(tmp_path, monkeypatch)
+    _add_source(conn, 1, status="approved")
+    conn.close()
+    monkeypatch.setattr(autopilot, "run_discovery",
+                        lambda conn, **kw: {"seen": 0, "evaluated": 0, "new": 0})
+    monkeypatch.setattr(probation, "run_probation",
+                        lambda conn, **kw: {"tested": 0, "promoted": 0})
+    called = []
+    monkeypatch.setattr(crawler, "start_crawling", lambda **kw: called.append(kw))
+    rep = harvest.run_harvest(crawl=False)
+    assert rep["enqueued"] == 0 and called == []
+    conn = database.get_connection()
+    assert conn.execute("SELECT COUNT(*) FROM crawl_tasks").fetchone()[0] == 0
+    conn.close()

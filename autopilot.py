@@ -684,7 +684,10 @@ def run_discovery(conn, auto_approve: bool = False, use_search: bool = False,
             continue
         log.info(f"   EVAL| verdict={ev.verdict} juris={ev.jurisdiction} "
                  f"type={ev.source_type} score={ev.source_score:.0f} "
-                 f"articles={ev.articles} via={cand.via}")
+                 f"articles={ev.articles} via={cand.via} "
+                 f"host={urlparse(cand.url).netloc[:40]}"
+                 + (f" why={ev.details.get('block_reason') or ev.details.get('error')}"
+                    if not ev.ok else ""))
         if dry_run:
             created = False
         else:

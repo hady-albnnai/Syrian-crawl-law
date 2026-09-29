@@ -62,6 +62,8 @@ def polite_sleep():
 # المفتاح الجديد يميّز http/https؛ قراءة netloc القديم محفوظة لتوافق
 # الاختبارات/المستدعين التاريخيين الذين يحقنون parser مباشرة.
 _ROBOT_CACHE = {}
+# سبب آخر إخفاق robots/تحويل لكل origin — للتشخيص فقط (لا يغيّر أي قرار جلب).
+BLOCK_REASONS = {}
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 MAX_REDIRECTS = 5
 
@@ -113,6 +115,7 @@ def _load_robot_parser(netloc: str, scheme: str = "https",
             polite_sleep()
             resp = SESSION.get(current, timeout=TIMEOUT, allow_redirects=False)
         except requests.RequestException as exc:
+            BLOCK_REASONS[f"{scheme}://{netloc}"] = f"robots_unreachable:{type(exc).__name__}"
             emit_log(robots_url, "robots_error",
                      f"{type(exc).__name__} — fail-closed", "blocked")
             return _deny_all_parser(robots_url)
@@ -122,6 +125,7 @@ def _load_robot_parser(netloc: str, scheme: str = "https",
             target = urljoin(current, location) if location else ""
             if (not target or redirect_index >= MAX_REDIRECTS or
                     not _same_host_redirect(current, target)):
+                BLOCK_REASONS[f"{scheme}://{netloc}"] = f"robots_redirect_to:{target[:60]}"
                 emit_log(robots_url, "robots_redirect_blocked",
                          "تحويل robots غير قابل للتحقق — fail-closed", "blocked")
                 return _deny_all_parser(robots_url)
@@ -134,6 +138,7 @@ def _load_robot_parser(netloc: str, scheme: str = "https",
             emit_log(robots_url, "robots_missing", f"HTTP {status} — لا سياسة منشورة", "success")
             return rp
         if status < 200 or status >= 300:
+            BLOCK_REASONS[f"{scheme}://{netloc}"] = f"robots_http_{status}"
             emit_log(robots_url, "robots_protected",
                      f"HTTP {status} — fail-closed", "blocked")
             return _deny_all_parser(robots_url)
@@ -218,6 +223,8 @@ def _get_with_safe_redirects(url: str, record_log: bool = True):
             return None, current, "redirect_missing_location"
         target = urljoin(current, location)
         if not _same_host_redirect(current, target):
+            BLOCK_REASONS[f"{urlparse(current).scheme}://{urlparse(current).netloc}"] = \
+                f"redirect_to:{target[:60]}"
             return None, current, "redirect_cross_origin"
         if target in visited:
             return None, current, "redirect_loop"

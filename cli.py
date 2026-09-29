@@ -1834,7 +1834,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="الحصاد بضغطة واحدة: اكتشاف ← اختبار ← اعتماد ← إدراج ← زحف")
     sp.add_argument("--pages", type=int, default=100,
                     help="حد صفحات الزحف في هذه الدورة (افتراضي 100)")
-    sp.add_argument("--no-crawl", action="store_true", help="اكتشاف واعتماد بلا زحف")
+    sp.add_argument("--no-crawl", action="store_true", help="اكتشاف واختبار واعتماد فقط: بلا إدراج ولا زحف")
     sp.add_argument("--dry", action="store_true",
                     help="تقييم واختبار بلا أي كتابة أو إدراج أو زحف")
     sp.add_argument("--max-evaluate", type=int, default=25)
