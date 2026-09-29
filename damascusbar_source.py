@@ -82,7 +82,12 @@ def load_threads(http_get_text, refresh: bool = False) -> dict[str, str]:
     if _threads_file().exists() and not refresh:
         return json.loads(_threads_file().read_text(encoding="utf-8"))
     bundled = Path(__file__).parent / "data" / "damascusbar_threads.json"   # مرفقة بالمستودع (قياس 2026-09-21)
-    if bundled.exists() and not refresh:
+    # لا نستخدم اللقطة المرفقة عندما يكون التطبيق موصلاً بقاعدة مؤقتة
+    # (الاختبارات أو تشغيل مستورد مستقل): في هذه الحالة يجب بناء الخريطة من
+    # CDX الذي يمرره المستدعي، وإلا تتسرّب آلاف الخيوط الحقيقية إلى دورة
+    # اختبار يفترض لقطة صغيرة معزولة.
+    is_default_data_dir = _data_dir().resolve() == bundled.parent.resolve()
+    if bundled.exists() and not refresh and is_default_data_dir:
         return json.loads(bundled.read_text(encoding="utf-8"))
     body = http_get_text(CDX_URL)
     if not body or "Temporarily Offline" in body[:400]:
