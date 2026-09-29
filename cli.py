@@ -799,6 +799,24 @@ def cmd_sources(args):
                  f"{ev.source_score:.1f}/100 | {ev.source_type} | الحكم: "
                  f"{ev.verdict} | مواد {ev.articles} | {ev.title[:50]}"
                  " | الاعتماد بأمر منفصل: sources approve")
+    elif args.action == "check":
+        # قراءة فقط: يقيّم المصادر الحالية بفحص الاختصاص الجديد دون أي كتابة
+        # (لا تغيير حالة، لا تسجيل في crawl_log). صفحة رئيسية واحدة لكل مصدر.
+        from discovery import evaluate_candidate
+        rows = cur.execute("SELECT id, base_url, status FROM sources "
+                           "WHERE status IN ('approved','proposed') ORDER BY id").fetchall()
+        if args.id:
+            rows = [r for r in rows if str(r["id"]) == str(args.id)]
+        for r in rows:
+            try:
+                ev = evaluate_candidate(r["base_url"], record_log=False)
+                j = ev.jurisdiction or {}
+                log.info(f"[{r['id']}] {r['status']:9s} اختصاص={j.get('verdict')} "
+                         f"(سوري {j.get('syrian_score')}/أجنبي {j.get('foreign_score')}) "
+                         f"حكم={ev.verdict} درجة={ev.source_score:.0f} {r['base_url']}")
+            except Exception as exc:
+                log.info(f"[{r['id']}] تعذر الفحص: {str(exc)[:80]} {r['base_url']}")
+        log.info("قراءة فقط — لم يُغيَّر شيء في قاعدة البيانات")
     elif args.action == "reactivate":
         # مصدر «مستنفد» (3 دورات فارغة) يعود للبذر — لصفحات جديدة نُشرت لاحقاً.
         n = conn.execute("UPDATE source_performance SET consecutive_empty_runs=0, learned_status='active' "
@@ -2156,7 +2174,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(fn=cmd_seeds)
 
     sp = sub.add_parser("sources", help="إدارة سجل المصادر")
-    sp.add_argument("action", choices=("list", "approve", "reject", "add", "reactivate"))
+    sp.add_argument("action", choices=("list", "approve", "reject", "add", "reactivate", "check"))
     sp.add_argument("id", nargs="?", help="معرّف المصدر — أو الرابط مع add")
     sp.set_defaults(fn=cmd_sources)
 

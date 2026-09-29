@@ -136,3 +136,31 @@ def test_generate_candidates_includes_snowball_and_can_disable_it(tmp_path, monk
     assert any(c.via == "snowball:x" for c in on)
     assert not any(c.via == "snowball:x" for c in off)
     conn.close()
+
+
+def test_cli_sources_check_is_read_only(tmp_path, monkeypatch):
+    import argparse
+    import cli
+    import discovery
+    conn = _db(tmp_path, monkeypatch)
+    conn.execute("INSERT INTO sources (source_key, base_url, name, engine, status) "
+                 "VALUES ('k','https://a-source.example/','A','wordpress','approved')")
+    conn.commit()
+    before = conn.execute("SELECT status, evaluation_verdict FROM sources").fetchall()
+    conn.close()
+    calls = []
+
+    class Ev:
+        jurisdiction = {"verdict": "syrian", "syrian_score": 6, "foreign_score": 0}
+        verdict = "recommended"
+        source_score = 80.0
+
+    def fake_eval(url, title_hint="", snippet="", record_log=True):
+        calls.append(record_log)
+        return Ev()
+    monkeypatch.setattr(discovery, "evaluate_candidate", fake_eval)
+    assert cli.cmd_sources(argparse.Namespace(action="check", id=None)) == 0
+    assert calls == [False]  # لا تسجيل في crawl_log
+    conn = database.get_connection()
+    assert conn.execute("SELECT status, evaluation_verdict FROM sources").fetchall() == before
+    conn.close()
