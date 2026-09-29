@@ -810,8 +810,8 @@ def cmd_sources(args):
         for r in rows:
             try:
                 ev = evaluate_candidate(r["base_url"], record_log=False)
-                j = ev.jurisdiction or {}
-                log.info(f"[{r['id']}] {r['status']:9s} اختصاص={j.get('verdict')} "
+                j = (ev.details or {}).get("jurisdiction") or {}
+                log.info(f"[{r['id']}] {r['status']:9s} اختصاص={ev.jurisdiction} "
                          f"(سوري {j.get('syrian_score')}/أجنبي {j.get('foreign_score')}) "
                          f"حكم={ev.verdict} درجة={ev.source_score:.0f} {r['base_url']}")
             except Exception as exc:

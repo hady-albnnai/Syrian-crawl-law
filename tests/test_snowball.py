@@ -150,17 +150,26 @@ def test_cli_sources_check_is_read_only(tmp_path, monkeypatch):
     conn.close()
     calls = []
 
-    class Ev:
-        jurisdiction = {"verdict": "syrian", "syrian_score": 6, "foreign_score": 0}
-        verdict = "recommended"
-        source_score = 80.0
+    def make_ev():
+        from discovery import Evaluation
+        ev = Evaluation(url="https://a-source.example/", ok=True)
+        ev.jurisdiction = "syrian"
+        ev.verdict = "recommended"
+        ev.source_score = 80.0
+        ev.details = {"jurisdiction": {"verdict": "syrian", "syrian_score": 6,
+                                       "foreign_score": 0}}
+        return ev
 
     def fake_eval(url, title_hint="", snippet="", record_log=True):
         calls.append(record_log)
-        return Ev()
+        return make_ev()
     monkeypatch.setattr(discovery, "evaluate_candidate", fake_eval)
+    lines = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: lines.append(str(m)))
     assert cli.cmd_sources(argparse.Namespace(action="check", id=None)) == 0
     assert calls == [False]  # لا تسجيل في crawl_log
+    assert any("syrian" in m and "a-source.example" in m for m in lines), lines
+    assert not any("تعذر" in m for m in lines), lines
     conn = database.get_connection()
     assert conn.execute("SELECT status, evaluation_verdict FROM sources").fetchall() == before
     conn.close()
