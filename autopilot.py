@@ -11,6 +11,8 @@
   2) بحث خارجي عند اختيار search_via صراحةً؛ لا مزود افتراضياً.
   3) تنقيب المتن المخزون (محلي).
   4) خرائط المواقع للمصادر المعتمدة.
+  5) التتبع بين المصادر (snowball): الروابط القانونية الخارجية في صفحات
+     مصادرنا المعتمدة — اكتشاف مستقل بلا محرك بحث.
 
 إدراج المصدر المعتمد في الطابور له أمر منفصل (`queue-approved`)، وجلب
 صفحات الطابور له أمر/مرحلة crawl منفصلة.
@@ -189,6 +191,105 @@ def mine_corpus_links(conn, snapshot_dir: Path = None, max_files: int = 60,
             for _score, url, title in ranked]
 
 
+# ═══════════════════ القناة 5: التتبع بين المصادر (snowball) ═══════════════════
+
+MAX_SNOWBALL_SOURCES = 8            # مصادر معتمدة تُفحص في الدورة الواحدة
+MAX_SNOWBALL_PAGES_PER_SOURCE = 3   # الصفحة الرئيسية + أحدث صفحات مزحوفة
+SNOWBALL_LIMIT = 15                 # أقصى مرشحين ينتجهم هذا المسار
+
+
+def external_legal_links(html: str, page_url: str, known: set) -> dict:
+    """روابط خارجية بإشارة قانونية من صفحة واحدة: {url_معياري: (رابط، نص)}.
+
+    نقية (بلا شبكة). تتجاهل روابط المضيف نفسه والنطاقات المعروفة/المستثناة.
+    """
+    out = {}
+    own = _registrable(urlparse(page_url).netloc)
+    try:
+        soup = BeautifulSoup(html or "", "lxml")
+    except Exception:
+        return out
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if not href.startswith(("http://", "https://")):
+            continue
+        reg = _registrable(urlparse(href).netloc)
+        if not reg or reg == own or reg in known:
+            continue
+        text = a.get_text(" ", strip=True)
+        if not is_legal_anchor(text, href):
+            continue
+        out.setdefault(canonicalize_url(href), (href, text[:80]))
+    return out
+
+
+def _snowball_pages(conn, base_url: str, pages: int) -> list:
+    """الصفحة الرئيسية للمصدر + أحدث صفحاته المزحوفة بنجاح (نفس الناشر)."""
+    urls = [base_url]
+    reg = _registrable(urlparse(base_url).netloc)
+    try:
+        rows = conn.execute(
+            "SELECT url FROM crawl_tasks WHERE status='success' "
+            "ORDER BY updated_at DESC LIMIT 400").fetchall()
+    except Exception:
+        rows = []
+    for row in rows:
+        if len(urls) >= pages:
+            break
+        u = row["url"] if hasattr(row, "keys") else row[0]
+        if u and u != base_url and _registrable(urlparse(u).netloc) == reg:
+            urls.append(u)
+    return urls
+
+
+def snowball_candidates(conn, record_log: bool = True,
+                        max_sources: int = MAX_SNOWBALL_SOURCES,
+                        pages_per_source: int = MAX_SNOWBALL_PAGES_PER_SOURCE,
+                        limit: int = SNOWBALL_LIMIT, today=None) -> list:
+    """اكتشاف مستقل بلا محرك بحث: ما تشير إليه مصادرنا المعتمدة.
+
+    مصدر تشير إليه عدة مصادر قانونية معتمدة أقوى دليلاً من مصدر تشير إليه
+    واحدة. كل مرشح يمر لاحقاً بالتقييم نفسه (بما فيه فحص الاختصاص).
+    الفحص مهذب (robots والتأخير) ومحدود؛ ويدور اختيار المصادر يومياً كي
+    تُغطى كلها عبر الدورات. لا يعتمد ولا يدرج مهاماً.
+    """
+    from datetime import date
+    sources = approved_sources(conn)
+    if not sources:
+        return []
+    n = len(sources)
+    shift = (today or date.today()).toordinal() % n
+    ordered = sources[shift:] + sources[:shift]
+    known = known_registrables(conn)
+    endorsed_by: dict = {}   # url معياري -> {ناشرون}
+    sample: dict = {}        # url معياري -> (رابط، نص)
+    for src in ordered[:max_sources]:
+        publisher = _registrable(urlparse(src["base_url"]).netloc)
+        seen_pages = set()
+        for page in _snowball_pages(conn, src["base_url"], pages_per_source):
+            key = canonicalize_url(page)
+            if key in seen_pages:
+                continue
+            seen_pages.add(key)
+            try:
+                res = fetch(page, record_log=record_log)
+            except Exception as exc:
+                log.info(f"تتبع {page[:60]} تعذر: {exc}")
+                continue
+            if not res.get("ok"):
+                continue
+            found = external_legal_links(res.get("html") or "",
+                                         res.get("final_url") or page, known)
+            for ckey, (href, text) in found.items():
+                endorsed_by.setdefault(ckey, set()).add(publisher)
+                sample.setdefault(ckey, (href, text, publisher))
+    ranked = sorted(endorsed_by, key=lambda k: (-len(endorsed_by[k]), k))[:limit]
+    return [Candidate(url=sample[k][0], title=sample[k][1],
+                      via=f"snowball:{sample[k][2]}"
+                          + (f"+{len(endorsed_by[k]) - 1}" if len(endorsed_by[k]) > 1 else ""))
+            for k in ranked]
+
+
 # ═══════════════════ القناة 4: خرائط المواقع ═══════════════════
 
 _LEGAL_URL_RE = re.compile(
@@ -225,7 +326,8 @@ def sitemap_candidates(base_url: str, limit: int = 15,
 def generate_candidates(conn, use_search: bool = False,
                         queries: list = None,
                         search_via: str | None = None,
-                        record_log: bool = True) -> list:
+                        record_log: bool = True,
+                        snowball: bool = True) -> list:
     """مرشحون من كل القنوات — مُلغى تكرارهم، وبلا نطاقات معروفة/مستثناة.
 
     الاستعلامات المستخدمة عند queries=None (السلوك الافتراضي): الثلاثة
@@ -301,6 +403,13 @@ def generate_candidates(conn, use_search: bool = False,
                 add(cand)
         except Exception as exc:
             log.info(f"خريطة موقع {src['base_url']} تعذرت: {exc}")
+
+    if snowball:
+        try:
+            for cand in snowball_candidates(conn, record_log=record_log):
+                add(cand)
+        except Exception as exc:
+            log.info(f"قناة التتبع بين المصادر تعذرت: {exc}")
 
     return cands
 

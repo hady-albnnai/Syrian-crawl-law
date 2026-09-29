@@ -27,6 +27,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import SEARCH_TIMEOUT, USER_AGENT
+from jurisdiction import assess_jurisdiction
 from crawler import canonicalize_url
 from engines import detect_engine  # إعادة تصدير للتوافق — التعريف في engines
 from extractor import is_legal_content, legal_score
@@ -83,6 +84,7 @@ class Evaluation:
     details: dict = field(default_factory=dict)
     http_status: int | None = None
     sample_count: int = 0
+    jurisdiction: str = "unknown"     # syrian / foreign / mixed / unknown (مستوى المصدر)
 
 
 # ═════════════════════════ بوابة التقييم ═════════════════════════
@@ -202,9 +204,17 @@ def evaluate_candidate(url: str, title_hint: str = "",
         legal_link_count=legal_links + precedent_links,
         text_chars=len(text), complete_text=complete, engine=engine)
     source_score = assessment["score"]
-    if source_type in {"legislation", "precedent", "mixed"} \
+    # الاختصاص: التوصية الآلية تتطلب دليلاً على سورية المصدر أو نطاقاً رسمياً
+    # صريحاً؛ الشكل القانوني وحده لا يفرّق بين سوريا وغيرها.
+    # مستوى المصدر: نقرأ الصفحة كلها (ترويسة/تذييل/قوائم) لا متن المقال فقط.
+    page_text = (soup.body or soup).get_text(" ", strip=True)
+    juris = assess_jurisdiction(final_url, title, page_text, snippet)
+    jv = juris["verdict"]
+    if jv == "foreign":
+        verdict = "rejected"
+    elif source_type in {"legislation", "precedent", "mixed"} \
             and source_score >= SOURCE_ASSESSMENT_MIN_SCORE:
-        verdict = "recommended"
+        verdict = "recommended" if (jv == "syrian" or tier <= 2) else "needs_review"
     elif source_type == "potential_legal" and source_score >= 35:
         verdict = "needs_review"
     else:
@@ -230,6 +240,18 @@ def evaluate_candidate(url: str, title_hint: str = "",
                        f"قضائية {precedent_signals}")
     if not extraction_ok:
         reasons.append("لم يُستخرج متن مقال؛ فُحص نص الصفحة وروابطها كفهرس")
+    jur_ar = {"syrian": "سوري", "foreign": "غير سوري", "mixed": "مختلط",
+              "unknown": "غير محسوم"}[jv]
+    reasons.append(f"الاختصاص: {jur_ar} (سوري {juris['syrian_score']} / "
+                   f"أجنبي {juris['foreign_score']}"
+                   + (f" — {juris['foreign_country']}" if juris["foreign_country"] else "")
+                   + ")")
+    if jv == "foreign":
+        reasons.append("لا يُوصى به: علامات دولة أخرى تغلب")
+    elif jv in ("unknown", "mixed") and tier > 2 and \
+            source_type in {"legislation", "precedent", "mixed"} and \
+            source_score >= SOURCE_ASSESSMENT_MIN_SCORE:
+        reasons.append("يحتاج مراجعة: لا دليل كافٍ على سورية المصدر")
     reasons.append(f"المحرك المكتشف: {engine}")
     reasons.append(f"الحكم الآلي: {verdict} (لا يساوي اعتماد المصدر)")
 
@@ -251,6 +273,7 @@ def evaluate_candidate(url: str, title_hint: str = "",
             "complete_text": complete,
             "extraction_ok": extraction_ok,
         },
+        "jurisdiction": juris,
         "http_status": result.get("status"),
         "final_url": final_url,
     }
@@ -259,7 +282,7 @@ def evaluate_candidate(url: str, title_hint: str = "",
         legal=bool(law_evidence), score=score, title=title,
         verdict=verdict, reasons=reasons, articles=n_articles,
         source_score=source_score, source_type=source_type,
-        domain_tier=tier, details=details,
+        domain_tier=tier, details=details, jurisdiction=jv,
         http_status=result.get("status"), sample_count=1)
 
 

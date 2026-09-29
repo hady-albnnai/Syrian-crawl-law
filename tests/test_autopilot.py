@@ -416,8 +416,23 @@ URL_WEAK = "https://laws-blog.example/2024/04/decision-7"
 URL_JUNK = "https://junk.example/page"
 
 
+_SYRIAN_MARK = ("<p>الجمهورية العربية السورية — مرسوم تشريعي — "
+                "نقابة المحامين في دمشق — القانون السوري</p>")
+
+
+def _with_body(html, extra):
+    """يحقن extra داخل body (الإلحاق بعد إغلاق الوسوم يُسقطه المحلل)."""
+    return html.replace("</body>", extra + "</body>", 1) if "</body>" in html \
+        else html + extra
+
+
+def _neutral(html):
+    """صفحة بنفس البنية بلا أي إشارة سورية صريحة."""
+    return html.replace("السوري", "").replace("السورية", "")
+
+
 def _patched_fetch(url, **kw):
-    html = {URL_PASS: WP_POST, URL_WEAK: WP_SHORT,
+    html = {URL_PASS: WP_POST, URL_WEAK: _with_body(WP_SHORT, _SYRIAN_MARK),
             URL_JUNK: GENERIC_NON_LEGAL}[url]
     return {"ok": True, "status": 200, "html": html, "ms": 1,
             "final_url": url, "encoding": "utf-8"}
@@ -643,3 +658,34 @@ def test_migration_adds_decided_by_to_old_schema(tmp_path):
     cols = [r[1] for r in conn.execute("PRAGMA table_info(sources)")]
     assert "decided_by" in cols
     conn.close()
+
+
+# ═════════════════ الاختصاص على مستوى المصدر ═════════════════
+
+def _eval_with(monkeypatch, html, url="https://laws-blog.example/2024/05/penal"):
+    monkeypatch.setattr(discovery, "fetch", lambda u, **kw: {
+        "ok": True, "status": 200, "html": html, "ms": 1,
+        "final_url": u, "encoding": "utf-8"})
+    return discovery.evaluate_candidate(url)
+
+
+def test_structurally_strong_page_without_syrian_evidence_is_only_needs_review(monkeypatch):
+    ev = _eval_with(monkeypatch, _neutral(WP_POST))
+    assert ev.jurisdiction == "unknown"
+    assert ev.verdict == "needs_review"
+    assert any("سورية المصدر" in r for r in ev.reasons)
+
+
+def test_structurally_strong_foreign_page_is_rejected(monkeypatch):
+    foreign = ("<p>جمهورية مصر العربية — القانون المصري رقم 131 لسنة 1948 — "
+               "محكمة النقض المصرية — الوقائع المصرية</p>")
+    ev = _eval_with(monkeypatch, _with_body(_neutral(WP_POST), foreign))
+    assert ev.jurisdiction == "foreign"
+    assert ev.verdict == "rejected"
+
+
+def test_syrian_evidence_allows_recommendation(monkeypatch):
+    ev = _eval_with(monkeypatch, _with_body(_neutral(WP_POST), _SYRIAN_MARK))
+    assert ev.jurisdiction == "syrian"
+    assert ev.verdict == "recommended"
+    assert ev.details["jurisdiction"]["verdict"] == "syrian"
