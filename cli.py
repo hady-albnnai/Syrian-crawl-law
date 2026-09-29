@@ -707,6 +707,44 @@ def cmd_audit_jurisdiction(args):
     return 0
 
 
+def cmd_exclude_documents(args):
+    """استبعاد وثائق بمعرّفاتها بقرار المالك: نسخ إلى document_versions ثم
+    status='excluded' (لا حذف، وقابل للعكس بـ --restore). لا يمسّ النص."""
+    from database import create_tables, get_connection
+    from dedup import archive_document_version
+    create_tables()
+    conn = get_connection()
+    cur = conn.cursor()
+    n = 0
+    for did in args.ids:
+        row = conn.execute(
+            "SELECT id, doc_id, title, source_url, clean_content, quality_score, status "
+            "FROM documents WHERE id=?", (did,)).fetchone()
+        if row is None:
+            log.info(f"EXCLUDE| id={did} missing")
+            continue
+        if args.restore:
+            if row["status"] == "excluded":
+                cur.execute("UPDATE documents SET status='active' WHERE id=?", (did,))
+                n += 1
+                log.info(f"EXCLUDE| restored id={did}")
+            else:
+                log.info(f"EXCLUDE| id={did} status={row['status']} (not excluded)")
+            continue
+        if row["status"] != "active":
+            log.info(f"EXCLUDE| id={did} status={row['status']} (skipped)")
+            continue
+        archive_document_version(cur, did, dict(row), "excluded: " + args.reason)
+        cur.execute("UPDATE documents SET status='excluded', part_of=NULL, legal_status=NULL "
+                    "WHERE id=?", (did,))
+        n += 1
+        log.info(f"EXCLUDE| excluded id={did} | {(row['title'] or '')[:60]}")
+    conn.commit()
+    conn.close()
+    log.info(f"EXCLUDE| changed={n} (copy kept in document_versions; reversible with --restore)")
+    return 0
+
+
 def cmd_harvest(args):
     """الحصاد بضغطة واحدة: اكتشاف ← اختبار ← اعتماد ← إدراج ← زحف (انظر harvest.py)."""
     from harvest import run_harvest
@@ -1864,6 +1902,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--evaluate", action="store_true",
                     help="تقييم كل مرشح وتسجيله proposed")
     sp.set_defaults(fn=cmd_discover)
+
+    sp = sub.add_parser("exclude-documents",
+                        help="استبعاد وثائق بمعرّفاتها (نسخ لا حذف، قابل للعكس)")
+    sp.add_argument("--ids", type=int, nargs="+", required=True)
+    sp.add_argument("--reason", default="owner: foreign/non-legal content")
+    sp.add_argument("--restore", action="store_true", help="عكس الاستبعاد")
+    sp.set_defaults(fn=cmd_exclude_documents)
 
     sp = sub.add_parser("audit-jurisdiction",
                         help="قراءة فقط: قياس بوابة الاختصاص على المتن الحالي")

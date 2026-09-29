@@ -78,3 +78,22 @@ def test_audit_jurisdiction_is_read_only_and_reports(tmp_path, monkeypatch, caps
     conn = database.get_connection()
     assert tuple(conn.execute("SELECT COUNT(*), MAX(id) FROM documents").fetchone()) == tuple(before)
     conn.close()
+
+
+def test_exclude_documents_archives_and_is_reversible(tmp_path, monkeypatch):
+    import cli
+    conn = _db(tmp_path, monkeypatch)
+    _run(conn, monkeypatch, WP_POST)
+    did = conn.execute("SELECT id FROM documents").fetchone()[0]
+    conn.close()
+    monkeypatch.setattr(cli.log, "info", lambda *a, **k: None)
+    cli.cmd_exclude_documents(argparse.Namespace(ids=[did, 9999], reason="t", restore=False))
+    conn = database.get_connection()
+    assert conn.execute("SELECT status FROM documents WHERE id=?", (did,)).fetchone()[0] == "excluded"
+    assert conn.execute("SELECT COUNT(*) FROM document_versions WHERE original_doc_id=?",
+                        (did,)).fetchone()[0] == 1
+    conn.close()
+    cli.cmd_exclude_documents(argparse.Namespace(ids=[did], reason="t", restore=True))
+    conn = database.get_connection()
+    assert conn.execute("SELECT status FROM documents WHERE id=?", (did,)).fetchone()[0] == "active"
+    conn.close()
