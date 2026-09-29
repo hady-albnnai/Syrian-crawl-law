@@ -363,3 +363,24 @@ def test_entry_gate_lets_sy_domain_with_foreign_homepage_through_but_not_others(
     base = dict(ok=True, jurisdiction="foreign", source_type="mixed", source_score=79)
     assert probation.entry_gate(S(url="https://sana.sy/presidency/", **base))[0] is True
     assert probation.entry_gate(S(url="https://laws.example.eg/", **base))[0] is False
+
+
+def test_proposed_source_with_rejected_first_verdict_is_still_probed(tmp_path, monkeypatch):
+    import database, probation
+    from types import SimpleNamespace
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "r.db"))
+    database.create_tables()
+    conn = database.get_connection()
+    conn.execute("INSERT INTO sources (source_key, base_url, name, engine, credibility, status,"
+                 " discovered_via, discovered_at, evaluation_score, evaluation_verdict)"
+                 " VALUES ('k','https://sana.sy/presidency/','s','unknown',0.6,'proposed','seed',"
+                 "'2026-01-01',79,'rejected')")
+    conn.commit()
+    seen = []
+    def ev(url, record_log=False):
+        seen.append(url)
+        return SimpleNamespace(verdict="rejected", jurisdiction="foreign", source_type="nonlegal",
+                               source_score=10, engine="x", domain_tier=4, reasons=[], details={},
+                               sample_count=0, ok=True, articles=0, url=url)
+    probation.run_probation(conn, evaluate_fn=ev, measure_fn=lambda c, u: {})
+    assert seen == ["https://sana.sy/presidency/"]

@@ -271,8 +271,8 @@ def run_probation(conn, max_sources: int = MAX_PER_RUN, dry_run: bool = False,
     rows = conn.execute(
         "SELECT id, base_url FROM sources WHERE status='proposed' "
         "AND COALESCE(decided_by,'') != 'user' "
-        "AND (evaluation_verdict IN ('recommended','needs_review','unknown','') "
-        "     OR evaluation_verdict IS NULL) "
+        # لا مرشّح على verdict: حكم التقييم الأول «rejected» قد يأتي من اختصاص واجهة
+        # إخبارية (sana.sy/presidency) وهو بالذات ما تعيد بوابة الدخول والعينة تقديره.
         # الذين لم يُختبروا قط أولاً؛ المُعلَّقون/المحجوبون سابقاً بعدهم، وإلا احتلّوا
         # حصة الدورة كل مرة وجاع الجدد (moj.gov.sy بدرجة 87 لم يُختبر لهذا السبب).
         "ORDER BY (COALESCE(evaluation_reasons_json,'') LIKE ?) ASC, "
