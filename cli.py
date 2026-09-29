@@ -688,6 +688,11 @@ def cmd_harvest(args):
                       dry_run=args.dry)
     d, p = rep["discovery"], rep["probation"]
     log.info("=" * 60)
+    log.info(f"SUMMARY| discovery seen={d.get('seen', 0)} evaluated={d.get('evaluated', 0)} "
+             f"new={d.get('new', 0)} | probation tested={p.get('tested', 0)} "
+             f"promoted={p.get('promoted', 0)} rejected={p.get('rejected', 0)} "
+             f"held={p.get('held', 0)} gate={p.get('skipped_gate', 0)} | "
+             f"enqueued={rep['enqueued']} refreshed={rep['refreshed']} dry={rep['dry_run']}")
     log.info(f"اكتشاف: رُئي {d.get('seen', 0)} | قُيّم {d.get('evaluated', 0)} | "
              f"جديد {d.get('new', 0)}")
     log.info(f"اختبار: {p.get('tested', 0)} | اعتُمد {p.get('promoted', 0)} | "
@@ -1832,7 +1837,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-crawl", action="store_true", help="اكتشاف واعتماد بلا زحف")
     sp.add_argument("--dry", action="store_true",
                     help="تقييم واختبار بلا أي كتابة أو إدراج أو زحف")
-    sp.add_argument("--max-evaluate", type=int, default=12)
+    sp.add_argument("--max-evaluate", type=int, default=25)
     sp.add_argument("--refresh-days", type=int, default=7,
                     help="إعادة فحص فهارس المصادر المعتمدة بعد N يوماً لالتقاط الجديد")
     sp.add_argument("--search-via", choices=("ddg", "bing"), default=None,

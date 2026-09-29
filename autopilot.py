@@ -418,14 +418,25 @@ def wikipedia_candidates(conn, queries=None, limit: int = WIKI_LIMIT,
         return max(entry["links"], key=lambda u: (
             is_legal_anchor("", u), entry["links"][u], -len(u)))
 
+    def plausible(reg, entry):
+        """قبل التقييم: نطاق .sy أو أثر قانوني/عربي في الرابط — يُسقط صحافة أجنبية."""
+        url = best_url(entry)
+        path = unquote(urlparse(url).path)
+        return (reg.endswith(".sy") or is_legal_anchor(path, url)
+                or bool(_ARABIC_RE.search(path)))
+
+    news_re = re.compile(r"/(news|articles?|archives?|stor(?:y|ies)|blog)/|[?&]p=\d+|/20\d\d/",
+                         re.IGNORECASE)
+
     def rank(item):
         reg, entry = item
         url = best_url(entry)
         score = (3 * is_legal_anchor(unquote(urlparse(url).path), url)
+                 - 2 * bool(news_re.search(url))
                  + 2 * (".gov.sy" in reg or reg.endswith("gov.sy"))
                  + 1 * reg.endswith(".sy") + 0.5 * min(len(entry["pages"]), 3))
         return (-score, reg)
-    ranked = sorted(per_host.items(), key=rank)
+    ranked = sorted(((r, e) for r, e in per_host.items() if plausible(r, e)), key=rank)
     out = []
     for reg, entry in ranked[:limit]:
         url = best_url(entry)
@@ -671,6 +682,9 @@ def run_discovery(conn, auto_approve: bool = False, use_search: bool = False,
             stats["errors"].append(f"{cand.url}: {exc}")
             log.info(f"   ❌ عطل تقييم: {exc}")
             continue
+        log.info(f"   EVAL| verdict={ev.verdict} juris={ev.jurisdiction} "
+                 f"type={ev.source_type} score={ev.source_score:.0f} "
+                 f"articles={ev.articles} via={cand.via}")
         if dry_run:
             created = False
         else:

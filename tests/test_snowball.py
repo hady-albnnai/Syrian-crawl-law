@@ -219,12 +219,12 @@ def test_wikipedia_channel_ranks_sy_first_and_dedupes_per_host(tmp_path, monkeyp
                         lambda c: {"known-site.example"} | set(autopilot._SKIP_HOSTS))
     pages = {
         "1": {"title": "قانون أ", "extlinks": [
-            {"*": "https://moj.gov.sy/laws/1"}, {"*": "https://portal.example/a"},
+            {"*": "https://moj.gov.sy/laws/1"}, {"*": "https://portal.example/laws/a"},
             {"*": "https://known-site.example/x"},
-            {"*": "//protocol-relative.example/home"},
+            {"*": "//protocol-relative.example/laws/home"},
             {"*": "https://commons.wikimedia.org/x"}, {"*": "mailto:x@y.z"}]},
         "2": {"title": "قانون ب", "extlinks": [
-            {"*": "https://portal.example/b"}, {"*": "https://portal.example/a"},
+            {"*": "https://portal.example/laws/b"}, {"*": "https://portal.example/laws/a"},
             {"*": "https://moj.gov.sy/laws/2"}]},
     }
     cands = autopilot.wikipedia_candidates(
@@ -246,4 +246,21 @@ def test_wikipedia_channel_survives_api_failure(tmp_path, monkeypatch):
     def boom(params):
         raise RuntimeError("offline")
     assert autopilot.wikipedia_candidates(conn, queries=["x"], http_get=boom) == []
+    conn.close()
+
+
+def test_wikipedia_channel_drops_foreign_press_and_news_paths(tmp_path, monkeypatch):
+    conn = _db(tmp_path, monkeypatch)
+    monkeypatch.setattr(autopilot, "known_registrables", lambda c: set())
+    pages = {"1": {"title": "قانون أ", "extlinks": [
+        {"*": "https://www.telegraph.co.uk/news/worldnews/syria/1.html"},
+        {"*": "https://moj.gov.sy/news/2024/05/x"},
+        {"*": "https://syria.law/index.php/main-legislation/nationality-law/"},
+        {"*": "http://arabic-site.example/%D9%82%D8%A7%D9%86%D9%88%D9%86-%D8%A7%D9%84%D8%B9%D9%85%D9%84"}]}}
+    cands = autopilot.wikipedia_candidates(conn, queries=["q"],
+                                           http_get=_wiki_fake(pages, ["قانون أ"]))
+    hosts = [c.url.split("/")[2] for c in cands]
+    assert "www.telegraph.co.uk" not in hosts
+    assert set(hosts[:2]) == {"syria.law", "arabic-site.example"}  # قانوني صريح أولاً
+    assert hosts.index("moj.gov.sy") > hosts.index("arabic-site.example")  # مسار أخبار يهبط
     conn.close()

@@ -210,14 +210,14 @@ def run_probation(conn, max_sources: int = MAX_PER_RUN, dry_run: bool = False,
             reason = why if not ok else f"الاختصاص {ev.jurisdiction} لا يجتاز الاعتماد الآلي"
             stats["decisions"].append({"id": sid, "url": url, "decision": "gate",
                                        "reason": reason})
-            log.info(f"   ⏸ #{sid} لم يدخل الاختبار: {reason}")
+            log.info(f"   PROBATION| #{sid} GATE: {reason}")
             continue
         m = measure_fn(conn, url)
         decision, reason = decide_from_metrics(m)
         stats["tested"] += 1
         stats["decisions"].append({"id": sid, "url": url, "decision": decision,
                                    "reason": reason, "metrics": m})
-        log.info(f"   🧪 #{sid} {decision}: {reason}")
+        log.info(f"   PROBATION| #{sid} {decision.upper()}: {reason}")
         if dry_run:
             continue
         note = f"اختبار آلي ({decision}): {reason}"
