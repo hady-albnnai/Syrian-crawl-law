@@ -506,8 +506,26 @@ def generate_candidates(conn, use_search: bool = False,
         seen.add(key)
         cands.append(cand)
 
+    # البذور تتجاوز مرشّح «النطاق المعروف»: كان يُسقط jus.moj.gov.sy إن سُجّل moj.gov.sy
+    # سابقاً (رُفض يوم كان الموقع القديم ميتاً) رغم أنه موقع حي مختلف. لا يُستبعد
+    # إلا ما سُجّل بمفتاحه نفسه (إعادة التسجيل لا تغيّر قراراً سابقاً).
+    from discovery import _source_key
+    try:
+        registered = {r[0] for r in conn.execute("SELECT source_key FROM sources")}
+        approved_hosts = {urlparse(r[0] or "").netloc.lower().removeprefix("www.")
+                          for r in conn.execute(
+                              "SELECT base_url FROM sources WHERE status='approved'")}
+    except Exception:
+        registered, approved_hosts = set(), set()
     for cand in seed_candidates():
-        add(cand)
+        host = urlparse(cand.url).netloc.lower().removeprefix("www.")
+        if _source_key(cand.url) in registered or host in approved_hosts:
+            log.info(f"   SEED| skip already-registered {host}")
+            continue
+        key = canonicalize_url(cand.url)
+        if cand.url.startswith(("http://", "https://")) and key not in seen:
+            seen.add(key)
+            cands.append(cand)
 
     if use_search:
         if search_via not in {"ddg", "bing"}:
