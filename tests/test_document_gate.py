@@ -19,7 +19,7 @@ def _db(tmp_path, monkeypatch):
 def _run(conn, monkeypatch, html, url="https://laws-blog.example/2024/05/penal"):
     monkeypatch.setattr(crawler, "SAVE_RAW_HTML", False)
     taskqueue.enqueue(conn, url, "قسم", "topic")
-    task = dict(conn.execute("SELECT * FROM crawl_tasks WHERE url=?", (url,)).fetchone())
+    task = dict(conn.execute("SELECT * FROM crawl_tasks ORDER BY id DESC LIMIT 1").fetchone())
     stats = {"failures": 0, "docs": 0, "articles": 0, "skipped": 0}
     crawler._handle_topic(conn, task, html, False, stats)
     return task, stats
@@ -97,3 +97,34 @@ def test_exclude_documents_archives_and_is_reversible(tmp_path, monkeypatch):
     conn = database.get_connection()
     assert conn.execute("SELECT status FROM documents WHERE id=?", (did,)).fetchone()[0] == "active"
     conn.close()
+
+
+SANA_DECREE = (FIX / "sana_decree_87.html").read_text(encoding="utf-8")
+SANA_URL = "https://sana.sy/presidency/2497260/"
+
+
+def test_short_presidential_decree_with_full_text_is_saved(tmp_path, monkeypatch):
+    conn = _db(tmp_path, monkeypatch)
+    _run(conn, monkeypatch, SANA_DECREE, url=SANA_URL)
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+    conn.close()
+
+
+def test_same_page_without_decree_text_marker_stays_in_review(tmp_path, monkeypatch):
+    conn = _db(tmp_path, monkeypatch)
+    html = SANA_DECREE.replace("نص المرسوم", "تفاصيل")
+    assert "نص المرسوم" not in html
+    task, _ = _run(conn, monkeypatch, html, url=SANA_URL)
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    row = conn.execute("SELECT status FROM crawl_tasks WHERE id=?", (task["id"],)).fetchone()
+    assert row["status"] == "needs_review"
+    conn.close()
+
+
+def test_is_decree_text_post_rules():
+    import crawler
+    txt = "وفيما يلي نص المرسوم رقم (87) لعام 2026 رئيس الجمهورية"
+    assert crawler.is_decree_text_post(txt, 3)
+    assert not crawler.is_decree_text_post(txt, 1)
+    assert not crawler.is_decree_text_post("أصدر الرئيس المرسوم رقم (87) لعام 2026", 3)
+    assert not crawler.is_decree_text_post("وفيما يلي نص المرسوم", 3)

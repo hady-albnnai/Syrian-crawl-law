@@ -111,6 +111,17 @@ def save_snapshot(html: str) -> str:
     return h
 
 
+_DECREE_TEXT_RE = re.compile(r"نص\s+(?:ال)?مرسوم")
+_DECREE_ID_RE = re.compile(r"(?:ال)?مرسوم\s+(?:التشريعي\s+)?رقم\s*[\(/“\"]*\s*\d+[\)/”\"]*\s*"
+                           r"(?:لعام|لسنة)\s*\d{4}")
+
+
+def is_decree_text_post(clean: str, n_articles: int) -> bool:
+    """منشور يحمل نص مرسوم كاملاً: عبارة «نص المرسوم» + رقم وسنة + مادتان فأكثر."""
+    return (n_articles >= 2 and bool(_DECREE_TEXT_RE.search(clean or ""))
+            and bool(_DECREE_ID_RE.search(clean or "")))
+
+
 def _handle_topic(conn, task, html, dry_run, stats):
     ext = extract_main_content(html, task["url"])
     if not ext["success"]:
@@ -129,7 +140,11 @@ def _handle_topic(conn, task, html, dry_run, stats):
     # صفحات مدونات بلا مواد مستخرجة أو بدرجة هزيلة لا تدخل المتن — needs_review
     # بلا إسقاط صامت.
     real_articles = [a for a in articles if not a.get("is_preamble")]
-    if len(real_articles) < 1 or legal_score(clean, title) < 55.0:
+    # قرار المالك 2026-09-30: مراسيم الرئاسة المنشورة نصاً كاملاً («وفيما يلي نص
+    # المرسوم») صكوك رسمية قصيرة (3–6 مواد، بينها التعيينات) وتقع درجتها 34–50 دون
+    # حدّ 55 المصمَّم للمدونات؛ تُقبل بشرط: نص المرسوم + رقم وسنة + مادتان فأكثر.
+    decree_text = is_decree_text_post(clean, len(real_articles))
+    if len(real_articles) < 1 or (legal_score(clean, title) < 55.0 and not decree_text):
         taskqueue.mark(conn, task["id"], "needs_review",
                        f"بلا مواد كافية ({len(real_articles)}) أو درجة هزيلة")
         log.info(f"   ⚠️ {len(real_articles)} مادة — دون بوابة الجودة "
