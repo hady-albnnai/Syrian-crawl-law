@@ -110,10 +110,11 @@ def test_short_presidential_decree_with_full_text_is_saved(tmp_path, monkeypatch
     conn.close()
 
 
-def test_same_page_without_decree_text_marker_stays_in_review(tmp_path, monkeypatch):
+def test_same_page_without_any_text_formula_stays_in_review(tmp_path, monkeypatch):
     conn = _db(tmp_path, monkeypatch)
-    html = SANA_DECREE.replace("نص المرسوم", "تفاصيل")
-    assert "نص المرسوم" not in html
+    html = (SANA_DECREE.replace("نص المرسوم", "تفاصيل").replace("يرسم ما يلي", "ما يلي")
+            .replace("وفيما يلي", "وفيما"))
+    assert "يرسم ما يلي" not in html and "نص المرسوم" not in html
     task, _ = _run(conn, monkeypatch, html, url=SANA_URL)
     assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
     row = conn.execute("SELECT status FROM crawl_tasks WHERE id=?", (task["id"],)).fetchone()
@@ -123,8 +124,10 @@ def test_same_page_without_decree_text_marker_stays_in_review(tmp_path, monkeypa
 
 def test_is_decree_text_post_rules():
     import crawler
-    txt = "وفيما يلي نص المرسوم رقم (87) لعام 2026 رئيس الجمهورية"
-    assert crawler.is_decree_text_post(txt, 3)
-    assert not crawler.is_decree_text_post(txt, 1)
-    assert not crawler.is_decree_text_post("أصدر الرئيس المرسوم رقم (87) لعام 2026", 3)
-    assert not crawler.is_decree_text_post("وفيما يلي نص المرسوم", 3)
+    assert crawler.is_decree_text_post("وفيما يلي نص المرسوم رقم (87) لعام 2026", 3)
+    assert crawler.is_decree_text_post("وفيما يلي النص الكامل للمرسوم: رئيس الجمهورية", 3)
+    assert crawler.is_decree_text_post("نص المرسوم: بناء على مقتضيات المصلحة. يرسم ما يلي", 4)
+    assert crawler.is_decree_text_post("يقرر رئيس الجمهورية ما يلي: المادة (1)", 2)
+    assert not crawler.is_decree_text_post("وفيما يلي نص المرسوم", 1)            # مادة واحدة
+    assert not crawler.is_decree_text_post("أصدر الرئيس المرسوم رقم (87) لعام 2026", 3)  # خبر
+

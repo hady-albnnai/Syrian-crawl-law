@@ -111,15 +111,20 @@ def save_snapshot(html: str) -> str:
     return h
 
 
-_DECREE_TEXT_RE = re.compile(r"نص\s+(?:ال)?مرسوم")
-_DECREE_ID_RE = re.compile(r"(?:ال)?مرسوم\s+(?:التشريعي\s+)?رقم\s*[\(/“\"]*\s*\d+[\)/”\"]*\s*"
-                           r"(?:لعام|لسنة)\s*\d{4}")
+# صيغ تدل على أن المنشور يحمل نص صكّ رسمي لا خبراً عنه: «نص المرسوم/القرار»،
+# «النص الكامل للمرسوم»، «وفيما يلي نص …»، وصيغة المنطوق «يرسم ما يلي» و«يقرر رئيس
+# الجمهورية ما يلي». (فُحصت على صفحات سانا الحية: المراسيم 46 و148 و163 وقرار لجنة
+# الإعلان الدستوري كلها تحمل إحداها، ومنها ما لا يحمل «لعام سنة» فلا نشترط الرقم.)
+_DECREE_TEXT_RE = re.compile(
+    r"(?:نص|النص\s+الكامل\s+(?:ل)?)\s*(?:ال)?(?:مرسوم|قرار)"
+    r"|وفيما\s+يلي\s+(?:ال)?نص"
+    r"|يرسم\s+ما\s+يلي"
+    r"|يقرر\s+(?:السيد\s+)?رئيس\s+الجمهورية\s+ما\s+يلي")
 
 
 def is_decree_text_post(clean: str, n_articles: int) -> bool:
-    """منشور يحمل نص مرسوم كاملاً: عبارة «نص المرسوم» + رقم وسنة + مادتان فأكثر."""
-    return (n_articles >= 2 and bool(_DECREE_TEXT_RE.search(clean or ""))
-            and bool(_DECREE_ID_RE.search(clean or "")))
+    """منشور يحمل نص صكّ رئاسي: صيغة نص/منطوق + مادتان فأكثر."""
+    return n_articles >= 2 and bool(_DECREE_TEXT_RE.search(clean or ""))
 
 
 def _handle_topic(conn, task, html, dry_run, stats):
