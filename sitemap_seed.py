@@ -38,20 +38,32 @@ def _real_get(url: str):
 def collect_urls(base_url: str, path_prefix: str, http_get=None,
                  max_sitemaps: int = MAX_SITEMAPS) -> list:
     """روابط الخرائط التي يبدأ مسارها بـ path_prefix (مثل /presidency/) مع ترتيب الأحدث أولاً."""
-    get = http_get or _real_get
+    raw_get = http_get or _real_get
+
+    def get(url):
+        """أي عطل شبكة/ترميز في خريطة واحدة لا يُسقط البذر كله."""
+        try:
+            return raw_get(url)
+        except Exception as exc:
+            log.warning(f"SEEDMAP| fetch error {url.rsplit('/', 1)[-1]}: {type(exc).__name__}")
+            return 0, ""
     origin = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
     st, index_xml = get(urljoin(origin, "/sitemap_index.xml"))
     if st != 200:
-        log.warning(f"فهرس sitemap غير متاح ({st}) — لا بذر")
+        log.warning(f"SEEDMAP| index unavailable status={st} — nothing seeded")
         return []
     maps = _LOC_RE.findall(index_xml)[:max_sitemaps]
     host = urlparse(base_url).netloc
     seen, out = set(), []
-    for m in maps:
+    failed = 0
+    for i, m in enumerate(maps, 1):
         st, xml = get(m)
         if st != 200:
-            log.warning(f"خريطة {m.rsplit('/', 1)[-1]} غير متاحة ({st})")
+            failed += 1
+            log.warning(f"SEEDMAP| sitemap {i}/{len(maps)} unavailable status={st}")
             continue
+        if i % 10 == 0 or i == len(maps):
+            log.info(f"SEEDMAP| sitemap {i}/{len(maps)} urls_so_far={len(out)}")
         for loc in _LOC_RE.findall(xml):
             p = urlparse(loc)
             if p.netloc != host or not p.path.startswith(path_prefix):
@@ -66,7 +78,7 @@ def collect_urls(base_url: str, path_prefix: str, http_get=None,
         m = re.search(r"/(\d+)/?$", u)
         return int(m.group(1)) if m else 0
     out.sort(key=_id, reverse=True)
-    log.info(f"sitemap {host}{path_prefix}: {len(maps)} خريطة ← {len(out)} رابطاً")
+    log.info(f"SEEDMAP| collected sitemaps={len(maps)} failed={failed} urls={len(out)}")
     return out
 
 

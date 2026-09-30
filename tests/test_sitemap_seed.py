@@ -41,3 +41,12 @@ def test_seed_enqueues_only_for_approved_source(tmp_path, monkeypatch):
     dry = sitemap_seed.seed_from_sitemap(conn, "https://news.example/presidency", "/presidency/",
                                          "قسم", dry_run=True, http_get=_get)
     assert dry["added"] == 0
+
+
+def test_failing_sitemap_does_not_abort_seeding():
+    def flaky(url):
+        if url.endswith("post-sitemap1.xml"):
+            raise RuntimeError("boom")
+        return _get(url)
+    urls = sitemap_seed.collect_urls("https://news.example/presidency", "/presidency/", http_get=flaky)
+    assert urls == ["https://news.example/presidency/300/", "https://news.example/presidency/100/"]
