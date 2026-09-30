@@ -398,7 +398,8 @@ def cmd_sync(args):
     """
     import json as _json
     from config import DB_PATH, MIZAN_ROOT
-    result = {"ok": False, "steps": {}, "mizan_root": None}
+    result = {"ok": False, "status": "failed", "failed_steps": [], "steps": {},
+              "mizan_root": None}
 
     def stage(msg):  # سطر تقدّم على stdout يقرأه ميزان مباشرة
         print(f"المرحلة: {msg}", flush=True)
@@ -419,11 +420,13 @@ def cmd_sync(args):
     stage("2/3 تصدير الحزمة (ملفات md/json + الفهرس)…")
     try:
         from exporter import build_package
-        rep = build_package(db_path=DB_PATH, out_dir=args.out)
+        rep = build_package(db_path=DB_PATH, out_dir=args.out,
+                            current_only=bool(getattr(args, "current_only", False)))
         result["steps"]["export"] = {
             "docs": rep["docs"], "articles": rep.get("articles_in_package"),
             "gate_ok": rep.get("gate_ok", True),
-            "gate_failed": rep.get("gate_failed", [])}
+            "gate_failed": rep.get("gate_failed", []),
+            "current_only": bool(rep.get("current_only"))}
         if not rep.get("gate_ok", True):
             result["error"] = "بوابة ميزان حمراء عند التصدير"
             print(_json.dumps(result, ensure_ascii=False))
@@ -442,6 +445,7 @@ def cmd_sync(args):
         print(_json.dumps(result, ensure_ascii=False))
         return 2
     stage(f"3/3 حقن في ميزان: {root}…")
+    inject_ok = False
     try:
         rec = inj.apply(args.out, root)
         result["steps"]["inject"] = {
@@ -450,10 +454,13 @@ def cmd_sync(args):
             "index_rows": rec["rows"]["index_rows_after"],
             "updated_same_path": rec["rows"]["updated_same_path"],
             "verify_ok": rec["verify_our_rows"]["ok"]}
-        result["ok"] = bool(rec["verify_our_rows"]["ok"])
+        inject_ok = bool(rec["verify_our_rows"]["ok"])
+        if not inject_ok:
+            result["failed_steps"].append("inject")
     except (inj.GateError, FileNotFoundError, OSError) as exc:
         result["steps"]["inject"] = {"error": str(exc)}
         result["error"] = f"الحقن فشل: {exc}"
+        result["failed_steps"].append("inject")
     # 4) الاجتهادات (ف٣): المعتمَد + ما ينتظر المراجعة (بوسم review_status يعرضه ميزان
     #    «بانتظار المراجعة») ⇒ content/legal_library/precedents/precedents.csv — قرار المالك 2026-09-26.
     #    طبقة إضافية لا تُسقط المزامنة إن فشلت (تُبلَّغ).
@@ -461,7 +468,9 @@ def cmd_sync(args):
         import precedent_export as pe
         from database import get_connection
         conn = get_connection()
-        pm = pe.build_package(conn, out_dir=str(Path(args.out).parent / "precedents"), include_pending=True)
+        include_pending = not getattr(args, "no_pending_precedents", False)
+        pm = pe.build_package(conn, out_dir=str(Path(args.out).parent / "precedents"),
+                              include_pending=include_pending)
         conn.close()
         dest = Path(root) / "content" / "legal_library" / "precedents"
         dest.mkdir(parents=True, exist_ok=True)
@@ -469,9 +478,11 @@ def cmd_sync(args):
             shutil.copyfile(Path(pm["out_dir"]) / name, dest / name)
         result["steps"]["precedents"] = {"count": pm["count"], "approved": pm["approved"],
                                          "pending": pm["pending"], "overruled": pm["overruled"],
+                                         "pending_included": include_pending,
                                          "dest": str(dest)}
     except Exception as exc:  # noqa: BLE001 — يُبلَّغ لا يُخفى
         result["steps"]["precedents"] = {"error": str(exc)}
+        result["failed_steps"].append("precedents")
     # 5) ذ19: تعديلات المواد بعينها ⇒ content/legal_library/article_amendments.csv
     try:
         import article_amendments as aa
@@ -486,6 +497,19 @@ def cmd_sync(args):
         result["steps"]["article_amendments"] = rep
     except Exception as exc:  # noqa: BLE001
         result["steps"]["article_amendments"] = {"error": str(exc)}
+        result["failed_steps"].append("article_amendments")
+    # GAP-08: النتيجة الصادقة: complete فقط إن نجحت كل الخطوات المطلوبة (تنقيح، تصدير،
+    # حقن، اجتهادات، تعديلات مواد)؛ partial = القوانين حُقنت وفشلت طبقة؛ failed = الحقن فشل.
+    if isinstance(result["steps"].get("refine"), dict) and result["steps"]["refine"].get("error"):
+        result["failed_steps"].insert(0, "refine")
+    if result["failed_steps"]:
+        result["status"] = "partial" if inject_ok else "failed"
+        result["ok"] = False
+        result.setdefault("error", "مزامنة " + ("جزئية" if inject_ok else "فاشلة")
+                          + ": فشلت الخطوات: " + "، ".join(result["failed_steps"]))
+    else:
+        result["status"] = "complete"
+        result["ok"] = True
     print(_json.dumps(result, ensure_ascii=False))
     return 0 if result["ok"] else 1
 
@@ -1900,6 +1924,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--out", default="export/content_package")
     sp.add_argument("--mizan-root", default=None)
     sp.add_argument("--no-refine", action="store_true")
+    sp.add_argument("--current-only", action="store_true",
+                    help="يصدّر الوثائق الحاصلة على بوابة النفاذ البشري فقط (كما في export)")
+    sp.add_argument("--no-pending-precedents", action="store_true",
+                    help="لا تُرسل الاجتهادات غير المعتمدة إلى ميزان (الافتراضي يرسلها بوسم المراجعة)")
     sp.set_defaults(fn=cmd_sync)
     sp = sub.add_parser("stats", help="أعداد قاعدة البيانات")
     sp.set_defaults(fn=cmd_stats)
