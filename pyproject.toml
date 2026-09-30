@@ -27,7 +27,7 @@ mizan-harvest = "cli:main"
 [tool.setuptools]
 py-modules = [
               "answer", "autopilot", "chunker",
-              "cli", "community_seed", "config",
+              "cli", "community_seed", "sitemap_seed", "config",
               "crawl_queue", "crawler", "database",
               "dedup", "discovery", "engines",
               "exporter", "extractor", "extractor_v4",
