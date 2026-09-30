@@ -468,7 +468,7 @@ def cmd_sync(args):
         import precedent_export as pe
         from database import get_connection
         conn = get_connection()
-        include_pending = not getattr(args, "no_pending_precedents", False)
+        include_pending = bool(getattr(args, "include_pending_precedents", False))
         pm = pe.build_package(conn, out_dir=str(Path(args.out).parent / "precedents"),
                               include_pending=include_pending)
         conn.close()
@@ -1926,8 +1926,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-refine", action="store_true")
     sp.add_argument("--current-only", action="store_true",
                     help="يصدّر الوثائق الحاصلة على بوابة النفاذ البشري فقط (كما في export)")
-    sp.add_argument("--no-pending-precedents", action="store_true",
-                    help="لا تُرسل الاجتهادات غير المعتمدة إلى ميزان (الافتراضي يرسلها بوسم المراجعة)")
+    sp.add_argument("--include-pending-precedents", action="store_true",
+                    help="يُرسل الاجتهادات غير المعتمدة أيضاً بوسم «بانتظار المراجعة» (الافتراضي: المعتمد فقط)")
     sp.set_defaults(fn=cmd_sync)
     sp = sub.add_parser("stats", help="أعداد قاعدة البيانات")
     sp.set_defaults(fn=cmd_stats)

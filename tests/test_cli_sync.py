@@ -142,8 +142,7 @@ def test_sync_passes_current_only_to_export(monkeypatch, capsys, tmp_path):
     assert data["steps"]["export"]["current_only"] is True
 
 
-def test_sync_can_withhold_pending_precedents(monkeypatch, capsys, tmp_path):
-    _ok_env(monkeypatch, tmp_path)
+def _spy_precedents(monkeypatch):
     import precedent_export as pe
     captured = {}
     real = pe.build_package
@@ -152,7 +151,21 @@ def test_sync_can_withhold_pending_precedents(monkeypatch, capsys, tmp_path):
         captured.update(kw)
         return real(conn, **kw)
     monkeypatch.setattr(pe, "build_package", spy)
-    cli.cmd_sync(_Args(tmp_path, no_pending_precedents=True))
+    return captured
+
+
+def test_sync_sends_only_approved_precedents_by_default(monkeypatch, capsys, tmp_path):
+    """GAP-09: الافتراضي المعتمد فقط."""
+    _ok_env(monkeypatch, tmp_path)
+    captured = _spy_precedents(monkeypatch)
+    cli.cmd_sync(_Args(tmp_path))
     assert captured["include_pending"] is False
     data = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert data["steps"]["precedents"]["pending_included"] is False
+
+
+def test_sync_includes_pending_precedents_only_when_asked(monkeypatch, capsys, tmp_path):
+    _ok_env(monkeypatch, tmp_path)
+    captured = _spy_precedents(monkeypatch)
+    cli.cmd_sync(_Args(tmp_path, include_pending_precedents=True))
+    assert captured["include_pending"] is True
