@@ -1040,6 +1040,24 @@ def cmd_seed_community(args):
     return 0
 
 
+def cmd_seed_sitemap(args):
+    """بذر الطابور من sitemap مصدر معتمد بمسار محدد (مثل سانا /presidency/)."""
+    from database import create_tables, get_connection
+    from sitemap_seed import seed_from_sitemap
+    create_tables()
+    conn = get_connection()
+    row = conn.execute("SELECT base_url, name, status FROM sources WHERE id=?",
+                       (args.source_id,)).fetchone()
+    if row is None or row["status"] != "approved":
+        log.error("المصدر غير موجود أو غير معتمد — لا بذر")
+        conn.close()
+        return 2
+    seed_from_sitemap(conn, row["base_url"], args.path, row["name"] or args.path,
+                      limit=args.limit, dry_run=args.dry)
+    conn.close()
+    return 0
+
+
 def cmd_hf_import(args):
     """التبني المرحلي لمجموعة HF ipfs_syria_laws عبر بوابات الأنبوب."""
     from database import create_tables, get_connection
@@ -1909,6 +1927,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--reason", default="owner: foreign/non-legal content")
     sp.add_argument("--restore", action="store_true", help="عكس الاستبعاد")
     sp.set_defaults(fn=cmd_exclude_documents)
+
+    sp = sub.add_parser("seed-sitemap",
+                        help="بذر الطابور من sitemap مصدر معتمد بمسار محدد")
+    sp.add_argument("--source-id", type=int, required=True)
+    sp.add_argument("--path", required=True, help="بادئة المسار مثل /presidency/")
+    sp.add_argument("--limit", type=int, help="أحدث N رابطاً فقط")
+    sp.add_argument("--dry", action="store_true")
+    sp.set_defaults(fn=cmd_seed_sitemap)
 
     sp = sub.add_parser("audit-jurisdiction",
                         help="قراءة فقط: قياس بوابة الاختصاص على المتن الحالي")
