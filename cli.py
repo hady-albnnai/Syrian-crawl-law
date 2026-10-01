@@ -713,7 +713,14 @@ def cmd_queue_report(args):
         "SELECT url, kind, last_error, attempts, substr(COALESCE(updated_at,created_at,''),1,10) AS day "
         "FROM crawl_tasks WHERE status=?", (args.status,)).fetchall()
     top = args.top
-    log.info(f"QREPORT| status={args.status} total={len(rows)}")
+    host = getattr(args, "host", None)
+    if host:
+        rows = [r for r in rows if (urlparse(r["url"]).hostname or "").removeprefix("www.")
+                == host.removeprefix("www.")]
+    log.info(f"QREPORT| status={args.status} total={len(rows)}" + (f" host={host}" if host else ""))
+    if host:
+        for r in rows[:getattr(args, "samples", 10)]:
+            log.info(f"QREPORT| task {r['url'][-70:]} | {(r['last_error'] or '(no error)')[:90]}")
 
     def norm_err(e):
         e = (e or "").strip()
@@ -2041,6 +2048,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="قراءة فقط: تفكيك مهام الطابور حسب المضيف والخطأ واليوم")
     sp.add_argument("--status", default="failed")
     sp.add_argument("--top", type=int, default=8)
+    sp.add_argument("--host", help="حصر التقرير بمضيف واحد وعرض مهامه بأخطائها الكاملة")
+    sp.add_argument("--samples", type=int, default=10)
     sp.set_defaults(fn=cmd_queue_report)
 
     sp = sub.add_parser("source-report",
