@@ -125,3 +125,41 @@ def test_redirect_policy_rejects_https_downgrade_and_foreign_host():
         "https://law.example/a", "https://other.example/b") is False
     assert fetcher._same_host_redirect(
         "https://law.example/a", "javascript:alert(1)") is False
+
+
+def test_sy_registrable_domain():
+    assert fetcher._sy_registrable("pministry.gov.sy") == "pministry.gov.sy"
+    assert fetcher._sy_registrable("a.b.pministry.gov.sy") == "pministry.gov.sy"
+    assert fetcher._sy_registrable("sana.sy") == "sana.sy"
+    assert fetcher._sy_registrable("www.sana.sy") == "sana.sy"
+    assert fetcher._sy_registrable("gov.sy") == ""          # لاحقة عامة لا نطاق مسجّل
+    assert fetcher._sy_registrable("law.example") == ""      # خارج .sy
+
+
+def test_sy_subdomain_redirect_allowed_only_for_pages_and_only_within_registrable():
+    f = fetcher._same_host_redirect
+    a, b = "https://pministry.gov.sy/x", "https://new.pministry.gov.sy/x"
+    assert f(a, b) is False                                   # الافتراضي صارم (robots)
+    assert f(a, b, allow_sy_subdomain=True) is True
+    # نطاق مسجّل آخر تحت gov.sy لا يُسمح به
+    assert f(a, "https://moj.gov.sy/x", allow_sy_subdomain=True) is False
+    # خارج .sy لا تساهل
+    assert f("https://law.example/a", "https://x.law.example/a", allow_sy_subdomain=True) is False
+    # هبوط https إلى http يبقى ممنوعاً
+    assert f(a, "http://new.pministry.gov.sy/x", allow_sy_subdomain=True) is False
+
+
+def test_page_fetch_follows_sy_sibling_subdomain_and_rechecks_robots(monkeypatch):
+    _quiet(monkeypatch)
+    checked = []
+    responses = [
+        _Response(301, headers={"Location": "https://new.pministry.gov.sy/laws"}),
+        _Response(200, "نص قانوني", url="https://new.pministry.gov.sy/laws"),
+    ]
+    monkeypatch.setattr(fetcher.SESSION, "get", lambda url, **kw: responses.pop(0))
+    monkeypatch.setattr(fetcher, "is_allowed",
+                        lambda url, **_kw: checked.append(url) or True)
+    result = fetcher.fetch("https://pministry.gov.sy/laws")
+    assert result["ok"] is True
+    assert result["final_url"] == "https://new.pministry.gov.sy/laws"
+    assert checked == ["https://pministry.gov.sy/laws", "https://new.pministry.gov.sy/laws"]

@@ -452,7 +452,9 @@ def start_crawling(max_pages=40, dry_run=False, stop_event=None, domain: str | N
             # التعامل مع المصدر المكتشف: المحرك يُكشف لكل صفحة، ومستخرج
             # الروابط يُختار حسب المحرك — لا أنماط منتدى محجوزة.
             engine = engines.detect_engine(result["html"])
-            base = task["url"]
+            # بعد تحويل إلى مضيف فرعي مسموح تُحلّ الروابط النسبية وتُفلتر على
+            # العنوان النهائي، لا على عنوان المهمة.
+            base = result.get("final_url") or task["url"]
             topics = engines.extract_topic_links(result["html"], base, engine)
             pages = engines.extract_pagination_links(result["html"], base,
                                                      engine)

@@ -104,8 +104,31 @@ def _deny_all_parser(robots_url: str):
     return rp
 
 
-def _same_host_redirect(current_url: str, target_url: str) -> bool:
-    """يسمح بتحويل داخل المضيف نفسه، ولا يسمح بهبوط https إلى http."""
+_SY_SECOND_LEVEL = {"gov", "com", "edu", "org", "net", "mil", "sch", "med"}
+
+
+def _sy_registrable(host: str) -> str:
+    """النطاق المسجّل لمضيف تحت .sy (gov.sy وأخواتها مستويات عامة)؛ وإلا فارغ.
+
+    لا نوسّع إلى بقية النطاقات العليا: لا نملك قائمة لاحقات عامة، والتساهل
+    مقصور على المصادر الرسمية السورية (قرار المالك 2026-10-01).
+    """
+    labels = [p for p in (host or "").lower().rstrip(".").split(".") if p]
+    if len(labels) < 2 or labels[-1] != "sy":
+        return ""
+    if labels[-2] in _SY_SECOND_LEVEL:
+        return ".".join(labels[-3:]) if len(labels) >= 3 else ""
+    return ".".join(labels[-2:])
+
+
+def _same_host_redirect(current_url: str, target_url: str,
+                        allow_sy_subdomain: bool = False) -> bool:
+    """يسمح بتحويل داخل المضيف نفسه، ولا يسمح بهبوط https إلى http.
+
+    allow_sy_subdomain: لصفحات المحتوى فقط؛ يسمح بالانتقال بين مضيفين فرعيين
+    من النطاق المسجّل نفسه تحت .sy (a.x.gov.sy إلى b.x.gov.sy). robots.txt
+    يبقى صارماً لأن سياسته خاصة بالمضيف.
+    """
     try:
         current, target = urlparse(current_url), urlparse(target_url)
         if current.scheme not in ("http", "https") or target.scheme not in ("http", "https"):
@@ -116,8 +139,12 @@ def _same_host_redirect(current_url: str, target_url: str) -> bool:
             return False
         a = (current.hostname or "").lower().rstrip(".").removeprefix("www.")
         b = (target.hostname or "").lower().rstrip(".").removeprefix("www.")
-        if not a or a != b:
+        if not a:
             return False
+        if a != b:
+            reg = _sy_registrable(a)
+            if not (allow_sy_subdomain and reg and reg == _sy_registrable(b)):
+                return False
         pa = current.port or (80 if current.scheme == "http" else 443)
         pb = target.port or (80 if target.scheme == "http" else 443)
         # انتقال المنفذ الافتراضي بين HTTP وHTTPS مسموح؛ منفذ خدمة خاص
@@ -258,7 +285,7 @@ def _get_with_safe_redirects(url: str, record_log: bool = True):
         if not location:
             return None, current, "redirect_missing_location"
         target = urljoin(current, location)
-        if not _same_host_redirect(current, target):
+        if not _same_host_redirect(current, target, allow_sy_subdomain=True):
             BLOCK_REASONS[f"{urlparse(current).scheme}://{urlparse(current).netloc}"] = \
                 f"redirect_to:{target[:60]}"
             return None, current, "redirect_cross_origin"
