@@ -832,6 +832,7 @@ def cmd_corpus_report(args):
 def cmd_export_audit(args):
     """قراءة فقط: كم مادة يُسقطها تصدير الحزمة بسبب تكرار رقم المادة؟ وهل المُسقطة نسخ مطابقة أم نصوص مختلفة؟"""
     import re as _re
+    from collections import Counter
     from database import get_connection
     conn = get_connection()
     heads = conn.execute(
@@ -863,6 +864,13 @@ def cmd_export_audit(args):
             else:
                 d_diff += 1
         if getattr(args, "doc", None) == h["id"]:
+            _d = conn.execute("SELECT source_url, doc_id, scraped_at FROM documents WHERE id=?",
+                              (h["id"],)).fetchone()
+            log.info(f"EXDOC| doc#{h['id']} src={(_d['source_url'] or '')[:80]} doc_id={_d['doc_id']} "
+                     f"scraped={str(_d['scraped_at'])[:10]}")
+            lbl = Counter((a["article_label"] or "")[:14] for a in raw)
+            log.info(f"EXDOC| labels top={lbl.most_common(5)} numbers_distinct="
+                     f"{len({str(a['article_number']) for a in raw})} of {len(raw)}")
             shown = 0
             seen_keys = {}
             for a in raw:
@@ -877,7 +885,7 @@ def cmd_export_audit(args):
                 log.info(f"EXDOC| no.{key} KEPT id={kp['id']} path={(kp['hierarchy_path'] or '')[:40]} "
                          f"| {norm(kp['text'])[:70]}")
                 log.info(f"EXDOC| no.{key} DROP id={a['id']} part={a['doc_id'] != kp['doc_id']} "
-                         f"path={(a['hierarchy_path'] or '')[:40]} | {norm(a['text'])[:70]}")
+                         f"label={(a['article_label'] or '')[:14]} | {norm(a['text'])[:50]}")
         tot_raw += len(raw)
         tot_kept += len(kept)
         identical += d_ident

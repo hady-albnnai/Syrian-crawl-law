@@ -39,5 +39,5 @@ def test_export_audit_doc_drilldown_shows_kept_and_dropped(monkeypatch, tmp_path
     monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: lines.append(str(m)))
     cli.cmd_export_audit(argparse.Namespace(top=5, doc=1, samples=3))
     t = "\n".join(lines)
-    assert "EXDOC| no.1 KEPT" in t and "path=الباب الأول" in t and "الأصل" in t
-    assert "EXDOC| no.1 DROP" in t and "path=الملحق" in t and "ملحق" in t
+    assert "EXDOC| no.1 KEPT" in t and "الأصل" in t and "numbers_distinct=1 of 2" in t
+    assert "EXDOC| no.1 DROP" in t and "ملحق" in t and "src=https://x.sy/a" in t
