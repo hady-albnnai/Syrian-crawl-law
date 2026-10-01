@@ -703,6 +703,40 @@ def cmd_runs(args):
     return 0
 
 
+def cmd_queue_report(args):
+    """قراءة فقط: يفكّك مهام الطابور حسب الحالة والمضيف وسبب الخطأ واليوم."""
+    from collections import Counter
+    from database import get_connection
+    from urllib.parse import urlparse
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT url, kind, last_error, attempts, substr(COALESCE(updated_at,created_at,''),1,10) AS day "
+        "FROM crawl_tasks WHERE status=?", (args.status,)).fetchall()
+    top = args.top
+    log.info(f"QREPORT| status={args.status} total={len(rows)}")
+
+    def norm_err(e):
+        e = (e or "").strip()
+        return (e[:48] if e else "(no error)")
+    by_host = Counter((urlparse(r["url"]).hostname or "?") for r in rows)
+    by_err = Counter(norm_err(r["last_error"]) for r in rows)
+    by_kind = Counter(r["kind"] or "?" for r in rows)
+    by_day = Counter(r["day"] or "?" for r in rows)
+    by_att = Counter(r["attempts"] or 0 for r in rows)
+    for name, cnt in (("host", by_host), ("error", by_err), ("kind", by_kind),
+                      ("day", by_day), ("attempts", by_att)):
+        for k, v in cnt.most_common(top):
+            log.info(f"QREPORT| {name} {v} {k}")
+    # أكثر تركيبة (مضيف، خطأ) شيوعاً
+    combo = Counter(((urlparse(r["url"]).hostname or "?"), norm_err(r["last_error"])) for r in rows)
+    for (h, e), v in combo.most_common(top):
+        log.info(f"QREPORT| combo {v} {h} | {e}")
+    for r in rows[:3]:
+        log.info(f"QREPORT| sample {r['url'][:90]} | {norm_err(r['last_error'])}")
+    log.info("QREPORT| read-only: nothing changed")
+    return 0
+
+
 def cmd_audit_jurisdiction(args):
     """قراءة فقط: يقيس بوابة الاختصاص على وثائق المتن الفعلي لمعايرة العتبات.
 
@@ -1963,6 +1997,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, help="أحدث N رابطاً فقط")
     sp.add_argument("--dry", action="store_true")
     sp.set_defaults(fn=cmd_seed_sitemap)
+
+    sp = sub.add_parser("queue-report",
+                        help="قراءة فقط: تفكيك مهام الطابور حسب المضيف والخطأ واليوم")
+    sp.add_argument("--status", default="failed")
+    sp.add_argument("--top", type=int, default=8)
+    sp.set_defaults(fn=cmd_queue_report)
 
     sp = sub.add_parser("audit-jurisdiction",
                         help="قراءة فقط: قياس بوابة الاختصاص على المتن الحالي")
