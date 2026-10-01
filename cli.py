@@ -878,6 +878,12 @@ def cmd_export_audit(args):
                 _a = _t.find(args.find) if getattr(args, "find", None) else 0
                 _a = max(_a, 0)
                 log.info(f"EXRAW| chars {_a}..{_a + args.raw} of {len(_t)}: {_t[_a:_a + args.raw]}")
+            if getattr(args, "rows", None):
+                _s, _n = (int(x) for x in args.rows.split(":"))
+                for _i, a in enumerate(raw[_s:_s + _n], _s):
+                    log.info(f"EXROW| pos={_i} id={a['id']} no={a['article_number']} "
+                             f"label={(a['article_label'] or '')[:14]} len={len(a['text'] or '')} "
+                             f"| {norm(a['text'])[:60]}")
             shown = 0
             seen_keys = {}
             for a in raw:
@@ -2218,6 +2224,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--doc", type=int, help="تفصيل وثيقة: أول المواد المُسقطة بجانب المُبقاة")
     sp.add_argument("--samples", type=int, default=8)
     sp.add_argument("--raw", type=int, default=0, help="اطبع N حرفاً من متن الوثيقة (مع --doc)")
+    sp.add_argument("--rows", help="START:COUNT اعرض مواد الوثيقة بترتيب id (مع --doc)")
     sp.add_argument("--find", help="ابدأ المقتطف من أول ظهور لهذا النص")
     sp.set_defaults(fn=cmd_export_audit)
 

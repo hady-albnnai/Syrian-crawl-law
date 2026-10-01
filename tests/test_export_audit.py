@@ -55,5 +55,23 @@ def test_export_audit_raw_snippet(monkeypatch, tmp_path):
     conn.commit()
     lines = []
     monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: lines.append(str(m)))
-    cli.cmd_export_audit(argparse.Namespace(top=5, doc=1, samples=1, raw=20, find="المادة 1"))
+    cli.cmd_export_audit(argparse.Namespace(top=5, doc=1, samples=1, raw=20, find="المادة 1", rows=None))
     assert any(l.startswith("EXRAW| chars 12..32") and "المادة 1 نص المادة" in l for l in lines)
+
+
+def test_export_audit_rows(monkeypatch, tmp_path):
+    p = tmp_path / "e4.db"
+    monkeypatch.setattr(config, "DB_PATH", p)
+    monkeypatch.setattr(database, "DB_PATH", p)
+    database.create_tables()
+    conn = database.get_connection()
+    conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature,clean_content) "
+                 "VALUES(1,'a','t','https://x.sy/a','active','instrument','x')")
+    for n, tx in (("1", "اولى"), ("1", "ثانية"), ("3", "ثالثة")):
+        conn.execute("INSERT INTO articles(doc_id,article_number,text) VALUES(1,?,?)", (n, tx))
+    conn.commit()
+    lines = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: lines.append(str(m)))
+    cli.cmd_export_audit(argparse.Namespace(top=5, doc=1, samples=1, raw=0, find=None, rows="1:2"))
+    rows = [l for l in lines if l.startswith("EXROW|")]
+    assert len(rows) == 2 and "pos=1" in rows[0] and "ثانية" in rows[0]
