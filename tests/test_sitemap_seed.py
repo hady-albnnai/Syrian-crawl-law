@@ -146,3 +146,41 @@ def test_real_get_returns_last_503_when_it_never_recovers(monkeypatch):
         status_code, text, encoding, headers = 503, "", "utf-8", {}
     monkeypatch.setattr(sitemap_seed.requests, "get", lambda *a, **k: R())
     assert sitemap_seed._real_get("https://x.example/wp-sitemap.xml")[0] == 503
+
+
+def test_cache_resumes_without_refetching_and_stops_politely_on_repeated_failures(tmp_path):
+    calls = []
+
+    def get(url):
+        calls.append(url)
+        return _wp_get(url)
+    cache = tmp_path / "cache"
+    first = sitemap_seed.collect_urls("https://arch.example/", "/", http_get=get,
+                                      url_match="مرسوم", cache_dir=cache)
+    n_first = len(calls)
+    calls.clear()
+    # التشغيل الثاني: كل شيء من الكاش إلا ما ليس مخزّناً (index 404 غير مخزّن)
+    second = sitemap_seed.collect_urls("https://arch.example/", "/", http_get=get,
+                                       url_match="مرسوم", cache_dir=cache)
+    assert second == first
+    assert not any("wp-sitemap-posts" in u or u.endswith("/wp-sitemap.xml") for u in calls)
+    assert n_first > len(calls)
+
+
+def test_stops_after_consecutive_failures_and_keeps_progress(tmp_path):
+    maps = "".join(f"<sitemap><loc>https://arch.example/wp-sitemap-posts-post-{i}.xml</loc></sitemap>"
+                   for i in range(1, 21))
+    fetched = []
+
+    def get(url):
+        if url.endswith("/sitemap_index.xml"):
+            return 404, ""
+        if url.endswith("/wp-sitemap.xml"):
+            return 200, f"<sitemapindex>{maps}</sitemapindex>"
+        fetched.append(url)
+        if url.endswith("-1.xml"):
+            return 200, WP_MAP
+        return 503, ""
+    urls = sitemap_seed.collect_urls("https://arch.example/", "/", http_get=get, cache_dir=tmp_path)
+    assert len(urls) == 3                                           # خريطة 1 حُفظت
+    assert len(fetched) == 1 + sitemap_seed.MAX_CONSECUTIVE_FAILURES  # توقف بعد 5 إخفاقات متتالية

@@ -43,3 +43,6 @@ mizan_harvester.egg-info/
 data/damascusbar_done.json
 
 data/cdx_years/
+
+# خرائط المواقع المخزنة مؤقتاً (استئناف البذر)
+data/sitemap_cache/

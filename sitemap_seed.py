@@ -10,8 +10,10 @@ fetcher، وتُدرج الروابط فقط إن كان المصدر approved (
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import time
+from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse
 
 import requests
@@ -33,6 +35,9 @@ GET_TIMEOUTS = (60, 90, 120)       # مهل المحاولات؛ أرشيف سا
 RETRY_PAUSE = 5
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 MAX_RETRY_AFTER = 60
+MAX_CONSECUTIVE_FAILURES = 5       # خادم يتعثر: نتوقف ونحفظ ما جُمع بدل أن نثقل عليه
+CACHE_MAX_AGE_DAYS = 7
+DEFAULT_CACHE_DIR = Path("data") / "sitemap_cache"
 
 
 def _real_get(url: str):
@@ -73,8 +78,14 @@ def slug_text(url: str) -> str:
     return unquote(urlparse(url).path).replace("-", " ").replace("_", " ")
 
 
+def _cache_path(cache_dir, url: str) -> Path:
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", url.rsplit("/", 1)[-1])[:60]
+    return Path(cache_dir) / f"{name}-{hashlib.sha1(url.encode()).hexdigest()[:8]}.xml"
+
+
 def collect_urls(base_url: str, path_prefix: str, http_get=None,
-                 max_sitemaps: int = MAX_SITEMAPS, url_match: str | None = None) -> list:
+                 max_sitemaps: int = MAX_SITEMAPS, url_match: str | None = None,
+                 cache_dir=None) -> list:
     """روابط الخرائط التي يبدأ مسارها بـ path_prefix (مثل /presidency/) مع ترتيب الأحدث أولاً.
 
     url_match: تعبير نمطي اختياري يُطبَّق على نص المسار (بعد فك الترميز) — لمواقع
@@ -83,12 +94,23 @@ def collect_urls(base_url: str, path_prefix: str, http_get=None,
     raw_get = http_get or _real_get
 
     def get(url):
-        """أي عطل شبكة/ترميز في خريطة واحدة لا يُسقط البذر كله."""
+        """أي عطل شبكة/ترميز في خريطة واحدة لا يُسقط البذر كله.
+
+        cache_dir: كل خريطة ناجحة تُحفظ؛ التشغيل المقطوع يستأنف دون إعادة جلب ما سبق.
+        """
+        cp = _cache_path(cache_dir, url) if cache_dir else None
+        if cp is not None and cp.exists() and \
+                time.time() - cp.stat().st_mtime < CACHE_MAX_AGE_DAYS * 86400:
+            return 200, cp.read_text(encoding="utf-8")
         try:
-            return raw_get(url)
+            st, body = raw_get(url)
         except Exception as exc:
             log.warning(f"SEEDMAP| fetch error {url.rsplit('/', 1)[-1]}: {type(exc).__name__}")
             return 0, ""
+        if cp is not None and st == 200 and body:
+            cp.parent.mkdir(parents=True, exist_ok=True)
+            cp.write_text(body, encoding="utf-8")
+        return st, body
     origin = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
     matcher = re.compile(url_match) if url_match else None
     st, index_xml, maps = 0, "", []
@@ -103,13 +125,19 @@ def collect_urls(base_url: str, path_prefix: str, http_get=None,
     host = urlparse(base_url).netloc
     seen, out = set(), []
     lastmod = {}
-    failed = 0
+    failed = consecutive = 0
     for i, m in enumerate(maps, 1):
         st, xml = get(m)
         if st != 200:
             failed += 1
+            consecutive += 1
             log.warning(f"SEEDMAP| sitemap {i}/{len(maps)} unavailable status={st}")
+            if consecutive >= MAX_CONSECUTIVE_FAILURES:
+                log.warning(f"SEEDMAP| {consecutive} failures in a row — server struggling, "
+                            f"stopping politely (progress kept; re-run later to resume)")
+                break
             continue
+        consecutive = 0
         if i % 10 == 0 or i == len(maps):
             log.info(f"SEEDMAP| sitemap {i}/{len(maps)} urls_so_far={len(out)}")
         lastmod.update(dict(_LASTMOD_RE.findall(xml)))
@@ -136,9 +164,10 @@ def collect_urls(base_url: str, path_prefix: str, http_get=None,
 
 def seed_from_sitemap(conn, base_url: str, path_prefix: str, section: str,
                       limit: int | None = None, dry_run: bool = False,
-                      http_get=None, url_match: str | None = None) -> dict:
+                      http_get=None, url_match: str | None = None, cache_dir=None) -> dict:
     import crawl_queue as taskqueue
-    urls = collect_urls(base_url, path_prefix, http_get=http_get, url_match=url_match)
+    urls = collect_urls(base_url, path_prefix, http_get=http_get, url_match=url_match,
+                        cache_dir=cache_dir)
     if limit:
         urls = urls[:limit]
     added = skipped = unapproved = 0

@@ -1148,7 +1148,7 @@ def cmd_seed_community(args):
 def cmd_seed_sitemap(args):
     """بذر الطابور من sitemap مصدر معتمد بمسار محدد (مثل سانا /presidency/)."""
     from database import create_tables, get_connection
-    from sitemap_seed import seed_from_sitemap
+    from sitemap_seed import DEFAULT_CACHE_DIR, seed_from_sitemap
     create_tables()
     conn = get_connection()
     row = conn.execute("SELECT base_url, name, status FROM sources WHERE id=?",
@@ -1159,7 +1159,8 @@ def cmd_seed_sitemap(args):
         return 2
     seed_from_sitemap(conn, row["base_url"], args.path, row["name"] or args.path,
                       limit=args.limit, dry_run=args.dry,
-                      url_match=getattr(args, "match", None))
+                      url_match=getattr(args, "match", None),
+                      cache_dir=None if getattr(args, "no_cache", False) else DEFAULT_CACHE_DIR)
     conn.close()
     return 0
 
@@ -2059,6 +2060,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--source-id", type=int, required=True)
     sp.add_argument("--path", required=True, help="بادئة المسار مثل /presidency/")
     sp.add_argument("--limit", type=int, help="أحدث N رابطاً فقط")
+    sp.add_argument("--no-cache", action="store_true", help="لا تستعمل خرائط محفوظة سابقاً")
     sp.add_argument("--match", help="تعبير نمطي على عنوان الرابط (بعد فك الترميز)، مثل: مرسوم|قانون|قرار")
     sp.add_argument("--dry", action="store_true")
     sp.set_defaults(fn=cmd_seed_sitemap)
