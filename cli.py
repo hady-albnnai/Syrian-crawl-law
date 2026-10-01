@@ -990,6 +990,7 @@ def cmd_sources(args):
         from discovery import evaluate_candidate, register_candidate
         ev = evaluate_candidate(args.id)
         sid, created = register_candidate(conn, args.id, "manual", ev)
+        conn.commit()      # بدونها يضيع التسجيل عند conn.close() (عطل كشفه #170)
         log.info(f"[{sid}] {'سُجّل' if created else 'موجود سابقاً'} — تقييم آلي "
                  f"{ev.source_score:.1f}/100 | {ev.source_type} | الحكم: "
                  f"{ev.verdict} | مواد {ev.articles} | {ev.title[:50]}"
