@@ -737,6 +737,45 @@ def cmd_queue_report(args):
     return 0
 
 
+def cmd_source_report(args):
+    """قراءة فقط: ماذا أنتج كل مصدر؟ (وثائق، مواد، حالات الطابور) لدعم قرار الاعتماد."""
+    from collections import Counter
+    from database import get_connection
+    from urllib.parse import urlparse
+    conn = get_connection()
+
+    def key(u):
+        p = urlparse(u or "")
+        return ((p.hostname or "").removeprefix("www."), (p.path or "/").rstrip("/") or "/")
+
+    def covers(base, url):
+        bh, bp = key(base)
+        uh, up = key(url)
+        return bool(bh) and bh == uh and (bp == "/" or up == bp or up.startswith(bp + "/"))
+    docs = conn.execute("SELECT id, title, source_url, status, legal_status FROM documents").fetchall()
+    arts = dict(conn.execute("SELECT doc_id, COUNT(*) FROM articles GROUP BY doc_id").fetchall())
+    tasks = conn.execute("SELECT url, status FROM crawl_tasks").fetchall()
+    for sid in args.ids:
+        s = conn.execute("SELECT * FROM sources WHERE id=?", (sid,)).fetchone()
+        if not s:
+            log.info(f"SRCREP| id={sid} not found")
+            continue
+        mine = [d for d in docs if covers(s["base_url"], d["source_url"])]
+        active = [d for d in mine if d["status"] == "active"]
+        n_art = sum(arts.get(d["id"], 0) for d in active)
+        tq = Counter(t["status"] for t in tasks if covers(s["base_url"], t["url"]))
+        log.info(f"SRCREP| id={sid} status={s['status']} by={s['decided_by']} tier={s['domain_tier']} "
+                 f"score={s['evaluation_score']} verdict={s['evaluation_verdict']} "
+                 f"role={s['source_role']} country={s['publisher_country']}")
+        log.info(f"SRCREP| id={sid} url={s['base_url']}")
+        log.info(f"SRCREP| id={sid} docs_active={len(active)} docs_total={len(mine)} articles={n_art} "
+                 f"queue={dict(tq)}")
+        for d in active[:args.sample]:
+            log.info(f"SRCREP| id={sid} doc#{d['id']} arts={arts.get(d['id'], 0)} {(d['title'] or '')[:60]}")
+    log.info("SRCREP| read-only: nothing changed")
+    return 0
+
+
 def cmd_audit_jurisdiction(args):
     """قراءة فقط: يقيس بوابة الاختصاص على وثائق المتن الفعلي لمعايرة العتبات.
 
@@ -2003,6 +2042,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--status", default="failed")
     sp.add_argument("--top", type=int, default=8)
     sp.set_defaults(fn=cmd_queue_report)
+
+    sp = sub.add_parser("source-report",
+                        help="قراءة فقط: إنتاج مصادر محددة (وثائق/مواد/طابور)")
+    sp.add_argument("ids", nargs="+", type=int)
+    sp.add_argument("--sample", type=int, default=3, help="وثائق نموذجية لكل مصدر")
+    sp.set_defaults(fn=cmd_source_report)
 
     sp = sub.add_parser("audit-jurisdiction",
                         help="قراءة فقط: قياس بوابة الاختصاص على المتن الحالي")
