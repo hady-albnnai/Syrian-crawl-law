@@ -959,6 +959,101 @@ def cmd_export_audit(args):
     return 0
 
 
+def cmd_re_extract(args):
+    """يعيد بناء مواد الوثائق ذات الأرقام المتكررة من clean_content المحفوظ (بلا شبكة).
+
+    الافتراضي تجربة جافة تماماً. --apply يأخذ نسخة احتياطية من القاعدة أولاً ثم يكتب.
+    يستهدف الوثائق الفعّالة التي يتكرر فيها (رقم، عنوان) المادة داخل الوثيقة نفسها —
+    أثر الشطر عند الإحالات. لا يُعتمد التغيير إلا إذا: انخفضت التكرارات، وبقي عدد
+    المواد ≥ 60% من السابق، وكان clean_content غير مبتور.
+    """
+    import json as _json
+    import sqlite3
+    from datetime import datetime
+    from collections import Counter
+    import config
+    from database import get_connection
+    from extractor_v4 import extract_articles_v4
+    conn = get_connection()
+    ids = set(getattr(args, "ids", None) or [])
+    docs = conn.execute(
+        "SELECT id, title, source_url, clean_content FROM documents "
+        "WHERE status='active' ORDER BY id").fetchall()
+    plans, skipped = [], Counter()
+    tot_before = tot_after = 0
+    for d in docs:
+        if ids and d["id"] not in ids:
+            continue
+        old = conn.execute("SELECT article_number, article_label, text FROM articles "
+                           "WHERE doc_id=?", (d["id"],)).fetchall()
+        if not old:
+            continue
+        keys = Counter((str(r["article_number"] or "").strip(), str(r["article_label"] or "").strip())
+                       for r in old)
+        dups_old = sum(v - 1 for v in keys.values() if v > 1)
+        if not dups_old:
+            continue
+        clean = d["clean_content"] or ""
+        if len(clean) < 0.8 * sum(len(r["text"] or "") for r in old):
+            skipped["clean_content_truncated"] += 1
+            continue
+        pre, new = extract_articles_v4(clean, "wipo.int" in (d["source_url"] or ""))
+        if pre:
+            new = [pre] + new
+        nk = Counter((str(a["article_number"]), a["label"]) for a in new if not a.get("is_preamble"))
+        dups_new = sum(v - 1 for v in nk.values() if v > 1)
+        if not new:
+            skipped["no_articles_found"] += 1
+        elif dups_new >= dups_old:
+            skipped["duplicates_not_reduced"] += 1
+        elif len(new) < 0.6 * len(old):
+            skipped["too_few_articles"] += 1
+        else:
+            plans.append((d, new, len(old), dups_old, dups_new))
+            tot_before += len(old)
+            tot_after += len(new)
+    log.info(f"REEXT| candidates_with_repeats={len(plans) + sum(skipped.values())} "
+             f"will_change={len(plans)} skipped={dict(skipped)}")
+    log.info(f"REEXT| articles in changed docs: before={tot_before} after={tot_after}")
+    for d, new, n_old, du_o, du_n in sorted(plans, key=lambda p: p[3] - p[4], reverse=True)[:args.top]:
+        log.info(f"REEXT| doc#{d['id']} articles {n_old}->{len(new)} repeats {du_o}->{du_n} "
+                 f"| {(d['title'] or '')[:50]}")
+    if not getattr(args, "apply", False):
+        log.info("REEXT| dry-run: nothing changed (use --apply to write, with automatic backup)")
+        conn.close()
+        return 0
+    if not plans:
+        conn.close()
+        return 0
+    dbp = Path(config.DB_PATH)
+    bdir = dbp.parent / "backups"
+    bdir.mkdir(parents=True, exist_ok=True)
+    bak = bdir / f"{dbp.stem}_before_reextract_{datetime.now():%Y%m%d_%H%M%S}.db"
+    conn.commit()
+    src = sqlite3.connect(str(dbp))
+    dst = sqlite3.connect(str(bak))
+    src.backup(dst)
+    dst.close()
+    src.close()
+    log.info(f"REEXT| backup -> {bak}")
+    has_chunks = conn.execute("SELECT 1 FROM sqlite_master WHERE name='chunks'").fetchone()
+    for d, new, *_ in plans:
+        conn.execute("DELETE FROM articles WHERE doc_id=?", (d["id"],))
+        if has_chunks:
+            conn.execute("DELETE FROM chunks WHERE doc_id=?", (d["id"],))
+        for a in new:
+            conn.execute(
+                "INSERT INTO articles (doc_id, article_number, article_label, text, "
+                "paragraphs_json, hierarchy_path, char_count) VALUES (?,?,?,?,?,?,?)",
+                (d["id"], str(a["article_number"]), a["label"], a["text"],
+                 _json.dumps(a.get("paragraphs", []), ensure_ascii=False),
+                 _json.dumps(a.get("hierarchy_path", []), ensure_ascii=False), a["char_count"]))
+    conn.commit()
+    conn.close()
+    log.info(f"REEXT| applied to {len(plans)} docs. next: python -m cli refine ; python -m cli index")
+    return 0
+
+
 def cmd_audit_jurisdiction(args):
     """قراءة فقط: يقيس بوابة الاختصاص على وثائق المتن الفعلي لمعايرة العتبات.
 
@@ -2258,6 +2353,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("corpus-report",
                         help="قراءة فقط: توزيع وثائق ومواد المكتبة حسب الحالة والطبيعة")
     sp.set_defaults(fn=cmd_corpus_report)
+
+    sp = sub.add_parser("re-extract",
+                        help="يعيد بناء مواد الوثائق ذات الأرقام المتكررة من النص المحفوظ (تجربة جافة افتراضياً)")
+    sp.add_argument("--ids", type=int, nargs="*")
+    sp.add_argument("--top", type=int, default=12)
+    sp.add_argument("--apply", action="store_true", help="اكتب فعلاً (بنسخة احتياطية تلقائية)")
+    sp.set_defaults(fn=cmd_re_extract)
 
     sp = sub.add_parser("export-audit",
                         help="قراءة فقط: مواد يُسقطها التصدير لتكرار رقمها (مطابقة أم مختلفة)")
