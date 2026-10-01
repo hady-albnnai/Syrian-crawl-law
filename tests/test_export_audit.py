@@ -2,7 +2,7 @@ import argparse
 import config, database, cli
 
 
-def test_export_audit_counts_identical_and_different_drops(monkeypatch, tmp_path):
+def test_export_audit_counts_only_part_copies_as_dropped(monkeypatch, tmp_path):
     p = tmp_path / "e.db"
     monkeypatch.setattr(config, "DB_PATH", p)
     monkeypatch.setattr(database, "DB_PATH", p)
@@ -10,20 +10,38 @@ def test_export_audit_counts_identical_and_different_drops(monkeypatch, tmp_path
     conn = database.get_connection()
     conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature) "
                  "VALUES(1,'a','قانون أ','https://x.sy/a','active','instrument')")
-    for num, text in [("1", "نص ١"), ("2", "نص ٢"), ("2", "نص ٢"), ("3", "نص ٣"), ("3", "نص مختلف")]:
+    conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature,part_of) "
+                 "VALUES(2,'b','جزء','https://x.sy/b','active','instrument',1)")
+    # الرأس: تكرار الرقم داخل الوثيقة يُحفظ كاملاً (لا يُحسب مُسقطاً)
+    for num, text in [("1", "نص ١"), ("2", "نص ٢"), ("2", "نص آخر"), ("3", "نص ٣")]:
         conn.execute("INSERT INTO articles(doc_id,article_number,text) VALUES(1,?,?)", (num, text))
+    # الجزء: نسخة مطابقة (3) ونسخة بنص مختلف (1) تُطويان؛ والمادة 4 فريدة تبقى
+    for num, text in [("1", "نص مختلف"), ("3", "نص ٣"), ("4", "نص ٤")]:
+        conn.execute("INSERT INTO articles(doc_id,article_number,text) VALUES(2,?,?)", (num, text))
     conn.commit()
     lines = []
     monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: lines.append(str(m)))
     assert cli.cmd_export_audit(argparse.Namespace(top=5)) == 0
     t = "\n".join(lines)
-    assert "raw_articles=5 exported=3 dropped=2" in t
+    assert "raw_articles=7 exported=5 dropped=2" in t
     assert "identical_text=1 different_text=1" in t
-    assert "doc#1 different=1 identical=1" in t
-    assert conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0] == 5
+    assert conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0] == 7
 
 
-def test_export_audit_doc_drilldown_shows_kept_and_dropped(monkeypatch, tmp_path):
+def test_fold_part_articles_keeps_every_head_article_and_distinguishes_labels():
+    from exporter import fold_part_articles
+    def row(i, doc, num, lab):
+        return {"id": i, "doc_id": doc, "article_number": num, "article_label": lab}
+    raw = [row(1, 10, "5", "5"), row(2, 10, "5", "5"), row(3, 10, "5", "5 مكرر"),
+           row(4, 11, "5", "5"), row(5, 11, "6", "6"), row(6, 12, "6", "6"),
+           row(7, 12, "6", "6")]
+    kept = [r["id"] for r in fold_part_articles(raw, 10)]
+    # الرأس 1,2,3 كلها؛ الجزء 11: 4 مطوية (موجودة بالرأس) و5 تبقى؛
+    # الجزء 12: 6 مطوية (سبقها جزء 11) و7 مطوية معها
+    assert kept == [1, 2, 3, 5]
+
+
+def test_export_audit_doc_drilldown_shows_repeats_and_source(monkeypatch, tmp_path):
     p = tmp_path / "e2.db"
     monkeypatch.setattr(config, "DB_PATH", p)
     monkeypatch.setattr(database, "DB_PATH", p)
@@ -39,8 +57,9 @@ def test_export_audit_doc_drilldown_shows_kept_and_dropped(monkeypatch, tmp_path
     monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: lines.append(str(m)))
     cli.cmd_export_audit(argparse.Namespace(top=5, doc=1, samples=3))
     t = "\n".join(lines)
-    assert "EXDOC| no.1 KEPT" in t and "الأصل" in t and "numbers_distinct=1 of 2" in t
-    assert "EXDOC| no.1 DROP" in t and "ملحق" in t and "src=https://x.sy/a" in t
+    assert "EXDOC| no.1 FIRST" in t and "الأصل" in t and "numbers_distinct=1 of 2" in t
+    assert "EXDOC| no.1 REPEAT(kept)" in t and "ملحق" in t and "src=https://x.sy/a" in t
+    assert "exported=2 dropped=0" in t
 
 
 def test_export_audit_raw_snippet(monkeypatch, tmp_path):

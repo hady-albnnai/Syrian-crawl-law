@@ -850,16 +850,20 @@ def cmd_export_audit(args):
                WHERE (a.doc_id = ? OR d.part_of = ?) AND d.status = 'active'
                ORDER BY CAST(a.article_number AS INTEGER), (a.doc_id = ?) DESC, a.id""",
             (h["id"], h["id"], h["id"])).fetchall()
-        kept = {}
+        from exporter import _article_key, fold_part_articles
+        kept_rows = fold_part_articles(raw, h["id"])
+        kept_ids = {r["id"] for r in kept_rows}
+        by_key = {}
+        for r in kept_rows:
+            by_key.setdefault(_article_key(r), r)
+        kept = {r["id"]: r for r in kept_rows}
         d_ident = d_diff = 0
         for a in raw:
-            key = str(a["article_number"] or "").strip() or f"#{a['id']}"
-            if key not in kept:
-                kept[key] = a
+            if a["id"] in kept_ids:
                 continue
-            if a["doc_id"] != kept[key]["doc_id"]:
-                cross_part += 1
-            if norm(a["text"]) == norm(kept[key]["text"]):
+            twin = by_key.get(_article_key(a)) or a
+            cross_part += 1
+            if norm(a["text"]) == norm(twin["text"]):
                 d_ident += 1
             else:
                 d_diff += 1
@@ -895,9 +899,9 @@ def cmd_export_audit(args):
                     break
                 shown += 1
                 kp = seen_keys[key]
-                log.info(f"EXDOC| no.{key} KEPT id={kp['id']} path={(kp['hierarchy_path'] or '')[:40]} "
+                log.info(f"EXDOC| no.{key} FIRST id={kp['id']} path={(kp['hierarchy_path'] or '')[:40]} "
                          f"| {norm(kp['text'])[:70]}")
-                log.info(f"EXDOC| no.{key} DROP id={a['id']} part={a['doc_id'] != kp['doc_id']} "
+                log.info(f"EXDOC| no.{key} REPEAT(kept) id={a['id']} part={a['doc_id'] != kp['doc_id']} "
                          f"label={(a['article_label'] or '')[:14]} | {norm(a['text'])[:50]}")
         tot_raw += len(raw)
         tot_kept += len(kept)

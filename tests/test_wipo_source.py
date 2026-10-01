@@ -403,3 +403,24 @@ def test_arabic_page_beats_reversed_arabic_pdf(monkeypatch):
         DETAILS_URL, details,
         get_bytes=lambda u, referer=None: (200, b"%PDF-1.4 fake"))
     assert r["ok"] is True and r["html"] == details
+
+
+def test_article_token_picks_multidigit_number_over_paragraph_marker():
+    """قانون العقوبات (2026-10-02): «المادة / 1 01» = المادة 10 + الفقرة 1؛ أخذ أول رقم
+    كان يعطي «1» لكل المواد 10-99 فيضيع ترقيمها."""
+    import wipo_source as w
+    t = "المادة \n1 01\n ـ كل قانون جديد يعدل طريقة تنفيذ العقوبات\nالمادة \n2 1\n ـ نص آخر طويل بما يكفي"
+    out = w.clean_pdf_text(t, "عنوان آخر")
+    assert "المادة 10\n" in out and "المادة 2\n" in out
+    assert "المادة 1\n" not in out
+    # حالات لا تتغير: رقم واحد، «1 1» (المادة 1 + فقرة 1)، ورقم متعدد مع صفحة بسطر لاحق
+    assert w._article_token(["3"], ["3"]) == "3"
+    assert w._article_token(["1", "1"], ["1", "1"]) == "1"
+    assert w._article_token(["001"], ["001", "1"]) == "001"
+    assert w._article_token(["5", "12"], ["5", "12"]) == "5"
+
+
+def test_wipo_pipeline_html_marks_line_anchored_articles():
+    import wipo_source as w
+    from extractor_v4 import LINE_ANCHORED_MARK
+    assert LINE_ANCHORED_MARK in w.to_pipeline_html("قانون", "المادة 1\nنص")

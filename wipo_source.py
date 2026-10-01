@@ -21,7 +21,7 @@ import unicodedata
 import requests
 
 from config import USER_AGENT
-from extractor_v4 import extract_main_content, to_western_digits
+from extractor_v4 import LINE_ANCHORED_MARK, extract_main_content, to_western_digits
 from logging_setup import get_log
 
 log = get_log("wipo")
@@ -116,6 +116,25 @@ def pdf_to_text(pdf_bytes: bytes) -> str:
     return to_western_digits(t)
 
 
+def _article_token(first_line_tokens, tokens) -> str:
+    """رقم المادة من أرقام ما بعد «المادة».
+
+    الأصل: أول رقم. الاستثناء المقيس (قانون العقوبات، 2026-10-02): حين يجمع
+    السطر الأول رقم المادة متعدد الخانات مع علامة الفقرة «1» فإن الترتيب
+    البصري قد يضع العلامة أولاً («1 01» = المادة 10 + الفقرة 1)؛ فأخذ أول
+    رقم يعطي «1» لكل المواد 10-99 وتنهار الترقيم. القاعدة: إن كان في السطر
+    الأول رقم واحد متعدد الخانات وكل ما عداه «1» فهو رقم المادة.
+    """
+    ft = first_line_tokens or tokens[:1]
+    multi = [t for t in ft if len(t) >= 2]
+    if len(ft) >= 2 and len(multi) == 1:
+        others = list(ft)
+        others.remove(multi[0])
+        if all(t == "1" for t in others):
+            return multi[0]
+    return tokens[0]
+
+
 def clean_pdf_text(text: str, title: str) -> str:
     """تنظيف بقايا الطباعة البصرية لملفات ويبو المقيسة فعلياً:
 
@@ -147,10 +166,14 @@ def clean_pdf_text(text: str, title: str) -> str:
         if ln.rstrip().endswith("المادة"):
             j = i + 1
             tokens = []
+            first_line_tokens = None
             while j < len(lines):
                 cand = lines[j]
                 if cand and re.fullmatch(r"[ـ\-/ ]{0,3}\d[ \d]{0,10}", cand):
-                    tokens.extend(x for x in re.split(r"[ـ\-/ ]", cand) if x)
+                    _toks = [x for x in re.split(r"[ـ\-/ ]", cand) if x]
+                    if first_line_tokens is None:
+                        first_line_tokens = _toks
+                    tokens.extend(_toks)
                     j += 1
                     continue
                 if cand and re.fullmatch(r"[ـ\-/]{1,3}", cand):
@@ -158,7 +181,7 @@ def clean_pdf_text(text: str, title: str) -> str:
                     continue
                 break
             if tokens:
-                out.append(f"{ln.rstrip()} {tokens[0]}")
+                out.append(f"{ln.rstrip()} {_article_token(first_line_tokens, tokens)}")
                 i = j
                 continue
         # رقم صفحة منفرد (لم يتبع «المادة») يُحذف
@@ -198,7 +221,9 @@ def to_pipeline_html(title: str, clean_text: str) -> str:
         else:
             paras.append(f"<p>{ln}</p>")
     body = "\n".join(paras)
-    return (f'<html><body><article><div class="entry-content">'
+    # «المادة N» يبدأ سطراً دائماً بعد clean_pdf_text؛ الإحالات داخل المتن
+    # («وفق المادة 208») ليست حدود مواد — العلامة تُفعّل حراسة السطر الأول.
+    return (f'<html><body>{LINE_ANCHORED_MARK}<article><div class="entry-content">'
             f"<h1>{title}</h1>\n{body}\n</div></article></body></html>")
 
 

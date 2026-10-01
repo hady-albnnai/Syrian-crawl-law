@@ -231,3 +231,25 @@ def test_stats_separates_year_only_rows_from_identityless(tmp_path, monkeypatch)
     out = buf.getvalue()
     assert "بلا هوية (رقم/سنة) = 1" in out, out
     assert "منها بسنة بلا رقم = 1" in out, out
+
+
+def test_repeated_article_numbers_inside_one_document_all_survive(tmp_path, monkeypatch):
+    """قِيس 2026-10-01 على قاعدة المالك: 6,575 مادة بنص مختلف سقطت بصمت لأن
+    الطيّ كان برقم المادة وحده؛ تكرار الرقم داخل وثيقة واحدة (مكررة، شظية،
+    ترقيم مصدر) لا يجوز أن يُسقط شيئاً."""
+    import database
+    import exporter
+    import verify_package
+    db = _mk_db(tmp_path, monkeypatch, [("قانون تجريبي", 7, 2001, _body("نص الوثيقة."))])
+    conn = database.get_connection()
+    doc = conn.execute("SELECT id FROM documents").fetchone()[0]
+    for lab, tx in (("5", "نص المادة الخامسة الأول"), ("5", "نص آخر بنفس الرقم"),
+                    ("5 مكررة", "نص المادة الخامسة مكررة")):
+        conn.execute("INSERT INTO articles (doc_id, article_number, article_label, text, char_count)"
+                     " VALUES (?,?,?,?,?)", (doc, "5", lab, tx, len(tx)))
+    conn.commit()
+    truth = conn.execute("SELECT COUNT(*) FROM articles WHERE doc_id=?", (doc,)).fetchone()[0]
+    conn.close()
+    out = tmp_path / "pkg_rep"
+    exporter.build_package(db_path=db, out_dir=out)
+    assert verify_package.article_counts(out)["articles"] == truth == 4

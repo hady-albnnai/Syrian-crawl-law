@@ -129,6 +129,31 @@ def doc_json(doc, articles) -> dict:
     }
 
 
+def _article_key(row):
+    num = str(row["article_number"] or "").strip()
+    lab = str(row["article_label"] or "").strip()
+    return (num, lab) if num else (f"#{row['id']}", "")
+
+
+def fold_part_articles(raw, head_id):
+    """مواد الرأس كلها تُحفظ؛ نسخ الأجزاء تُطوى فقط.
+
+    لا تُسقَط مادة داخل وثيقة واحدة أبداً: تكرار الرقم داخل الوثيقة (مكررة/
+    شظية/ترقيم مصدر) يحمل نصاً مختلفاً غالباً — قِيس 2026-10-01: 6,575 مادة
+    بنص مختلف سقطت بصمت بالطي برقم المادة وحده. مادة جزء تُهمل إن وُجد
+    مفتاحها (رقم+عنوان) في الرأس أو في جزء آخر سبقها.
+    """
+    head_keys = {_article_key(r) for r in raw if r["doc_id"] == head_id}
+    part_owner, out = {}, []
+    for a in raw:
+        if a["doc_id"] != head_id:
+            k = _article_key(a)
+            if k in head_keys or part_owner.setdefault(k, a["doc_id"]) != a["doc_id"]:
+                continue
+        out.append(a)
+    return out
+
+
 def build_package(db_path=DB_PATH, out_dir="export/content_package",
                   prefix=DEFAULT_PREFIX, min_articles=0,
                   with_manifest: bool = True,
@@ -194,13 +219,7 @@ def build_package(db_path=DB_PATH, out_dir="export/content_package",
                 (doc["id"], doc["id"], doc["id"])).fetchall()
             # الجزء المحتوى في الرأس يحمل نفس المواد — تُؤخذ مادة الرأس
             # وتُهمل نسخة الجزء (لا تكرار في حزمة ميزان)
-            seen, articles = set(), []
-            for a in raw:
-                k = str(a["article_number"] or "").strip() or f"#{a['id']}"
-                if k in seen:
-                    continue
-                seen.add(k)
-                articles.append(a)
+            articles = fold_part_articles(raw, doc["id"])
         else:
             articles = conn.execute(
                 "SELECT * FROM articles WHERE doc_id = ? ORDER BY id",
