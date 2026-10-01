@@ -829,6 +829,58 @@ def cmd_corpus_report(args):
     return 0
 
 
+def cmd_export_audit(args):
+    """قراءة فقط: كم مادة يُسقطها تصدير الحزمة بسبب تكرار رقم المادة؟ وهل المُسقطة نسخ مطابقة أم نصوص مختلفة؟"""
+    import re as _re
+    from database import get_connection
+    conn = get_connection()
+    heads = conn.execute(
+        "SELECT id, title FROM documents WHERE status='active' AND part_of IS NULL "
+        "AND COALESCE(nature,'instrument')='instrument' ORDER BY id").fetchall()
+
+    def norm(t):
+        return _re.sub(r"\s+", " ", (t or "")).strip()
+    tot_raw = tot_kept = identical = different = cross_part = 0
+    per_doc = []
+    for h in heads:
+        raw = conn.execute(
+            """SELECT a.id, a.doc_id, a.article_number, a.text FROM articles a
+               JOIN documents d ON d.id = a.doc_id
+               WHERE (a.doc_id = ? OR d.part_of = ?) AND d.status = 'active'
+               ORDER BY CAST(a.article_number AS INTEGER), (a.doc_id = ?) DESC, a.id""",
+            (h["id"], h["id"], h["id"])).fetchall()
+        kept = {}
+        d_ident = d_diff = 0
+        for a in raw:
+            key = str(a["article_number"] or "").strip() or f"#{a['id']}"
+            if key not in kept:
+                kept[key] = a
+                continue
+            if a["doc_id"] != kept[key]["doc_id"]:
+                cross_part += 1
+            if norm(a["text"]) == norm(kept[key]["text"]):
+                d_ident += 1
+            else:
+                d_diff += 1
+        tot_raw += len(raw)
+        tot_kept += len(kept)
+        identical += d_ident
+        different += d_diff
+        if d_ident + d_diff:
+            per_doc.append((d_diff, d_ident, h["id"], h["title"] or ""))
+    per_doc.sort(reverse=True)
+    log.info(f"EXAUDIT| heads={len(heads)} raw_articles={tot_raw} exported={tot_kept} "
+             f"dropped={tot_raw - tot_kept}")
+    log.info(f"EXAUDIT| dropped identical_text={identical} different_text={different} "
+             f"(of which part-vs-head={cross_part})")
+    log.info(f"EXAUDIT| docs_affected={len(per_doc)}")
+    for d_diff, d_ident, did, title in per_doc[:args.top]:
+        log.info(f"EXAUDIT| doc#{did} different={d_diff} identical={d_ident} {title[:60]}")
+    log.info("EXAUDIT| read-only: nothing changed")
+    conn.close()
+    return 0
+
+
 def cmd_audit_jurisdiction(args):
     """قراءة فقط: يقيس بوابة الاختصاص على وثائق المتن الفعلي لمعايرة العتبات.
 
@@ -2128,6 +2180,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("corpus-report",
                         help="قراءة فقط: توزيع وثائق ومواد المكتبة حسب الحالة والطبيعة")
     sp.set_defaults(fn=cmd_corpus_report)
+
+    sp = sub.add_parser("export-audit",
+                        help="قراءة فقط: مواد يُسقطها التصدير لتكرار رقمها (مطابقة أم مختلفة)")
+    sp.add_argument("--top", type=int, default=12)
+    sp.set_defaults(fn=cmd_export_audit)
 
     sp = sub.add_parser("queue-report",
                         help="قراءة فقط: تفكيك مهام الطابور حسب المضيف والخطأ واليوم")
