@@ -26,7 +26,9 @@ def test_labor_law_full_extraction():
     r = extract_main_content(html, "https://tss-est.net/worker/Laws/20/43/Ar")
     assert r["success"] is True
     real = [a for a in r["articles"] if not a.get("is_preamble")]
-    assert len(real) >= 80            # 88 مادة عند التثبيت
+    # عند التثبيت عُدّت 88 «مادة» وهي 72 حقيقية + 16 شظية من إحالات داخل المتن
+    # («وفق المادة 52»…)؛ منذ 2026-10-02 الإحالات لا تشطر المواد: 1..72 متصلة.
+    assert [a["article_number"] for a in real] == list(range(1, 73))
     assert r["quality_score"] >= 0.9  # 0.95 عند التثبيت
     # المسار الهرمي (كتاب/باب/فصل/مبحث) موجود فعلياً بالمواد
     assert any(a.get("hierarchy_path") for a in real)

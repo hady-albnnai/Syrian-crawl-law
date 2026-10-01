@@ -272,12 +272,67 @@ def _prefer_line_anchored(text: str, matches: list) -> list:
     return anchored
 
 
+def _match_key(m):
+    """(رقم، رتبة اللاحقة) — «8» < «8 مكرر» ليكون تسلسل المكررات صاعداً."""
+    raw = m.group(1)
+    n = int(to_western_digits(raw)) if raw else verbal_to_int(m.group(2))
+    return (n, 1 if "مكرر" in (m.group(3) or "") else 0)
+
+
+def drop_stray_matches(matches: list) -> list:
+    """إحالات داخل المتن («وفق المادة 208»، أو «المادة الثامنة» في أول سطر لُفَّ)
+    ليست حدود مواد: تشطر المادة الحقيقية وتُعيد رقمها. قِيس 2026-10-02 على
+    قانون العقوبات (WIPO + parliament.gov.sy): 899 مادة مطوية بنص مختلف جوهرياً
+    أغلبها شظايا.
+
+    القاعدة (محافِظة): أطول تسلسل صاعد بدقة من أرقام الحدود هو الهيكل الحقيقي؛
+    ما خرج عنه في جرعات من 1-2 متتالية يُعدّ إحالة فيُحذف من الحدود (فيبقى
+    نصه جزءاً من المادة السابقة — لا يضيع حرف). الوثائق التي يُعاد فيها الترقيم
+    (متن + لائحة تنفيذية) تنتج جرعات طويلة فتبقى كما هي، ولا يُطبَّق شيء
+    على وثيقة أقل من 10 حدود أو تسلسلها الصاعد دون 70%."""
+    n = len(matches)
+    if n < 10:
+        return matches
+    keys = [_match_key(m) for m in matches]
+    # LIS صاعد بدقة مع استرجاع المسار — O(n log n)
+    import bisect
+    tails, tail_idx, prev = [], [], [-1] * n
+    for i, k in enumerate(keys):
+        p = bisect.bisect_left(tails, k)
+        if p == len(tails):
+            tails.append(k)
+            tail_idx.append(i)
+        else:
+            tails[p] = k
+            tail_idx[p] = i
+        prev[i] = tail_idx[p - 1] if p else -1
+    in_lis, j = set(), tail_idx[-1]
+    while j != -1:
+        in_lis.add(j)
+        j = prev[j]
+    if len(in_lis) / n < 0.7:
+        return matches
+    drop, i = set(), 0
+    while i < n:
+        if i in in_lis:
+            i += 1
+            continue
+        j = i
+        while j < n and j not in in_lis:
+            j += 1
+        if j - i <= 2 and i > 0:      # الأول لا يُحذف أبداً (لا مادة سابقة تبتلعه)
+            drop.update(range(i, j))
+        i = j
+    return [m for k, m in enumerate(matches) if k not in drop]
+
+
 def extract_articles_v4(text: str, line_anchored: bool = False):
     """يعيد (preamble, articles) — المكررة/المعدلة محفوظة، الفقرات مقسمة."""
     nodes = scan_hierarchy(text)
     matches = list(ARTICLE_RE.finditer(text))
     if line_anchored:
         matches = _prefer_line_anchored(text, matches)
+    matches = drop_stray_matches(matches)
     articles, seen = [], set()
     preamble = None
 
