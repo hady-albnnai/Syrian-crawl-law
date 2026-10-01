@@ -800,6 +800,35 @@ def cmd_crawl_log(args):
     return 0
 
 
+def cmd_corpus_report(args):
+    """قراءة فقط: أين تقع مواد المكتبة؟ (حالة الوثيقة × طبيعتها × جزء/مستقل) مع مجموع المواد."""
+    from database import get_connection
+    conn = get_connection()
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    nature = "COALESCE(d.nature,'instrument')" if "nature" in cols else "'instrument'"
+    part = "(d.part_of IS NOT NULL)" if "part_of" in cols else "0"
+    rows = conn.execute(
+        f"SELECT d.status AS st, {nature} AS nat, {part} AS is_part, COUNT(DISTINCT d.id) AS docs, "
+        "COUNT(a.id) AS arts FROM documents d LEFT JOIN articles a ON a.doc_id = d.id "
+        "GROUP BY st, nat, is_part ORDER BY arts DESC").fetchall()
+    tot_docs = sum(r["docs"] for r in rows)
+    tot_arts = sum(r["arts"] for r in rows)
+    log.info(f"CORPUS| total docs={tot_docs} articles={tot_arts}")
+    exported_arts = 0
+    for r in rows:
+        exp = r["st"] == "active" and r["nat"] == "instrument"
+        exported_arts += r["arts"] if exp else 0
+        log.info(f"CORPUS| status={r['st']} nature={r['nat']} part={bool(r['is_part'])} "
+                 f"docs={r['docs']} articles={r['arts']}{'  <- exported (parts folded under heads)' if exp else ''}")
+    log.info(f"CORPUS| articles in exportable groups={exported_arts}")
+    orphan = conn.execute("SELECT COUNT(*) FROM articles a LEFT JOIN documents d ON d.id=a.doc_id "
+                          "WHERE d.id IS NULL").fetchone()[0]
+    log.info(f"CORPUS| orphan articles (no document)={orphan}")
+    log.info("CORPUS| read-only: nothing changed")
+    conn.close()
+    return 0
+
+
 def cmd_audit_jurisdiction(args):
     """قراءة فقط: يقيس بوابة الاختصاص على وثائق المتن الفعلي لمعايرة العتبات.
 
@@ -2095,6 +2124,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--contains", required=True, help="جزء من الرابط، مثل pministry")
     sp.add_argument("--last", type=int, default=15)
     sp.set_defaults(fn=cmd_crawl_log)
+
+    sp = sub.add_parser("corpus-report",
+                        help="قراءة فقط: توزيع وثائق ومواد المكتبة حسب الحالة والطبيعة")
+    sp.set_defaults(fn=cmd_corpus_report)
 
     sp = sub.add_parser("queue-report",
                         help="قراءة فقط: تفكيك مهام الطابور حسب المضيف والخطأ واليوم")
