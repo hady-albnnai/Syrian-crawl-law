@@ -113,3 +113,36 @@ def test_real_get_gives_up_after_all_attempts(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(requests.Timeout("slow")))
     with pytest.raises(requests.Timeout):
         sitemap_seed._real_get("https://x.example/wp-sitemap.xml")
+
+
+def test_real_get_retries_503_and_honors_retry_after(monkeypatch):
+    monkeypatch.setattr(sitemap_seed.fetcher, "is_allowed", lambda *a, **k: True)
+    monkeypatch.setattr(sitemap_seed.fetcher, "polite_sleep", lambda: None)
+    monkeypatch.setattr(sitemap_seed.fetcher, "honor_crawl_delay", lambda *_: None)
+    slept = []
+    monkeypatch.setattr(sitemap_seed.time, "sleep", lambda s: slept.append(s))
+    codes = [503, 503, 200]
+
+    class R:
+        encoding = "utf-8"
+        text = "<urlset/>"
+
+        def __init__(self, code, ra=None):
+            self.status_code, self.headers = code, ({"Retry-After": ra} if ra else {})
+
+    seq = [R(503, "7"), R(503, "9999"), R(200)]
+    monkeypatch.setattr(sitemap_seed.requests, "get", lambda *a, **k: seq.pop(0))
+    assert sitemap_seed._real_get("https://x.example/wp-sitemap.xml") == (200, "<urlset/>")
+    assert slept == [7, sitemap_seed.MAX_RETRY_AFTER]      # سقف على Retry-After
+
+
+def test_real_get_returns_last_503_when_it_never_recovers(monkeypatch):
+    monkeypatch.setattr(sitemap_seed.fetcher, "is_allowed", lambda *a, **k: True)
+    monkeypatch.setattr(sitemap_seed.fetcher, "polite_sleep", lambda: None)
+    monkeypatch.setattr(sitemap_seed.fetcher, "honor_crawl_delay", lambda *_: None)
+    monkeypatch.setattr(sitemap_seed.time, "sleep", lambda *_: None)
+
+    class R:
+        status_code, text, encoding, headers = 503, "", "utf-8", {}
+    monkeypatch.setattr(sitemap_seed.requests, "get", lambda *a, **k: R())
+    assert sitemap_seed._real_get("https://x.example/wp-sitemap.xml")[0] == 503

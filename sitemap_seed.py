@@ -31,6 +31,8 @@ INDEX_PATHS = ("/sitemap_index.xml", "/wp-sitemap.xml")
 
 GET_TIMEOUTS = (60, 90, 120)       # مهل المحاولات؛ أرشيف سانا بطيء أحياناً (14 ثانية للرئيسية)
 RETRY_PAUSE = 5
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+MAX_RETRY_AFTER = 60
 
 
 def _real_get(url: str):
@@ -38,17 +40,28 @@ def _real_get(url: str):
     fetcher.polite_sleep()
     fetcher.honor_crawl_delay(url)
     last_exc = None
+    r = None
     for attempt, timeout in enumerate(GET_TIMEOUTS, 1):
+        pause = RETRY_PAUSE
         try:
             r = requests.get(url, timeout=timeout, headers={"User-Agent": USER_AGENT})
-            break
+            if r.status_code not in RETRY_STATUSES:
+                break
+            # 429/5xx: خادم مثقل أو يحدّ الطلبات — نحترم Retry-After (بسقف) ونعيد
+            log.warning(f"SEEDMAP| {url.rsplit('/', 1)[-1]} attempt {attempt}/{len(GET_TIMEOUTS)} "
+                        f"HTTP {r.status_code}")
+            try:
+                pause = min(int(r.headers.get("Retry-After", "")), MAX_RETRY_AFTER)
+            except (TypeError, ValueError):
+                pause = RETRY_PAUSE * attempt
         except (requests.Timeout, requests.ConnectionError) as exc:
             last_exc = exc
+            r = None
             log.warning(f"SEEDMAP| {url.rsplit('/', 1)[-1]} attempt {attempt}/{len(GET_TIMEOUTS)} "
                         f"{type(exc).__name__}")
-            if attempt < len(GET_TIMEOUTS):
-                time.sleep(RETRY_PAUSE)
-    else:
+        if attempt < len(GET_TIMEOUTS):
+            time.sleep(pause)
+    if r is None:
         raise last_exc
     if r.encoding is None or r.encoding.lower() in ("iso-8859-1", "ascii"):
         r.encoding = r.apparent_encoding or "utf-8"
