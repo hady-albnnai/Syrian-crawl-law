@@ -871,6 +871,13 @@ def cmd_export_audit(args):
             lbl = Counter((a["article_label"] or "")[:14] for a in raw)
             log.info(f"EXDOC| labels top={lbl.most_common(5)} numbers_distinct="
                      f"{len({str(a['article_number']) for a in raw})} of {len(raw)}")
+            if getattr(args, "raw", 0):
+                _c = conn.execute("SELECT clean_content FROM documents WHERE id=?",
+                                  (h["id"],)).fetchone()["clean_content"] or ""
+                _t = _re.sub(r"\s+", " ", _c)
+                _a = _t.find(args.find) if getattr(args, "find", None) else 0
+                _a = max(_a, 0)
+                log.info(f"EXRAW| chars {_a}..{_a + args.raw} of {len(_t)}: {_t[_a:_a + args.raw]}")
             shown = 0
             seen_keys = {}
             for a in raw:
@@ -2210,6 +2217,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--top", type=int, default=12)
     sp.add_argument("--doc", type=int, help="تفصيل وثيقة: أول المواد المُسقطة بجانب المُبقاة")
     sp.add_argument("--samples", type=int, default=8)
+    sp.add_argument("--raw", type=int, default=0, help="اطبع N حرفاً من متن الوثيقة (مع --doc)")
+    sp.add_argument("--find", help="ابدأ المقتطف من أول ظهور لهذا النص")
     sp.set_defaults(fn=cmd_export_audit)
 
     sp = sub.add_parser("queue-report",

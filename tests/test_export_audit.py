@@ -41,3 +41,19 @@ def test_export_audit_doc_drilldown_shows_kept_and_dropped(monkeypatch, tmp_path
     t = "\n".join(lines)
     assert "EXDOC| no.1 KEPT" in t and "الأصل" in t and "numbers_distinct=1 of 2" in t
     assert "EXDOC| no.1 DROP" in t and "ملحق" in t and "src=https://x.sy/a" in t
+
+
+def test_export_audit_raw_snippet(monkeypatch, tmp_path):
+    p = tmp_path / "e3.db"
+    monkeypatch.setattr(config, "DB_PATH", p)
+    monkeypatch.setattr(database, "DB_PATH", p)
+    database.create_tables()
+    conn = database.get_connection()
+    conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature,clean_content) "
+                 "VALUES(1,'a','t','https://x.sy/a','active','instrument','مقدمة طويلة\nالمادة 1 نص المادة الاولى')")
+    conn.execute("INSERT INTO articles(doc_id,article_number,text) VALUES(1,'1','نص')")
+    conn.commit()
+    lines = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: lines.append(str(m)))
+    cli.cmd_export_audit(argparse.Namespace(top=5, doc=1, samples=1, raw=20, find="المادة 1"))
+    assert any(l.startswith("EXRAW| chars 12..32") and "المادة 1 نص المادة" in l for l in lines)
