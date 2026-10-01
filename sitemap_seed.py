@@ -158,3 +158,39 @@ def seed_from_sitemap(conn, base_url: str, path_prefix: str, section: str,
     log.info(f"SEEDMAP| found={stats['found']} added={added} existing={skipped} "
              f"unapproved={unapproved} dry={dry_run}")
     return stats
+
+
+def seed_from_file(conn, path: str, section: str, limit: int | None = None,
+                   dry_run: bool = False) -> dict:
+    """بذر الطابور من ملف روابط (سطر لكل رابط) — لمصدر لا تُجلب خريطته من جهاز المالك.
+
+    الملف لا يمنح صلاحية: كل رابط يمرّ بالبوابة نفسها (مصدر approved يغطيه) وإلا
+    يُحصى unapproved ولا يدخل. الترتيب في الملف هو ترتيب الأولوية.
+    """
+    import crawl_queue as taskqueue
+    with open(path, encoding="utf-8") as fh:
+        urls = [ln.strip() for ln in fh if ln.strip().startswith(("http://", "https://"))]
+    seen, uniq = set(), []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            uniq.append(u)
+    if limit:
+        uniq = uniq[:limit]
+    added = skipped = unapproved = 0
+    for url in uniq:
+        if dry_run:
+            if taskqueue.approved_source_for_url(conn, url) is None:
+                unapproved += 1
+            continue
+        created, source_id = taskqueue.enqueue_approved_url(conn, url, section, "topic")
+        if source_id is None:
+            unapproved += 1
+        elif created:
+            added += 1
+        else:
+            skipped += 1
+    stats = {"found": len(uniq), "added": added, "skipped": skipped, "unapproved": unapproved}
+    log.info(f"SEEDMAP| file found={stats['found']} added={added} existing={skipped} "
+             f"unapproved={unapproved} dry={dry_run}")
+    return stats

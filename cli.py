@@ -1164,6 +1164,22 @@ def cmd_seed_sitemap(args):
     return 0
 
 
+def cmd_seed_urls(args):
+    """بذر الطابور من ملف روابط؛ كل رابط يمر ببوابة المصدر المعتمد."""
+    from database import create_tables, get_connection
+    from sitemap_seed import seed_from_file
+    create_tables()
+    conn = get_connection()
+    try:
+        seed_from_file(conn, args.file, args.section, limit=args.limit, dry_run=args.dry)
+    except OSError as exc:
+        log.error(f"تعذّرت قراءة الملف: {exc}")
+        conn.close()
+        return 2
+    conn.close()
+    return 0
+
+
 def cmd_hf_import(args):
     """التبني المرحلي لمجموعة HF ipfs_syria_laws عبر بوابات الأنبوب."""
     from database import create_tables, get_connection
@@ -2046,6 +2062,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--match", help="تعبير نمطي على عنوان الرابط (بعد فك الترميز)، مثل: مرسوم|قانون|قرار")
     sp.add_argument("--dry", action="store_true")
     sp.set_defaults(fn=cmd_seed_sitemap)
+
+    sp = sub.add_parser("seed-urls",
+                        help="بذر الطابور من ملف روابط (كل رابط يمر ببوابة المصدر المعتمد)")
+    sp.add_argument("--file", required=True)
+    sp.add_argument("--section", default="seed-file")
+    sp.add_argument("--limit", type=int, help="أول N رابطاً من الملف فقط")
+    sp.add_argument("--dry", action="store_true")
+    sp.set_defaults(fn=cmd_seed_urls)
 
     sp = sub.add_parser("queue-report",
                         help="قراءة فقط: تفكيك مهام الطابور حسب المضيف والخطأ واليوم")
