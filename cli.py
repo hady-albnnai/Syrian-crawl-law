@@ -844,7 +844,7 @@ def cmd_export_audit(args):
     per_doc = []
     for h in heads:
         raw = conn.execute(
-            """SELECT a.id, a.doc_id, a.article_number, a.text FROM articles a
+            """SELECT a.id, a.doc_id, a.article_number, a.text, a.hierarchy_path, a.article_label FROM articles a
                JOIN documents d ON d.id = a.doc_id
                WHERE (a.doc_id = ? OR d.part_of = ?) AND d.status = 'active'
                ORDER BY CAST(a.article_number AS INTEGER), (a.doc_id = ?) DESC, a.id""",
@@ -862,6 +862,22 @@ def cmd_export_audit(args):
                 d_ident += 1
             else:
                 d_diff += 1
+        if getattr(args, "doc", None) == h["id"]:
+            shown = 0
+            seen_keys = {}
+            for a in raw:
+                key = str(a["article_number"] or "").strip() or f"#{a['id']}"
+                if key not in seen_keys:
+                    seen_keys[key] = a
+                    continue
+                if shown >= args.samples:
+                    break
+                shown += 1
+                kp = seen_keys[key]
+                log.info(f"EXDOC| no.{key} KEPT id={kp['id']} path={(kp['hierarchy_path'] or '')[:40]} "
+                         f"| {norm(kp['text'])[:70]}")
+                log.info(f"EXDOC| no.{key} DROP id={a['id']} part={a['doc_id'] != kp['doc_id']} "
+                         f"path={(a['hierarchy_path'] or '')[:40]} | {norm(a['text'])[:70]}")
         tot_raw += len(raw)
         tot_kept += len(kept)
         identical += d_ident
@@ -2184,6 +2200,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("export-audit",
                         help="قراءة فقط: مواد يُسقطها التصدير لتكرار رقمها (مطابقة أم مختلفة)")
     sp.add_argument("--top", type=int, default=12)
+    sp.add_argument("--doc", type=int, help="تفصيل وثيقة: أول المواد المُسقطة بجانب المُبقاة")
+    sp.add_argument("--samples", type=int, default=8)
     sp.set_defaults(fn=cmd_export_audit)
 
     sp = sub.add_parser("queue-report",
