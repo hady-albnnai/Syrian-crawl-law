@@ -11,6 +11,7 @@ fetcher، وتُدرج الروابط فقط إن كان المصدر approved (
 from __future__ import annotations
 
 import re
+import time
 from urllib.parse import unquote, urljoin, urlparse
 
 import requests
@@ -28,11 +29,27 @@ MAX_SITEMAPS = 400
 INDEX_PATHS = ("/sitemap_index.xml", "/wp-sitemap.xml")
 
 
+GET_TIMEOUTS = (60, 90, 120)       # مهل المحاولات؛ أرشيف سانا بطيء أحياناً (14 ثانية للرئيسية)
+RETRY_PAUSE = 5
+
+
 def _real_get(url: str):
     fetcher.is_allowed(url, record_log=False)      # يملأ Crawl-delay للمضيف
     fetcher.polite_sleep()
     fetcher.honor_crawl_delay(url)
-    r = requests.get(url, timeout=30, headers={"User-Agent": USER_AGENT})
+    last_exc = None
+    for attempt, timeout in enumerate(GET_TIMEOUTS, 1):
+        try:
+            r = requests.get(url, timeout=timeout, headers={"User-Agent": USER_AGENT})
+            break
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_exc = exc
+            log.warning(f"SEEDMAP| {url.rsplit('/', 1)[-1]} attempt {attempt}/{len(GET_TIMEOUTS)} "
+                        f"{type(exc).__name__}")
+            if attempt < len(GET_TIMEOUTS):
+                time.sleep(RETRY_PAUSE)
+    else:
+        raise last_exc
     if r.encoding is None or r.encoding.lower() in ("iso-8859-1", "ascii"):
         r.encoding = r.apparent_encoding or "utf-8"
     return r.status_code, r.text

@@ -80,3 +80,36 @@ def test_falls_back_to_wp_sitemap_and_filters_by_decoded_slug_newest_first():
 def test_no_index_anywhere_seeds_nothing():
     assert sitemap_seed.collect_urls("https://arch.example/", "/",
                                      http_get=lambda u: (404, "")) == []
+
+
+def test_real_get_retries_timeouts_then_succeeds(monkeypatch):
+    import requests
+    monkeypatch.setattr(sitemap_seed.fetcher, "is_allowed", lambda *a, **k: True)
+    monkeypatch.setattr(sitemap_seed.fetcher, "polite_sleep", lambda: None)
+    monkeypatch.setattr(sitemap_seed.fetcher, "honor_crawl_delay", lambda *_: None)
+    monkeypatch.setattr(sitemap_seed.time, "sleep", lambda *_: None)
+    calls = []
+
+    class R:
+        status_code, text, encoding = 200, "<urlset/>", "utf-8"
+
+    def fake_get(url, timeout, headers):
+        calls.append(timeout)
+        if len(calls) < 3:
+            raise requests.Timeout("slow")
+        return R()
+    monkeypatch.setattr(sitemap_seed.requests, "get", fake_get)
+    assert sitemap_seed._real_get("https://x.example/wp-sitemap.xml") == (200, "<urlset/>")
+    assert calls == [60, 90, 120]                      # مهلة تتصاعد
+
+
+def test_real_get_gives_up_after_all_attempts(monkeypatch):
+    import pytest, requests
+    monkeypatch.setattr(sitemap_seed.fetcher, "is_allowed", lambda *a, **k: True)
+    monkeypatch.setattr(sitemap_seed.fetcher, "polite_sleep", lambda: None)
+    monkeypatch.setattr(sitemap_seed.fetcher, "honor_crawl_delay", lambda *_: None)
+    monkeypatch.setattr(sitemap_seed.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(sitemap_seed.requests, "get",
+                        lambda *a, **k: (_ for _ in ()).throw(requests.Timeout("slow")))
+    with pytest.raises(requests.Timeout):
+        sitemap_seed._real_get("https://x.example/wp-sitemap.xml")
