@@ -116,3 +116,28 @@ def test_export_audit_doc_lists_parts_and_folded_samples(monkeypatch, tmp_path):
     assert "EXPART| head articles=1 range=1..1 parts=1" in t
     assert "EXPART| part#2 status=active articles=1" in t and "src=https://x.sy/b" in t
     assert "EXFOLD| no.1 head(id=1): نص الرأس" in t and "نص الجزء" in t
+
+
+def test_export_audit_separates_near_copies_from_really_different(monkeypatch, tmp_path):
+    p = tmp_path / "e6.db"
+    monkeypatch.setattr(config, "DB_PATH", p)
+    monkeypatch.setattr(database, "DB_PATH", p)
+    database.create_tables()
+    conn = database.get_connection()
+    conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature) "
+                 "VALUES(1,'a','رأس','https://x.sy/a','active','instrument')")
+    conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature,part_of) "
+                 "VALUES(2,'b','نسخة','https://x.sy/b','active','instrument',1)")
+    base = "لا تفرض عقوبة ولا تدبير احترازي من أجل جرم لم يكن القانون قد نص عليه حين اقترافه"
+    conn.execute("INSERT INTO articles(doc_id,article_number,text) VALUES(1,'1',?)", (base,))
+    conn.execute("INSERT INTO articles(doc_id,article_number,text) VALUES(2,'1',?)", ("1 " + base + " .",))
+    conn.execute("INSERT INTO articles(doc_id,article_number,text) VALUES(1,'2',?)", (base,))
+    conn.execute("INSERT INTO articles(doc_id,article_number,text) VALUES(2,'2',?)",
+                 ("من قانون السير رقم 19 يعاقب بالحبس من سنة إلى سنتين وبغرامة مالية",))
+    conn.commit()
+    lines = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: lines.append(str(m)))
+    cli.cmd_export_audit(argparse.Namespace(top=5, far=3))
+    t = "\n".join(lines)
+    assert "near_same(word overlap>=0.6)=1 really_different=1" in t
+    assert "EXFAR| doc#1 no.2" in t and "قانون السير" in t

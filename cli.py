@@ -842,6 +842,8 @@ def cmd_export_audit(args):
     def norm(t):
         return _re.sub(r"\s+", " ", (t or "")).strip()
     tot_raw = tot_kept = identical = different = cross_part = 0
+    near_same = far_diff = 0
+    far_samples = []
     per_doc = []
     for h in heads:
         raw = conn.execute(
@@ -867,6 +869,15 @@ def cmd_export_audit(args):
                 d_ident += 1
             else:
                 d_diff += 1
+                _w1, _w2 = set(norm(a["text"]).split()), set(norm(twin["text"]).split())
+                _j = len(_w1 & _w2) / max(1, len(_w1 | _w2))
+                if _j >= 0.6:
+                    near_same += 1
+                else:
+                    far_diff += 1
+                    if len(far_samples) < getattr(args, "far", 6):
+                        far_samples.append((h["id"], a["article_number"], round(_j, 2),
+                                            norm(twin["text"])[:70], norm(a["text"])[:70]))
         if getattr(args, "doc", None) == h["id"]:
             _d = conn.execute("SELECT source_url, doc_id, scraped_at FROM documents WHERE id=?",
                               (h["id"],)).fetchone()
@@ -936,6 +947,10 @@ def cmd_export_audit(args):
              f"dropped={tot_raw - tot_kept}")
     log.info(f"EXAUDIT| dropped identical_text={identical} different_text={different} "
              f"(of which part-vs-head={cross_part})")
+    log.info(f"EXAUDIT| of different_text: near_same(word overlap>=0.6)={near_same} "
+             f"really_different={far_diff}")
+    for _d, _n, _j, _h, _p in far_samples:
+        log.info(f"EXFAR| doc#{_d} no.{_n} overlap={_j} head: {_h} || part: {_p}")
     log.info(f"EXAUDIT| docs_affected={len(per_doc)}")
     for d_diff, d_ident, did, title in per_doc[:args.top]:
         log.info(f"EXAUDIT| doc#{did} different={d_diff} identical={d_ident} {title[:60]}")
@@ -2250,6 +2265,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--doc", type=int, help="تفصيل وثيقة: أول المواد المُسقطة بجانب المُبقاة")
     sp.add_argument("--samples", type=int, default=8)
     sp.add_argument("--raw", type=int, default=0, help="اطبع N حرفاً من متن الوثيقة (مع --doc)")
+    sp.add_argument("--far", type=int, default=6, help="عدد نماذج المطوية المختلفة جوهرياً")
     sp.add_argument("--rows", help="START:COUNT اعرض مواد الوثيقة بترتيب id (مع --doc)")
     sp.add_argument("--find", help="ابدأ المقتطف من أول ظهور لهذا النص")
     sp.set_defaults(fn=cmd_export_audit)
