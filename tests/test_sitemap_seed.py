@@ -50,3 +50,33 @@ def test_failing_sitemap_does_not_abort_seeding():
         return _get(url)
     urls = sitemap_seed.collect_urls("https://news.example/presidency", "/presidency/", http_get=flaky)
     assert urls == ["https://news.example/presidency/300/", "https://news.example/presidency/100/"]
+
+
+WP_INDEX = ("<sitemapindex><sitemap><loc>https://arch.example/wp-sitemap-posts-post-1.xml</loc></sitemap>"
+            "</sitemapindex>")
+WP_MAP = ("<urlset>"
+          "<url><loc>https://arch.example/%d9%85%d8%b1%d8%b3%d9%88%d9%85-%d8%aa%d8%b4%d8%b1%d9%8a%d8%b9%d9%8a-1/</loc>"
+          "<lastmod>2014-06-10T05:03:37+03:00</lastmod></url>"
+          "<url><loc>https://arch.example/%d9%85%d8%b1%d8%b3%d9%88%d9%85-%d8%aa%d8%b4%d8%b1%d9%8a%d8%b9%d9%8a-2/</loc>"
+          "<lastmod>2020-01-01T00:00:00+03:00</lastmod></url>"
+          "<url><loc>https://arch.example/%d9%83%d8%b1%d8%a9-%d8%a7%d9%84%d9%82%d8%af%d9%85/</loc>"
+          "<lastmod>2021-01-01T00:00:00+03:00</lastmod></url></urlset>")
+
+
+def _wp_get(url):
+    if url.endswith("/sitemap_index.xml"):
+        return 404, "<html>not found</html>"
+    return 200, {"https://arch.example/wp-sitemap.xml": WP_INDEX,
+                 "https://arch.example/wp-sitemap-posts-post-1.xml": WP_MAP}[url]
+
+
+def test_falls_back_to_wp_sitemap_and_filters_by_decoded_slug_newest_first():
+    urls = sitemap_seed.collect_urls("https://arch.example/", "/", http_get=_wp_get, url_match="مرسوم|قانون")
+    assert len(urls) == 2 and urls[0].endswith("-2/") and urls[1].endswith("-1/")   # بحسب lastmod
+    everything = sitemap_seed.collect_urls("https://arch.example/", "/", http_get=_wp_get)
+    assert len(everything) == 3                                                     # بلا فلتر
+
+
+def test_no_index_anywhere_seeds_nothing():
+    assert sitemap_seed.collect_urls("https://arch.example/", "/",
+                                     http_get=lambda u: (404, "")) == []

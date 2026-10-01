@@ -11,7 +11,7 @@ fetcher، وتُدرج الروابط فقط إن كان المصدر approved (
 from __future__ import annotations
 
 import re
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import requests
 
@@ -22,7 +22,10 @@ from logging_setup import get_log
 log = get_log("sitemap_seed")
 
 _LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>")
-MAX_SITEMAPS = 200
+_LASTMOD_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>\s*<lastmod>\s*([^<\s]+)\s*</lastmod>")
+MAX_SITEMAPS = 400
+# فهارس الخرائط المجرّبة بالترتيب: Yoast ثم خرائط ووردبريس الأصلية (wp-sitemap.xml).
+INDEX_PATHS = ("/sitemap_index.xml", "/wp-sitemap.xml")
 
 
 def _real_get(url: str):
@@ -35,9 +38,18 @@ def _real_get(url: str):
     return r.status_code, r.text
 
 
+def slug_text(url: str) -> str:
+    """مسار الرابط مفكوك الترميز والشرطات فراغات — للمطابقة على كلمات العنوان."""
+    return unquote(urlparse(url).path).replace("-", " ").replace("_", " ")
+
+
 def collect_urls(base_url: str, path_prefix: str, http_get=None,
-                 max_sitemaps: int = MAX_SITEMAPS) -> list:
-    """روابط الخرائط التي يبدأ مسارها بـ path_prefix (مثل /presidency/) مع ترتيب الأحدث أولاً."""
+                 max_sitemaps: int = MAX_SITEMAPS, url_match: str | None = None) -> list:
+    """روابط الخرائط التي يبدأ مسارها بـ path_prefix (مثل /presidency/) مع ترتيب الأحدث أولاً.
+
+    url_match: تعبير نمطي اختياري يُطبَّق على نص المسار (بعد فك الترميز) — لمواقع
+    تضع العنوان في الرابط بلا تصنيف في المسار (مثل archive.sana.sy).
+    """
     raw_get = http_get or _real_get
 
     def get(url):
@@ -48,13 +60,19 @@ def collect_urls(base_url: str, path_prefix: str, http_get=None,
             log.warning(f"SEEDMAP| fetch error {url.rsplit('/', 1)[-1]}: {type(exc).__name__}")
             return 0, ""
     origin = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
-    st, index_xml = get(urljoin(origin, "/sitemap_index.xml"))
-    if st != 200:
+    matcher = re.compile(url_match) if url_match else None
+    st, index_xml, maps = 0, "", []
+    for idx_path in INDEX_PATHS:
+        st, index_xml = get(urljoin(origin, idx_path))
+        maps = _LOC_RE.findall(index_xml)[:max_sitemaps] if st == 200 else []
+        if maps:
+            break
+    if not maps:
         log.warning(f"SEEDMAP| index unavailable status={st} — nothing seeded")
         return []
-    maps = _LOC_RE.findall(index_xml)[:max_sitemaps]
     host = urlparse(base_url).netloc
     seen, out = set(), []
+    lastmod = {}
     failed = 0
     for i, m in enumerate(maps, 1):
         st, xml = get(m)
@@ -64,29 +82,33 @@ def collect_urls(base_url: str, path_prefix: str, http_get=None,
             continue
         if i % 10 == 0 or i == len(maps):
             log.info(f"SEEDMAP| sitemap {i}/{len(maps)} urls_so_far={len(out)}")
+        lastmod.update(dict(_LASTMOD_RE.findall(xml)))
         for loc in _LOC_RE.findall(xml):
             p = urlparse(loc)
             if p.netloc != host or not p.path.startswith(path_prefix):
                 continue
             if p.path.rstrip("/") == path_prefix.rstrip("/"):   # صفحة التصنيف نفسها
                 continue
+            if matcher and not matcher.search(slug_text(loc)):
+                continue
             if loc not in seen:
                 seen.add(loc)
                 out.append(loc)
-    # معرّفات ووردبريس تتزايد مع الزمن: الأحدث أولاً
-    def _id(u):
+    # معرّفات ووردبريس تتزايد مع الزمن: الأحدث أولاً؛ وعند غيابها من الرابط
+    # (خرائط wp-sitemap) يحسم lastmod.
+    def _key(u):
         m = re.search(r"/(\d+)/?$", u)
-        return int(m.group(1)) if m else 0
-    out.sort(key=_id, reverse=True)
+        return (int(m.group(1)) if m else 0, lastmod.get(u, ""))
+    out.sort(key=_key, reverse=True)
     log.info(f"SEEDMAP| collected sitemaps={len(maps)} failed={failed} urls={len(out)}")
     return out
 
 
 def seed_from_sitemap(conn, base_url: str, path_prefix: str, section: str,
                       limit: int | None = None, dry_run: bool = False,
-                      http_get=None) -> dict:
+                      http_get=None, url_match: str | None = None) -> dict:
     import crawl_queue as taskqueue
-    urls = collect_urls(base_url, path_prefix, http_get=http_get)
+    urls = collect_urls(base_url, path_prefix, http_get=http_get, url_match=url_match)
     if limit:
         urls = urls[:limit]
     added = skipped = unapproved = 0
