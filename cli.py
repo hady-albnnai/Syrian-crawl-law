@@ -783,6 +783,23 @@ def cmd_source_report(args):
     return 0
 
 
+def cmd_crawl_log(args):
+    """قراءة فقط: آخر أحداث سجل الزحف لرابط/نص معيّن (سبب الحجب والأخطاء)."""
+    from database import get_connection
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT timestamp, event_type, status, message, url FROM crawl_log "
+        "WHERE url LIKE ? ORDER BY id DESC LIMIT ?",
+        (f"%{args.contains}%", args.last)).fetchall()
+    log.info(f"CLOG| matches={len(rows)} contains={args.contains}")
+    for r in reversed(rows):
+        log.info(f"CLOG| {str(r['timestamp'])[:19]} {r['event_type']} [{r['status']}] "
+                 f"{(r['message'] or '')[:120]} | {(r['url'] or '')[:70]}")
+    log.info("CLOG| read-only: nothing changed")
+    conn.close()
+    return 0
+
+
 def cmd_audit_jurisdiction(args):
     """قراءة فقط: يقيس بوابة الاختصاص على وثائق المتن الفعلي لمعايرة العتبات.
 
@@ -2072,6 +2089,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, help="أول N رابطاً من الملف فقط")
     sp.add_argument("--dry", action="store_true")
     sp.set_defaults(fn=cmd_seed_urls)
+
+    sp = sub.add_parser("crawl-log",
+                        help="قراءة فقط: آخر أحداث سجل الزحف لرابط معيّن")
+    sp.add_argument("--contains", required=True, help="جزء من الرابط، مثل pministry")
+    sp.add_argument("--last", type=int, default=15)
+    sp.set_defaults(fn=cmd_crawl_log)
 
     sp = sub.add_parser("queue-report",
                         help="قراءة فقط: تفكيك مهام الطابور حسب المضيف والخطأ واليوم")
