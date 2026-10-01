@@ -94,3 +94,25 @@ def test_export_audit_rows(monkeypatch, tmp_path):
     cli.cmd_export_audit(argparse.Namespace(top=5, doc=1, samples=1, raw=0, find=None, rows="1:2"))
     rows = [l for l in lines if l.startswith("EXROW|")]
     assert len(rows) == 2 and "pos=1" in rows[0] and "ثانية" in rows[0]
+
+
+def test_export_audit_doc_lists_parts_and_folded_samples(monkeypatch, tmp_path):
+    p = tmp_path / "e5.db"
+    monkeypatch.setattr(config, "DB_PATH", p)
+    monkeypatch.setattr(database, "DB_PATH", p)
+    database.create_tables()
+    conn = database.get_connection()
+    conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature) "
+                 "VALUES(1,'a','رأس','https://x.sy/a','active','instrument')")
+    conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature,part_of) "
+                 "VALUES(2,'b','جزء','https://x.sy/b','active','instrument',1)")
+    conn.execute("INSERT INTO articles(doc_id,article_number,text) VALUES(1,'1','نص الرأس')")
+    conn.execute("INSERT INTO articles(doc_id,article_number,text) VALUES(2,'1','نص الجزء')")
+    conn.commit()
+    lines = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: lines.append(str(m)))
+    cli.cmd_export_audit(argparse.Namespace(top=5, doc=1, samples=2))
+    t = "\n".join(lines)
+    assert "EXPART| head articles=1 range=1..1 parts=1" in t
+    assert "EXPART| part#2 status=active articles=1" in t and "src=https://x.sy/b" in t
+    assert "EXFOLD| no.1 head(id=1): نص الرأس" in t and "نص الجزء" in t

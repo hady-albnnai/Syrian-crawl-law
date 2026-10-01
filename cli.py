@@ -888,6 +888,28 @@ def cmd_export_audit(args):
                     log.info(f"EXROW| pos={_i} id={a['id']} no={a['article_number']} "
                              f"label={(a['article_label'] or '')[:14]} len={len(a['text'] or '')} "
                              f"| {norm(a['text'])[:60]}")
+            _parts = conn.execute(
+                "SELECT d.id, d.source_url, d.title, d.status, COUNT(a.id) AS n, "
+                "MIN(CAST(a.article_number AS INTEGER)) AS lo, MAX(CAST(a.article_number AS INTEGER)) AS hi "
+                "FROM documents d LEFT JOIN articles a ON a.doc_id = d.id "
+                "WHERE d.part_of = ? GROUP BY d.id", (h["id"],)).fetchall()
+            _hn = sum(1 for r in raw if r["doc_id"] == h["id"])
+            _hnums = [int(r["article_number"]) for r in raw
+                      if r["doc_id"] == h["id"] and str(r["article_number"]).isdigit()]
+            log.info(f"EXPART| head articles={_hn} range={min(_hnums, default=None)}..{max(_hnums, default=None)} "
+                     f"parts={len(_parts)}")
+            for p_ in _parts:
+                log.info(f"EXPART| part#{p_['id']} status={p_['status']} articles={p_['n']} "
+                         f"range={p_['lo']}..{p_['hi']} src={(p_['source_url'] or '')[:70]} "
+                         f"| {(p_['title'] or '')[:40]}")
+            _shown = 0
+            for a in raw:
+                if a["id"] in kept_ids or _shown >= args.samples:
+                    continue
+                _shown += 1
+                _tw = by_key.get(_article_key(a)) or a
+                log.info(f"EXFOLD| no.{a['article_number']} head(id={_tw['id']}): {norm(_tw['text'])[:90]}")
+                log.info(f"EXFOLD| no.{a['article_number']} part(id={a['id']} doc={a['doc_id']}): {norm(a['text'])[:90]}")
             shown = 0
             seen_keys = {}
             for a in raw:
