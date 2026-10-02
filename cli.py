@@ -1058,6 +1058,121 @@ def cmd_re_extract(args):
     return 0
 
 
+def cmd_pre_sync_check(args):
+    """قراءة فقط: فحص شامل قبل إرسال الحزمة إلى ميزان — لا يعدّل شيئاً.
+
+    يجمع: بوابة الحزمة، تطابق عدد مواد الحزمة مع المتوقع من القاعدة، الاختصاص (سوري/أجنبي)،
+    صحة الترقيم (تكرار/ترتيب)، صحة النص، وتكرار الوثائق بين الرؤوس.
+    """
+    import re as _re
+    from collections import Counter, defaultdict
+    from database import get_connection
+    from exporter import fold_part_articles
+    from jurisdiction import assess_jurisdiction
+    import verify_package
+    conn = get_connection()
+    problems = []
+    pkg = Path(args.pkg)
+    checks = verify_package.check_package(pkg)
+    failed = [m for m, ok in checks if not ok]
+    log.info(f"PRESYNC| gate={'PASS' if not failed else 'FAIL'} checks={len(checks)} failed={len(failed)}")
+    for m in failed[:5]:
+        log.info(f"PRESYNC|   failed: {m[:100]}")
+    if failed:
+        problems.append("gate")
+
+    heads = conn.execute(
+        "SELECT id, title, source_url, clean_content, content_sha256, identity_key FROM documents "
+        "WHERE status='active' AND part_of IS NULL AND COALESCE(nature,'instrument')='instrument' "
+        "ORDER BY id").fetchall()
+    verdicts = Counter()
+    foreign_rows, repeat_docs, order_docs, heavy_docs = [], [], [], []
+    short_arts = bad_chars = expected = 0
+    low_arabic = []
+    by_sha, by_ident = defaultdict(list), defaultdict(list)
+    for h in heads:
+        raw = conn.execute(
+            """SELECT a.id, a.doc_id, a.article_number, a.article_label, a.text FROM articles a
+               JOIN documents d ON d.id = a.doc_id
+               WHERE (a.doc_id = ? OR d.part_of = ?) AND d.status = 'active'
+               ORDER BY CAST(a.article_number AS INTEGER), (a.doc_id = ?) DESC, a.id""",
+            (h["id"], h["id"], h["id"])).fetchall()
+        kept = fold_part_articles(raw, h["id"])
+        expected += len(kept)
+        j = assess_jurisdiction(h["source_url"] or "", h["title"] or "", (h["clean_content"] or "")[:60_000], "")
+        verdicts[j["verdict"]] += 1
+        if j["verdict"] != "syrian":
+            foreign_rows.append((j["verdict"], j["syrian_score"], j["foreign_score"],
+                                 j["foreign_country"], h["id"], h["title"] or ""))
+        keys = Counter((str(a["article_number"] or "").strip(), str(a["article_label"] or "").strip())
+                       for a in kept)
+        reps = sum(v - 1 for v in keys.values() if v > 1)
+        if reps >= 5:
+            repeat_docs.append((reps, h["id"], h["title"] or ""))
+        nums = Counter(str(a["article_number"] or "").strip() for a in kept)
+        if nums and nums.most_common(1)[0][1] >= 8:
+            heavy_docs.append((nums.most_common(1)[0][1], nums.most_common(1)[0][0], h["id"], h["title"] or ""))
+        own = [str(a["article_number"]) for a in sorted((a for a in kept if a["doc_id"] == h["id"]),
+                                                        key=lambda a: a["id"])
+               if str(a["article_number"]).isdigit()]
+        if len(own) >= 10:
+            desc = sum(1 for x, y in zip(own, own[1:]) if int(y) < int(x))
+            if desc / (len(own) - 1) >= 0.2:
+                order_docs.append((round(desc / (len(own) - 1), 2), h["id"], h["title"] or ""))
+        for a in kept:
+            t = a["text"] or ""
+            if len(t.strip()) < 15:
+                short_arts += 1
+            if "\ufffd" in t or _re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", t):
+                bad_chars += 1
+        sample = (h["clean_content"] or "")[:20000]
+        letters = _re.findall(r"[^\W\d_]", sample)
+        if len(letters) >= 200:
+            ar = len(_re.findall(r"[\u0600-\u06FF]", sample)) / len(letters)
+            if ar < 0.5:
+                low_arabic.append((round(ar, 2), h["id"], h["title"] or ""))
+        if h["content_sha256"]:
+            by_sha[h["content_sha256"]].append(h["id"])
+        if h["identity_key"]:
+            by_ident[h["identity_key"]].append(h["id"])
+
+    pk = verify_package.article_counts(pkg)["articles"]
+    log.info(f"PRESYNC| heads={len(heads)} package_articles={pk} expected_from_db={expected} "
+             f"{'MATCH' if pk == expected else 'MISMATCH'}")
+    if pk != expected:
+        problems.append("package_vs_db (re-run export)")
+    log.info("PRESYNC| jurisdiction " + " ".join(f"{k}={v}" for k, v in sorted(verdicts.items())))
+    for v, s, f, country, did, title in sorted(foreign_rows, key=lambda r: -r[2])[:args.top]:
+        log.info(f"PRESYNC|   {v} id={did} syr={s} for={f} {country} | {title[:60]}")
+    if verdicts.get("foreign"):
+        problems.append("foreign_documents")
+    log.info(f"PRESYNC| numbering: docs_with_5plus_repeated_numbers={len(repeat_docs)} "
+             f"docs_with_one_number_8plus_times={len(heavy_docs)} docs_with_20pct_descending={len(order_docs)}")
+    for reps, did, title in sorted(repeat_docs, reverse=True)[:args.top]:
+        log.info(f"PRESYNC|   repeats={reps} doc#{did} | {title[:60]}")
+    for n, num, did, title in sorted(heavy_docs, reverse=True)[:args.top]:
+        log.info(f"PRESYNC|   number {num} x{n} doc#{did} | {title[:60]}")
+    for r, did, title in sorted(order_docs, reverse=True)[:args.top]:
+        log.info(f"PRESYNC|   descending={r} doc#{did} | {title[:60]}")
+    log.info(f"PRESYNC| text: articles_under_15_chars={short_arts} articles_with_bad_chars={bad_chars} "
+             f"docs_arabic_ratio_under_0.5={len(low_arabic)}")
+    for r, did, title in sorted(low_arabic)[:args.top]:
+        log.info(f"PRESYNC|   arabic={r} doc#{did} | {title[:60]}")
+    dsha = {k: v for k, v in by_sha.items() if len(v) > 1}
+    dident = {k: v for k, v in by_ident.items() if len(v) > 1}
+    log.info(f"PRESYNC| duplicates among heads: same_content_sha={len(dsha)} same_identity={len(dident)}")
+    for k, v in list(dident.items())[:args.top]:
+        log.info(f"PRESYNC|   identity {k[:40]} docs={v[:6]}")
+    if dsha:
+        problems.append("duplicate_content")
+    if verdicts.get("mixed") or verdicts.get("unknown") or repeat_docs or order_docs or dident or bad_chars:
+        problems.append("review_items (see lists)")
+    log.info("PRESYNC| verdict=" + ("READY" if not problems else "REVIEW: " + ", ".join(problems)))
+    log.info("PRESYNC| read-only: nothing changed")
+    conn.close()
+    return 0
+
+
 def cmd_audit_jurisdiction(args):
     """قراءة فقط: يقيس بوابة الاختصاص على وثائق المتن الفعلي لمعايرة العتبات.
 
@@ -2359,6 +2474,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("corpus-report",
                         help="قراءة فقط: توزيع وثائق ومواد المكتبة حسب الحالة والطبيعة")
     sp.set_defaults(fn=cmd_corpus_report)
+
+    sp = sub.add_parser("pre-sync-check",
+                        help="قراءة فقط: فحص شامل للحزمة والقاعدة قبل إرسالها إلى ميزان")
+    sp.add_argument("--pkg", default="export/content_package")
+    sp.add_argument("--top", type=int, default=8)
+    sp.set_defaults(fn=cmd_pre_sync_check)
 
     sp = sub.add_parser("re-extract",
                         help="يعيد بناء مواد الوثائق ذات الأرقام المتكررة من النص المحفوظ (تجربة جافة افتراضياً)")
