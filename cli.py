@@ -558,6 +558,10 @@ def cmd_crawl(args):
     if args.mode == "full" and not args.yes:
         log.error("الوضع full يتطلب --yes صراحة (الخيار الآمن افتراضياً)")
         return 2
+    if getattr(args, "reparse_contains", None):
+        import crawler
+        crawler.REPARSE_URL_CONTAINS = (args.reparse_contains,)
+        log.info(f"REPARSE| الروابط التي تحوي «{args.reparse_contains}» تستبدل نسختها القديمة دائماً (القديمة تُؤرشف)")
     start_crawling(max_pages=args.pages, dry_run=(args.mode == "dry"), domain=args.domain)
     return 0
 
@@ -2308,6 +2312,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--domain", help="عامل متوازٍ: مهام هذا النطاق فقط")
     sp.add_argument("--yes", action="store_true",
                     help="تأكيد صريح للوضع full")
+    sp.add_argument("--reparse-contains", dest="reparse_contains",
+                    help="الروابط التي تحوي هذا النص تستبدل نسختها المحفوظة بالجديدة دائماً")
     sp.set_defaults(fn=cmd_crawl)
 
     sp = sub.add_parser("discover", help="البحث عن مصادر جديدة")

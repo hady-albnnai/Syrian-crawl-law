@@ -40,6 +40,20 @@ SNAPSHOT_DIR = Path(__file__).parent / "data" / "snapshots"
 MAX_TASK_ATTEMPTS = 2
 
 
+
+# روابط تُعاد تحليلها دائماً (تحلّ الجديدة محل القديمة ولو أقل مواداً) — يضبطها
+# `crawl --reparse-contains`. قِيس 2026-10-02: إصلاح المحلّل يُنقص عدد المواد
+# (الشظايا تُدمج) فيخسر بميزان العدد رغم أنه الصحيح.
+REPARSE_URL_CONTAINS: tuple = ()
+
+
+def reparse_forced(task) -> bool:
+    if task.get("reparse"):
+        return True
+    url = task.get("url") or ""
+    return any(s and s in url for s in REPARSE_URL_CONTAINS)
+
+
 def make_doc_id(url: str) -> str:
     """معرّف وثيقة مستقر مشتق من الرابط المطبَّع — لا من وقت التشغيل (P0)."""
     normalized = canonicalize_url(url)
@@ -275,7 +289,7 @@ def _handle_topic(conn, task, html, dry_run, stats):
         # الجديدة تحلّ محل القديمة دائماً (قِيس 2026-09-22: المدني من
         # syria-law حُفظ بلا هوية وبمواد منشطرة؛ النسخة المصلحة أقل عدداً
         # فتخسر بميزان العدد رغم أنها الصحيحة). القديمة تُؤرشف نسخة.
-        if task.get("reparse") and old_row is not None and not same_content:
+        if reparse_forced(task) and old_row is not None and not same_content:
             better, upgrade_reason = True, "reparse_same_source"
         if old_row is None or same_content or not better:
             conn.commit()
