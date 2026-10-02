@@ -156,6 +156,11 @@ def _same_host_redirect(current_url: str, target_url: str,
         return False
 
 
+# مضيفات ملفات (CDN/مخزن) يعني 403 على robots.txt فيها «لا ملف robots» — قائمة صريحة
+# ضيقة، لا تُوسَّع إلا بقرار المالك. لا ينطبق على أي مضيف آخر.
+ROBOTS_DENIED_MEANS_NO_POLICY = frozenset({"wipolex-res.wipo.int"})
+
+
 def _load_robot_parser(netloc: str, scheme: str = "https",
                        record_log: bool = True):
     """يجلب robots.txt. الإخفاق غير المحسوم مغلق افتراضياً.
@@ -192,6 +197,15 @@ def _load_robot_parser(netloc: str, scheme: str = "https",
         if status in (404, 410):
             rp.parse([])
             emit_log(robots_url, "robots_missing", f"HTTP {status} — لا سياسة منشورة", "success")
+            return rp
+        if (status in (401, 403) and scheme == "https"
+                and netloc.lower() in ROBOTS_DENIED_MEANS_NO_POLICY):
+            # استثناء صريح محدود بمضيف واحد (قرار المالك 2026-10-02): مخزن S3 لملفات
+            # WIPO يردّ 403 AccessDenied حين لا يوجد robots.txt أصلاً؛ الرابط موقَّع
+            # ومصدره صفحة www.wipo.int المسموحة. بقية المضيفات تبقى fail-closed.
+            rp.parse([])
+            emit_log(robots_url, "robots_missing",
+                     f"HTTP {status} — استثناء مضيف موثّق: لا سياسة منشورة", "success")
             return rp
         if status < 200 or status >= 300:
             BLOCK_REASONS[f"{scheme}://{netloc}"] = f"robots_http_{status}"

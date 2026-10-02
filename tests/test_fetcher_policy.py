@@ -163,3 +163,24 @@ def test_page_fetch_follows_sy_sibling_subdomain_and_rechecks_robots(monkeypatch
     assert result["ok"] is True
     assert result["final_url"] == "https://new.pministry.gov.sy/laws"
     assert checked == ["https://pministry.gov.sy/laws", "https://new.pministry.gov.sy/laws"]
+
+
+def test_robots_403_stays_fail_closed_for_ordinary_hosts(monkeypatch):
+    _quiet(monkeypatch)
+    monkeypatch.setattr(fetcher.SESSION, "get", lambda url, **kw: _Response(403))
+    rp = fetcher._load_robot_parser("law.example")
+    assert rp.can_fetch(fetcher.USER_AGENT, "https://law.example/a.pdf") is False
+
+
+def test_robots_403_on_wipo_file_host_means_no_policy_only_there(monkeypatch):
+    """استثناء صريح بمضيف واحد: مخزن S3 يردّ 403 AccessDenied حين لا robots.txt (قرار المالك)."""
+    _quiet(monkeypatch)
+    monkeypatch.setattr(fetcher.SESSION, "get", lambda url, **kw: _Response(403, "AccessDenied"))
+    rp = fetcher._load_robot_parser("wipolex-res.wipo.int")
+    assert rp.can_fetch(fetcher.USER_AGENT, "https://wipolex-res.wipo.int/edocs/x.pdf") is True
+    # مضيف شبيه آخر لا يستفيد، ولا http العادي
+    other = fetcher._load_robot_parser("www.wipo.int")
+    assert other.can_fetch(fetcher.USER_AGENT, "https://www.wipo.int/x") is False
+    plain = fetcher._load_robot_parser("wipolex-res.wipo.int", "http")
+    assert plain.can_fetch(fetcher.USER_AGENT, "http://wipolex-res.wipo.int/x") is False
+    assert fetcher.ROBOTS_DENIED_MEANS_NO_POLICY == frozenset({"wipolex-res.wipo.int"})
