@@ -37,3 +37,24 @@ def test_item_suffix_is_kept_in_label_and_not_treated_as_stray():
     labels = [a["label"] for a in arts]
     assert labels.count("2 - بند 1") == 2 and "2 - بند 2" in labels
     assert len(arts) == 15
+
+
+def test_declared_line_anchored_ignores_inline_refs_below_70_percent():
+    """قِيس 2026-10-03: 16 مادة حقيقية + 7 إحالات داخل المتن = 69.6% مطابقات على
+    أول السطر؛ الحارس العام (≥70%) كان يسقط فتنشطر المواد بأرقام مكررة."""
+    from extractor_v4 import extract_articles_v4
+    lines = []
+    for n in range(1, 17):
+        lines.append(f"المادة {n}")
+        body = f"نص المادة رقم {n} من هذا المرسوم التشريعي كامل"
+        if n in (2, 3, 5, 6, 9, 10, 12):
+            body += " وفق أحكام المادة (9) من هذا"
+            body += " المرسوم ويطبق"
+        lines.append(body)
+    text = "\n".join(lines)
+    _, arts = extract_articles_v4(text, line_anchored=True)
+    nums = [a["article_number"] for a in arts]
+    assert nums == list(range(1, 17))
+    # بلا إعلان المصدر يبقى السلوك القديم (لا مساس بالمصادر الأخرى)
+    _, arts_plain = extract_articles_v4(text, line_anchored=False)
+    assert len(arts_plain) >= 16

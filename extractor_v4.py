@@ -249,16 +249,22 @@ def hierarchy_at(nodes, pos):
 LINE_ANCHORED_MARK = 'data-articles="line-anchored"' 
 
 
-def _prefer_line_anchored(text: str, matches: list) -> list:
+def _prefer_line_anchored(text: str, matches: list, declared: bool = False) -> list:
     """مصدر يضع كل «المادة N» في أول سطر: الإشارات داخل المتن («وفق المادة 5
     من القانون…») ليست حدود مواد.
 
     قِيس B-2 (2026-09-19): خدمة العلم 115/1953 = 93 مادة حقيقية، والمستخرج
     أخرج 122 لأنه قطع عند كل ذكر داخلي. حراسة: ≥5 مطابقات على أول السطر،
     ≥70% من الكل، وتسلسل صاعد في الغالب — وإلا السلوك القديم."""
+    anchored = [m for m in matches if m.start() == 0 or text[m.start() - 1] == "\n"]
+    if declared:
+        # المصدر نفسه أعلن (علامة HTML المصنّع) أن كل مادة حقيقية على أول سطر:
+        # لا نشترط ≥5 ولا 70% ولا تصاعداً. قِيس 2026-10-03 على «بنود»: قانون
+        # مخالفات البناء 16 مادة حقيقية + 7 إحالات داخل المتن (69.6% < 70%)
+        # فسقط الحارس القديم وخرجت 23 مادة بأرقام مكررة.
+        return anchored or matches
     if len(matches) < 5:
         return matches
-    anchored = [m for m in matches if m.start() == 0 or text[m.start() - 1] == "\n"]
     if len(anchored) < 5 or len(anchored) / len(matches) < 0.7:
         return matches
     nums = []
@@ -336,7 +342,7 @@ def extract_articles_v4(text: str, line_anchored: bool = False):
     nodes = scan_hierarchy(text)
     matches = list(ARTICLE_RE.finditer(text))
     if line_anchored:
-        matches = _prefer_line_anchored(text, matches)
+        matches = _prefer_line_anchored(text, matches, declared=True)
     matches = drop_stray_matches(matches)
     articles, seen = [], set()
     preamble = None
