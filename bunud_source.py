@@ -56,6 +56,34 @@ def _text_lines(page_html: str) -> list:
     return [ln.strip() for ln in t.split("\n") if ln.strip()]
 
 
+def _repair_truncated_numbers(arts: list) -> int:
+    """يعيد تركيب رقم مادة اقتطعه المصدر إلى خانته الأولى.
+
+    قِيس 2026-10-02 (خدمة قوى الأمن الداخلي 1/2012 وغيره): بيانات bunud.ai نفسها تعنون
+    المادة 11 «المادة 1» وتُنزل الخانة الثانية إلى أول سطر من نصها («1» ثم «1- لا تكون…»)،
+    والمادة 12 «المادة 1» وأول سطر «2»… فتتكرر الأرقام وتضيع هوية المواد 11-19 و21-29.
+    الرقم الحقيقي موجود بالبيانات (خانة العنوان + أول سطر رقمي)، فيُركَّب بشرط تسلسل صارم:
+    العنوان نفسه ليس خلفاً مقبولاً (≤ السابق) والرقم المركَّب في (السابق، السابق+3].
+    لا يُخترع رقم: ما لا يطابق الشرط يبقى كما هو. يعيد عدد المواد المصلحة."""
+    fixed, prev = 0, None
+    for art in arts:
+        m = re.fullmatch(r"المادة (\d+)", art[0])
+        if not m:
+            continue
+        n = int(m.group(1))
+        body = art[1]
+        if prev is not None and n <= prev and body and re.fullmatch(r"\d{1,3}", body[0].strip()):
+            cand = int(m.group(1) + body[0].strip())
+            if prev < cand <= prev + 3:
+                art[0] = f"المادة {cand}"
+                del body[0]
+                prev = cand
+                fixed += 1
+                continue
+        prev = n
+    return fixed
+
+
 def parse_law_page(page_html: str) -> dict:
     """{title, doc_type, number, year, source_status, articles:[(label,text)]}
     أو {} إن لم تكن صفحة تشريع."""
@@ -92,6 +120,7 @@ def parse_law_page(page_html: str) -> dict:
             cur[1].append(ln)
     if not any(not _HIER_RE.match(a[0]) for a in arts):
         return {}
+    _repair_truncated_numbers(arts)
     doc_type = _TYPE_MAP.get(meta.get("نوع التشريع", ""), None)
     # قِيس missing3: بنود يصنّف م.ت 115/1953 «قانون» بينما نصه يقول «هذا
     # المرسوم التشريعي» — النص أصدق من بطاقة الموقع؛ الإحالات تطلبه م.ت.

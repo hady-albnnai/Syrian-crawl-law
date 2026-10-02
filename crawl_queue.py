@@ -188,7 +188,7 @@ def requeue(conn, task_id: int):
     conn.commit()
 
 
-def requeue_by(conn, statuses, contains=None):
+def requeue_by(conn, statuses, contains=None, urls=None):
     """إعادة مهام بالحالات المعطاة إلى الطابور مع تصفير عدّاد المحاولات.
 
     يعيد قائمة المهام المعادة (dicts: id/url/status/last_error).
@@ -206,6 +206,9 @@ def requeue_by(conn, statuses, contains=None):
         sql += " AND url LIKE ?"
         params.append(f"%{contains}%")
     rows = conn.execute(sql, params).fetchall()
+    if urls is not None:
+        wanted = set(urls)
+        rows = [r for r in rows if r["url"] in wanted]
     if not rows:
         return []
     ids = [r["id"] for r in rows]

@@ -1148,6 +1148,12 @@ def cmd_pre_sync_check(args):
         problems.append("foreign_documents")
     log.info(f"PRESYNC| numbering: docs_with_5plus_repeated_numbers={len(repeat_docs)} "
              f"docs_with_one_number_8plus_times={len(heavy_docs)} docs_with_20pct_descending={len(order_docs)}")
+    from urllib.parse import urlparse as _up
+    hosts = Counter()
+    for _r, _did, _t in repeat_docs:
+        _u = next((h["source_url"] for h in heads if h["id"] == _did), "") or ""
+        hosts[(_up(_u).hostname or "?").removeprefix("www.")] += 1
+    log.info(f"PRESYNC| docs_with_5plus_repeats by host: {dict(hosts.most_common(8))}")
     for reps, did, title in sorted(repeat_docs, reverse=True)[:args.top]:
         log.info(f"PRESYNC|   repeats={reps} doc#{did} | {title[:60]}")
     for n, num, did, title in sorted(heavy_docs, reverse=True)[:args.top]:
@@ -1313,7 +1319,19 @@ def cmd_requeue(args):
     create_tables()
     conn = get_connection()
     statuses = [s.strip() for s in args.status.split(",") if s.strip()]
-    revived = requeue_by(conn, statuses, contains=args.contains)
+    urls = None
+    min_rep = getattr(args, "docs_with_repeats", None)
+    if min_rep:
+        # وثائق فعّالة يتكرر فيها (رقم، عنوان) المادة ≥ N مرة: تُعاد مهامها فقط
+        urls = set()
+        for d in conn.execute("SELECT id, source_url FROM documents WHERE status='active'").fetchall():
+            from collections import Counter
+            cnt = Counter((str(r[0] or "").strip(), str(r[1] or "").strip()) for r in conn.execute(
+                "SELECT article_number, article_label FROM articles WHERE doc_id=?", (d["id"],)))
+            if sum(v - 1 for v in cnt.values() if v > 1) >= min_rep and d["source_url"]:
+                urls.add(d["source_url"])
+        log.info(f"REQUEUE| docs_with_repeats>={min_rep}: {len(urls)} source urls")
+    revived = requeue_by(conn, statuses, contains=args.contains, urls=urls)
     if not revived:
         log.info("لا مهام بهذه الحالة"
                  + (f" ورابطها يحوي «{args.contains}»" if args.contains else ""))
@@ -2577,6 +2595,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="الحالات المستهدفة مفصولة بفواصل (الافتراضي failed)")
     sp.add_argument("--contains", metavar="TEXT",
                     help="حصر الإعادة بالمهام التي يحوي رابطها هذا النص")
+    sp.add_argument("--docs-with-repeats", dest="docs_with_repeats", type=int, metavar="N",
+                    help="حصر الإعادة بمهام وثائق فعّالة يتكرر فيها (رقم، عنوان) المادة N مرة فأكثر")
     sp.set_defaults(fn=cmd_requeue)
 
     sp = sub.add_parser("migrate", help="تطبيق هجرات المخطط (مع نسخة احتياطية)")
