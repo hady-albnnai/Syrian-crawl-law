@@ -76,3 +76,23 @@ def test_part_suffix_keeps_segmented_articles_distinct():
     assert "2 الجزء 1" in labels or any("جزء" in l for l in labels)
     keys = [(a["article_number"], a["label"]) for a in arts]
     assert len(keys) == len(set(keys))
+
+
+def test_inline_self_reference_does_not_split_article():
+    """«المادة 7 … الواردة في المادة 7»: إشارة وسط السطر تكرر الرقم السابق ليست مادة."""
+    from extractor_v4 import extract_articles_v4
+    lines = []
+    for n in range(1, 21):
+        lines.append(f"المادة {n}")
+        lines.append(f"نص المادة رقم {n} كامل ويتجاوز الحد الأدنى للطول وفق الشروط الواردة في المادة {n} من هذا القانون وتتمة")
+    _, arts = extract_articles_v4("\n".join(lines))
+    assert [a["article_number"] for a in arts] == list(range(1, 21))
+
+
+def test_same_number_twice_on_line_start_is_kept():
+    """الحارس الجديد لا يمس تكرار الرقم على أول سطر (القرار فيه لقواعد أخرى)."""
+    from extractor_v4 import ARTICLE_RE, drop_inline_self_refs
+    text = "المادة 5\nنص كامل هنا\nالمادة 5\nنص آخر كامل\nوفق المادة 5 من هذا"
+    ms = list(ARTICLE_RE.finditer(text))
+    kept = drop_inline_self_refs(text, ms)
+    assert len(ms) == 3 and len(kept) == 2

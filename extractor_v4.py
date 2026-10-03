@@ -285,6 +285,25 @@ def _match_key(m):
     return (n, 1 if "مكرر" in (m.group(3) or "") else 0)
 
 
+def drop_inline_self_refs(text: str, matches: list) -> list:
+    """إشارة داخل المتن تكرر رقم المادة التي قبلها مباشرة («المادة 7 … الواردة في
+    المادة 7») ليست مادة جديدة. قِيس 2026-10-03 على parliament.gov.sy وsyria-law:
+    أرقام تتكرر متتالية (7,7,7 — 20,20 — 1,1,1…) لأن الإشارة تقع في وسط السطر.
+
+    القاعدة ضيقة عمداً: يُحذف فقط ما (أ) ليس في أول سطر، و(ب) رقمه ولاحقته تطابق
+    آخر حد باقٍ تماماً. المادتان المكرّرتان فعلاً على أول سطر (قانون معدِّل يكرر
+    رقماً) تبقيان، وكذلك كل ما رقمه يختلف عن سابقه. النص لا يضيع: يُضم إلى المادة."""
+    kept = []
+    for m in matches:
+        head = text[:m.start()]
+        at_line_start = not head.rsplit("\n", 1)[-1].strip(" \t\u200f\u200e\xa0-–.:)")
+        if kept and not at_line_start and _match_key(m) == _match_key(kept[-1]) \
+                and (m.group(3) or "").strip() == (kept[-1].group(3) or "").strip():
+            continue
+        kept.append(m)
+    return kept
+
+
 def drop_stray_matches(matches: list) -> list:
     """إحالات داخل المتن («وفق المادة 208»، أو «المادة الثامنة» في أول سطر لُفَّ)
     ليست حدود مواد: تشطر المادة الحقيقية وتُعيد رقمها. قِيس 2026-10-02 على
@@ -344,6 +363,7 @@ def extract_articles_v4(text: str, line_anchored: bool = False):
     matches = list(ARTICLE_RE.finditer(text))
     if line_anchored:
         matches = _prefer_line_anchored(text, matches, declared=True)
+    matches = drop_inline_self_refs(text, matches)
     matches = drop_stray_matches(matches)
     articles, seen = [], set()
     preamble = None
