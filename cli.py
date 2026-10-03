@@ -1168,8 +1168,11 @@ def cmd_pre_sync_check(args):
         _u = next((h["source_url"] for h in heads if h["id"] == _did), "") or ""
         hosts[(_up(_u).hostname or "?").removeprefix("www.")] += 1
     log.info(f"PRESYNC| docs_with_5plus_repeats by host: {dict(hosts.most_common(8))}")
+    _url_of = {h["id"]: (h["source_url"] or "") for h in heads}
     for reps, did, title in sorted(repeat_docs, reverse=True)[:args.top]:
-        log.info(f"PRESYNC|   repeats={reps} doc#{did} | {title[:60]}")
+        _u = _url_of.get(did, "")
+        log.info(f"PRESYNC|   repeats={reps} doc#{did} host={(_up(_u).hostname or '?').removeprefix('www.')} "
+                 f"url=...{_u[-45:]} | {title[:60]}")
     for n, num, did, title in sorted(heavy_docs, reverse=True)[:args.top]:
         log.info(f"PRESYNC|   number {num} x{n} doc#{did} | {title[:60]}")
     for r, did, title in sorted(order_docs, reverse=True)[:args.top]:
