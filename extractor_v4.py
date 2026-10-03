@@ -88,7 +88,7 @@ _VERBAL_ALT = "|".join(sorted(_VERBAL_VALUE, key=len, reverse=True))
 _DIGITS = r"\d+|[٠-٩]+|[۰-۹]+"
 
 ARTICLE_RE = re.compile(
-    rf"الماد[ةه]\s*[/\(ـ-]?\s*(?:({_DIGITS})|({_VERBAL_ALT}))\s*(مكررة?|معدل[ةه]?|[-–]\s*بند\s*\d+)?",
+    rf"الماد[ةه]\s*[/\(ـ-]?\s*(?:({_DIGITS})|({_VERBAL_ALT}))\s*(مكررة?|معدل[ةه]?|[-–]\s*(?:بند|(?:ال)?جزء)\s*\d+)?",
     re.IGNORECASE)
 
 HIERARCHY_RE = re.compile(
@@ -297,10 +297,11 @@ def drop_stray_matches(matches: list) -> list:
     (متن + لائحة تنفيذية) تنتج جرعات طويلة فتبقى كما هي، ولا يُطبَّق شيء
     على وثيقة أقل من 10 حدود أو تسلسلها الصاعد دون 70%."""
     # صفوف «المادة 2 - بند 7» أجزاء مشروعة من مادة (جداول مشطورة بالمصدر): لا تدخل الكشف
-    plain = [m for m in matches if "بند" not in (m.group(3) or "")]
+    _seg = lambda m: any(w in (m.group(3) or "") for w in ("بند", "جزء"))
+    plain = [m for m in matches if not _seg(m)]
     if len(plain) != len(matches):
         kept_ids = {id(m) for m in drop_stray_matches(plain)}
-        return [m for m in matches if "بند" in (m.group(3) or "") or id(m) in kept_ids]
+        return [m for m in matches if _seg(m) or id(m) in kept_ids]
     n = len(matches)
     if n < 10:
         return matches

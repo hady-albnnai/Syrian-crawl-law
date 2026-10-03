@@ -58,3 +58,21 @@ def test_declared_line_anchored_ignores_inline_refs_below_70_percent():
     # بلا إعلان المصدر يبقى السلوك القديم (لا مساس بالمصادر الأخرى)
     _, arts_plain = extract_articles_v4(text, line_anchored=False)
     assert len(arts_plain) >= 16
+
+
+def test_part_suffix_keeps_segmented_articles_distinct():
+    """«المادة 2 - الجزء N» أجزاء مشروعة لمادة طويلة (قانون 10/2018): لا تُحذف ولا تُعدّ تكراراً."""
+    from extractor_v4 import extract_articles_v4
+    lines = []
+    for n in range(1, 13):
+        lines.append(f"المادة {n}")
+        lines.append(f"نص المادة رقم {n} من هذا القانون كامل ويتجاوز الحد الأدنى للطول")
+        if n == 2:
+            for k in (1, 2, 3):
+                lines.append(f"المادة 2 - الجزء {k}")
+                lines.append(f"نص الجزء رقم {k} من المادة الثانية ويتجاوز الحد الأدنى للطول")
+    _, arts = extract_articles_v4("\n".join(lines), line_anchored=True)
+    labels = [a["label"] for a in arts]
+    assert "2 الجزء 1" in labels or any("جزء" in l for l in labels)
+    keys = [(a["article_number"], a["label"]) for a in arts]
+    assert len(keys) == len(set(keys))

@@ -102,3 +102,13 @@ def test_bunud_declared_anchored_merges_fragments_even_when_count_drops(monkeypa
     c2 = database.get_connection()
     nums = [int(r[0]) for r in c2.execute("SELECT article_number FROM articles WHERE doc_id=1 ORDER BY id")]
     assert nums == list(range(1, 17)), "\n".join(out)
+
+
+def test_repeat_diagnose_reports_runs(monkeypatch, tmp_path):
+    conn = _setup(monkeypatch, tmp_path, _clean())     # مواد 1..12 ثم 9 مكررة
+    out = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: out.append(str(m)))
+    assert cli.cmd_repeat_diagnose(argparse.Namespace(ids=[1, 99], runs=8, ctx=3)) == 0
+    t = "\n".join(out)
+    assert "doc#1" in t and "runs=2" in t and "1..12(12)" in t and "9..9(1)" in t
+    assert "doc#99 not found" in t

@@ -1072,6 +1072,49 @@ def cmd_re_extract(args):
     return 0
 
 
+def cmd_repeat_diagnose(args):
+    """قراءة فقط: لكل وثيقة تتكرر أرقام موادها — أين يعاد الترقيم وما الذي يسبقه.
+
+    يقسم مواد الوثيقة (بترتيب id) إلى «جرعات» صاعدة بدقة؛ كل جرعة بعد الأولى تعني
+    إعادة ترقيم (ملحق/لائحة/نص معدِّل/شظايا). يطبع مدى كل جرعة وسياقاً قبلها."""
+    from database import get_connection
+    conn = get_connection()
+    for did in args.ids:
+        d = conn.execute("SELECT id, source_url, clean_content FROM documents WHERE id=?",
+                         (did,)).fetchone()
+        if not d:
+            log.info(f"RDIAG| doc#{did} not found")
+            continue
+        rows = conn.execute("SELECT id, article_number, article_label, text FROM articles "
+                            "WHERE doc_id=? ORDER BY id", (did,)).fetchall()
+        runs, cur, prev = [], [], None
+        for r in rows:
+            try:
+                n = int(str(r["article_number"]).strip())
+            except ValueError:
+                n = None
+            if n is not None and prev is not None and n <= prev:
+                runs.append(cur)
+                cur = []
+            cur.append((n, r))
+            if n is not None:
+                prev = n
+        if cur:
+            runs.append(cur)
+        summary = ",".join(f"{c[0][0]}..{c[-1][0]}({len(c)})" for c in runs[:args.runs])
+        log.info(f"RDIAG| doc#{did} {(d['source_url'] or '')[-50:]} articles={len(rows)} "
+                 f"runs={len(runs)} :: {summary}{' ...' if len(runs) > args.runs else ''}")
+        clean = d["clean_content"] or ""
+        for c in runs[1:args.ctx + 1]:
+            snippet = (c[0][1]["text"] or "")[:30]
+            pos = clean.find(snippet) if snippet else -1
+            before = clean[max(0, pos - 90):pos].replace("\n", " / ") if pos > 0 else "?"
+            log.info(f"RDIAG|   run starts at no.{c[0][0]} label={(c[0][1]['article_label'] or '')[:14]} "
+                     f"| before: {before}")
+    conn.close()
+    return 0
+
+
 def cmd_pre_sync_check(args):
     """قراءة فقط: فحص شامل قبل إرسال الحزمة إلى ميزان — لا يعدّل شيئاً.
 
@@ -2533,6 +2576,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--rows", help="START:COUNT اعرض مواد الوثيقة بترتيب id (مع --doc)")
     sp.add_argument("--find", help="ابدأ المقتطف من أول ظهور لهذا النص")
     sp.set_defaults(fn=cmd_export_audit)
+
+    sp = sub.add_parser("repeat-diagnose",
+                        help="قراءة فقط: أين يعاد ترقيم المواد داخل وثائق محددة وما يسبق ذلك")
+    sp.add_argument("--ids", type=int, nargs="+", required=True)
+    sp.add_argument("--runs", type=int, default=8, help="كم جرعة تُلخَّص")
+    sp.add_argument("--ctx", type=int, default=3, help="كم إعادة ترقيم يُعرض سياقها")
+    sp.set_defaults(fn=cmd_repeat_diagnose)
 
     sp = sub.add_parser("queue-report",
                         help="قراءة فقط: تفكيك مهام الطابور حسب المضيف والخطأ واليوم")
