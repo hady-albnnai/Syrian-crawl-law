@@ -1042,7 +1042,11 @@ def cmd_re_extract(args):
         elif lost and not getattr(args, "allow_number_loss", False):
             # رقم مادة كان موجوداً واختفى = ربما مادة حقيقية دُمجت بسابقتها: لا نعتمد دون مراجعة
             skipped["lost_numbers"] += 1
-            lost_docs.append((len(lost), d["id"], lost[:8], (d["title"] or "")[:40]))
+            _ex = []
+            for _n in lost[:3]:
+                _r = next((r for r in old if str(r["article_number"]).strip() == _n), None)
+                _ex.append(f"{_n}:{(_r['text'] or '')[:70]!r}" if _r else _n)
+            lost_docs.append((len(lost), d["id"], lost[:8], (d["title"] or "")[:40] + " || " + " ; ".join(_ex)))
         elif _bunud:
             # «بنود» تعلن أن كل مادة على أول سطر: شظايا الإحالات تُدمج فينقص العدد
             # كثيراً بحق (20→4 قياساً). الحارس الحقيقي: عدم ضياع نص.
