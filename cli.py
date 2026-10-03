@@ -1213,6 +1213,13 @@ def cmd_pre_sync_check(args):
     if pk != expected:
         problems.append("package_vs_db (re-run export)")
     log.info("PRESYNC| jurisdiction " + " ".join(f"{k}={v}" for k, v in sorted(verdicts.items())))
+    from urllib.parse import urlparse as _up0
+    _url_h = {h["id"]: (h["source_url"] or "") for h in heads}
+    _jh = Counter()
+    for v, s, f, country, did, title in foreign_rows:
+        _jh[(v, (_up0(_url_h.get(did, "")).hostname or "?").removeprefix("www."), "foreign_evidence" if f > 0 else "no_foreign_evidence")] += 1
+    for (v, hst, ev), c in _jh.most_common(14):
+        log.info(f"PRESYNC| juris_by_host {v} host={hst} {ev}: {c}")
     for v, s, f, country, did, title in sorted(foreign_rows, key=lambda r: -r[2])[:args.top]:
         log.info(f"PRESYNC|   {v} id={did} syr={s} for={f} {country} | {title[:60]}")
     if verdicts.get("foreign"):
