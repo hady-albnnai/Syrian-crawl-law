@@ -115,13 +115,9 @@ def test_repeat_diagnose_reports_runs(monkeypatch, tmp_path):
 
 
 def test_blocks_doc_when_a_real_article_number_would_disappear(monkeypatch, tmp_path):
-    """مادة 7 مطبوعة في وسط السطر وحدها: لو دُمجت اختفى رقمها فيُحجب التغيير."""
-    clean = "\n".join(
-        [f"المادة {n}\nنص المادة رقم {n} وفيه كلام كافٍ ليتجاوز الحد الأدنى للطول." for n in range(1, 13)])
+    """رقم 7 داخل مدى الوثيقة موجود قديماً ومفقود جديداً: يُحجب التغيير."""
+    clean = _clean().replace("المادة 7\n" + _body(7) + "\n", "")
     conn = _setup(monkeypatch, tmp_path, clean)
-    # الحال القديمة فيها رقم 99 غير موجود في النص الجديد
-    conn.execute("INSERT INTO articles(doc_id,article_number,article_label,text) VALUES(1,'99','99','x')")
-    conn.commit()
     out = []
     monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: out.append(str(m)))
     cli.cmd_re_extract(argparse.Namespace(ids=None, top=5, apply=False))
@@ -154,3 +150,19 @@ def test_docs_with_stub_articles_but_no_repeats_are_candidates(monkeypatch, tmp_
     cli.cmd_re_extract(argparse.Namespace(ids=[1], top=5, apply=False))
     t = "\n".join(out)
     assert "short=1->0" in t
+
+
+def test_numbers_beyond_the_document_range_are_allowed_to_disappear(monkeypatch, tmp_path):
+    """مرسوم تعديل: مواده 1..5، والرقم 51 مجرد إحالة إلى مادة في قانون آخر."""
+    clean = "\n".join(f"المادة {n}\nنص المادة رقم {n} كامل ويتجاوز الحد الأدنى للطول" for n in range(1, 6))
+    conn = _setup(monkeypatch, tmp_path, clean)
+    conn.execute("DELETE FROM articles")
+    for n, t in [(1, "تنفيذا لأحكام"), (51, "من القانون رقم 9 وبقية النص"), (2, "ن"), (3, "ن"), (4, "ن"), (5, "ن"), (2, "ن")]:
+        conn.execute("INSERT INTO articles(doc_id,article_number,article_label,text) VALUES(1,?,?,?)",
+                     (str(n), str(n), t))
+    conn.commit()
+    out = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: out.append(str(m)))
+    cli.cmd_re_extract(argparse.Namespace(ids=None, top=5, apply=False))
+    t = "\n".join(out)
+    assert "will_change=1" in t and "docs_dropping_numbers_beyond_range=1" in t

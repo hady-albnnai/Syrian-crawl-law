@@ -985,7 +985,7 @@ def cmd_re_extract(args):
         "SELECT id, title, source_url, clean_content FROM documents "
         "WHERE status='active' ORDER BY id").fetchall()
     plans, skipped = [], Counter()
-    lost_docs = []
+    lost_docs, beyond_max = [], []
     tot_before = tot_after = 0
     for d in docs:
         if ids and d["id"] not in ids:
@@ -1016,6 +1016,15 @@ def cmd_re_extract(args):
                if str(r["article_number"] or "").strip().isdigit() and int(str(r["article_number"]).strip()) > 0}
         _nn = {str(a["article_number"]).strip() for a in new if not a.get("is_preamble")}
         lost = sorted(_on - _nn, key=int)
+        # أرقام مفقودة كلها أكبر من أكبر رقم يبقى في الوثيقة = أرقام مواد قانون آخر
+        # (مراسيم التعديل: «يضاف إلى نهاية المادة 51…») ظهرت بسبب شطر الإحالة، لا مواد
+        # هذه الوثيقة. هذا وحده يُسمح به؛ ما كان داخل المدى يبقى محجوباً.
+        _nmax = max((int(x) for x in _nn if x.isdigit()), default=0)
+        if lost and all(int(x) > _nmax for x in lost):
+            beyond_max.append(d["id"])
+            lost_raw, lost = lost, []
+        else:
+            lost_raw = lost
         if ids:
             log.info(f"REEXT| doc#{d['id']} old={len(old)} dups={dups_old} -> new={len(new)} dups={dups_new} "
                      f"lost_numbers={lost[:12]} short={short_old}->{short_new}")
@@ -1046,7 +1055,8 @@ def cmd_re_extract(args):
             tot_after += len(new)
     log.info(f"REEXT| candidates_with_repeats={len(plans) + sum(skipped.values())} "
              f"will_change={len(plans)} skipped={dict(skipped)}")
-    log.info(f"REEXT| articles in changed docs: before={tot_before} after={tot_after}")
+    log.info(f"REEXT| articles in changed docs: before={tot_before} after={tot_after} "
+             f"docs_dropping_numbers_beyond_range={len(beyond_max)}")
     for d, new, n_old, du_o, du_n in sorted(plans, key=lambda p: p[3] - p[4], reverse=True)[:args.top]:
         log.info(f"REEXT| doc#{d['id']} articles {n_old}->{len(new)} repeats {du_o}->{du_n} "
                  f"| {(d['title'] or '')[:50]}")
