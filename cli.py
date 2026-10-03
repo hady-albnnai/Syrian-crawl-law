@@ -1159,6 +1159,7 @@ def cmd_pre_sync_check(args):
     verdicts = Counter()
     foreign_rows, repeat_docs, order_docs, heavy_docs = [], [], [], []
     short_arts = bad_chars = expected = 0
+    short_vals, short_ex = Counter(), []
     low_arabic = []
     by_sha, by_ident = defaultdict(list), defaultdict(list)
     for h in heads:
@@ -1194,6 +1195,9 @@ def cmd_pre_sync_check(args):
             t = a["text"] or ""
             if len(t.strip()) < 15:
                 short_arts += 1
+                short_vals[t.strip()] += 1
+                if len(short_ex) < 12:
+                    short_ex.append((h["id"], a["article_number"], t.strip()))
             if "\ufffd" in t or _re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", t):
                 bad_chars += 1
         sample = (h["clean_content"] or "")[:20000]
@@ -1245,6 +1249,9 @@ def cmd_pre_sync_check(args):
              f"docs_arabic_ratio_under_0.5={len(low_arabic)}")
     for r, did, title in sorted(low_arabic)[:args.top]:
         log.info(f"PRESYNC|   arabic={r} doc#{did} | {title[:60]}")
+    log.info(f"PRESYNC| short_values {dict(short_vals.most_common(10))}")
+    for _d, _n, _t in short_ex:
+        log.info(f"PRESYNC|   short doc#{_d} no.{_n} text={_t!r}")
     dsha = {k: v for k, v in by_sha.items() if len(v) > 1}
     dident = {k: v for k, v in by_ident.items() if len(v) > 1}
     log.info(f"PRESYNC| duplicates among heads: same_content_sha={len(dsha)} same_identity={len(dident)}")
