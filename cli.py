@@ -1010,7 +1010,8 @@ def cmd_re_extract(args):
             new = [pre] + new
         nk = Counter((str(a["article_number"]), a["label"]) for a in new if not a.get("is_preamble"))
         dups_new = sum(v - 1 for v in nk.values() if v > 1)
-        _on = {str(r["article_number"]).strip() for r in old if str(r["article_number"] or "").strip().isdigit()}
+        _on = {str(r["article_number"]).strip() for r in old
+               if str(r["article_number"] or "").strip().isdigit() and int(str(r["article_number"]).strip()) > 0}
         _nn = {str(a["article_number"]).strip() for a in new if not a.get("is_preamble")}
         lost = sorted(_on - _nn, key=int)
         if ids:
