@@ -978,6 +978,7 @@ def cmd_re_extract(args):
     import config
     from database import get_connection
     from extractor_v4 import extract_articles_v4
+    import bunud_source
     conn = get_connection()
     ids = set(getattr(args, "ids", None) or [])
     docs = conn.execute(
@@ -1001,7 +1002,9 @@ def cmd_re_extract(args):
         if len(clean) < 0.8 * sum(len(r["text"] or "") for r in old):
             skipped["clean_content_truncated"] += 1
             continue
-        pre, new = extract_articles_v4(clean, "wipo.int" in (d["source_url"] or ""))
+        _url = d["source_url"] or ""
+        _bunud = bunud_source.is_bunud_law(_url)
+        pre, new = extract_articles_v4(clean, "wipo.int" in _url or _bunud)
         if pre:
             new = [pre] + new
         nk = Counter((str(a["article_number"]), a["label"]) for a in new if not a.get("is_preamble"))
@@ -1010,6 +1013,17 @@ def cmd_re_extract(args):
             skipped["no_articles_found"] += 1
         elif dups_new >= dups_old:
             skipped["duplicates_not_reduced"] += 1
+        elif _bunud:
+            # «بنود» تعلن أن كل مادة على أول سطر: شظايا الإحالات تُدمج فينقص العدد
+            # كثيراً بحق (20→4 قياساً). الحارس الحقيقي: عدم ضياع نص.
+            _o = sum(len(r["text"] or "") for r in old)
+            _n = sum(len(a["text"] or "") for a in new if not a.get("is_preamble"))
+            if _n < 0.9 * _o:
+                skipped["text_loss"] += 1
+            else:
+                plans.append((d, new, len(old), dups_old, dups_new))
+                tot_before += len(old)
+                tot_after += len(new)
         elif len(new) < 0.6 * len(old):
             skipped["too_few_articles"] += 1
         else:

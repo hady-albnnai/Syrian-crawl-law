@@ -69,3 +69,36 @@ def test_truncated_clean_content_is_skipped(monkeypatch, tmp_path):
     cli.cmd_re_extract(argparse.Namespace(ids=None, top=5, apply=True))
     assert "clean_content_truncated" in "\n".join(lines)
     assert conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0] == 13
+
+
+def test_bunud_declared_anchored_merges_fragments_even_when_count_drops(monkeypatch, tmp_path):
+    """بنود: مصنّف على أول السطر؛ 23 صفاً قديماً (7 شظايا إحالات) → 16 مادة، بلا ضياع نص."""
+    p = tmp_path / "bu.db"
+    monkeypatch.setattr(config, "DB_PATH", p)
+    monkeypatch.setattr(database, "DB_PATH", p)
+    database.create_tables()
+    conn = database.get_connection()
+    lines, rows = [], []
+    for n in range(1, 17):
+        lines.append(f"المادة {n}")
+        b1 = f"نص المادة رقم {n} من هذا المرسوم التشريعي كامل ويتجاوز الحد الأدنى"
+        if n in (2, 3, 5, 6, 9, 10, 12):
+            b2 = " وتتمة بعد الإحالة إلى هذا المرسوم ويطبق"
+            lines.append(b1 + " وفق أحكام المادة (9)" + b2)
+            rows += [(n, b1 + " وفق أحكام"), (n, "(9)" + b2)]
+        else:
+            lines.append(b1)
+            rows.append((n, b1))
+    conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature,clean_content) "
+                 "VALUES(1,'a','قانون','https://www.bunud.ai/sy/laws/building-violations-law',"
+                 "'active','instrument',?)", ("\n".join(lines),))
+    for n, t in rows:
+        conn.execute("INSERT INTO articles(doc_id,article_number,article_label,text) VALUES(1,?,?,?)",
+                     (str(n), str(n), t))
+    conn.commit()
+    out = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: out.append(str(m)))
+    cli.cmd_re_extract(argparse.Namespace(ids=None, top=5, apply=True))
+    c2 = database.get_connection()
+    nums = [int(r[0]) for r in c2.execute("SELECT article_number FROM articles WHERE doc_id=1 ORDER BY id")]
+    assert nums == list(range(1, 17)), "\n".join(out)
