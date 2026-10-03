@@ -410,6 +410,14 @@ def drop_stray_matches(matches: list) -> list:
     return [m for k, m in enumerate(matches) if k not in drop]
 
 
+_REPEAL_RE = re.compile(r"^[\s\W_]*(?:ملغا[ةه]|ملغى|ألغيت|الغيت)[\s\W_]*$")
+
+
+def is_repeal_text(t: str) -> bool:
+    """نص مادة هو إعلان إلغاء فقط («ملغاة»، «ملغاة.»). مادة حقيقية في الترقيم يجب أن تبقى."""
+    return bool(_REPEAL_RE.match(t or ""))
+
+
 def extract_articles_v4(text: str, line_anchored: bool = False):
     """يعيد (preamble, articles) — المكررة/المعدلة محفوظة، الفقرات مقسمة."""
     nodes = scan_hierarchy(text)
@@ -434,7 +442,7 @@ def extract_articles_v4(text: str, line_anchored: bool = False):
 
         start, end = m.end(), matches[i + 1].start() if i + 1 < len(matches) else len(text)
         body = normalize_unicode(text[start:end].strip())
-        if len(body) < 10:   # مواد الدستور الحقيقية قصيرة — لا نرفع الحد تعسفاً
+        if len(body) < 10 and not is_repeal_text(body):   # مواد الدستور الحقيقية قصيرة — لا نرفع الحد تعسفاً
             continue
 
         is_dup = bool(suffix) and ("مكرر" in suffix)

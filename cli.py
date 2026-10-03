@@ -977,7 +977,8 @@ def cmd_re_extract(args):
     from collections import Counter
     import config
     from database import get_connection
-    from extractor_v4 import extract_articles_v4
+    from extractor_v4 import extract_articles_v4, is_repeal_text
+    import re as _re_mod
     import bunud_source
     conn = get_connection()
     ids = set(getattr(args, "ids", None) or [])
@@ -997,8 +998,12 @@ def cmd_re_extract(args):
         keys = Counter((str(r["article_number"] or "").strip(), str(r["article_label"] or "").strip())
                        for r in old)
         dups_old = sum(v - 1 for v in keys.values() if v > 1)
-        short_old = sum(1 for r in old if len((r["text"] or "").strip()) < 15)
-        if not dups_old and not short_old:
+        short_old = sum(1 for r in old if len((r["text"] or "").strip()) < 15
+                        and not is_repeal_text(r["text"] or ""))
+        repeal_pending = bool(_re_mod.search(
+            r"(?m)^[ \t]*المادة[ \t]*[/(]?\d+[)/]?[ \t]*[-–:]?[ \t]*\n?[ \t]*(?:ملغا[ةه]|ملغى|ألغيت)",
+            d["clean_content"] or ""))
+        if not dups_old and not short_old and not repeal_pending:
             continue
         clean = d["clean_content"] or ""
         if len(clean) < 0.8 * sum(len(r["text"] or "") for r in old):
@@ -1011,7 +1016,8 @@ def cmd_re_extract(args):
             new = [pre] + new
         nk = Counter((str(a["article_number"]), a["label"]) for a in new if not a.get("is_preamble"))
         dups_new = sum(v - 1 for v in nk.values() if v > 1)
-        short_new = sum(1 for a in new if not a.get("is_preamble") and len((a["text"] or "").strip()) < 15)
+        short_new = sum(1 for a in new if not a.get("is_preamble") and len((a["text"] or "").strip()) < 15
+                        and not is_repeal_text(a["text"] or ""))
         _on = {str(r["article_number"]).strip() for r in old
                if str(r["article_number"] or "").strip().isdigit() and int(str(r["article_number"]).strip()) > 0}
         _nn = {str(a["article_number"]).strip() for a in new if not a.get("is_preamble")}
@@ -1030,7 +1036,8 @@ def cmd_re_extract(args):
                      f"lost_numbers={lost[:12]} short={short_old}->{short_new}")
         if not new:
             skipped["no_articles_found"] += 1
-        elif dups_new + short_new >= dups_old + short_old:
+        elif not (dups_new + short_new < dups_old + short_old
+                  or (_nn - _on and dups_new + short_new <= dups_old + short_old)):
             skipped["duplicates_not_reduced"] += 1
         elif lost and not getattr(args, "allow_number_loss", False):
             # رقم مادة كان موجوداً واختفى = ربما مادة حقيقية دُمجت بسابقتها: لا نعتمد دون مراجعة
@@ -1208,6 +1215,7 @@ def cmd_pre_sync_check(args):
     from collections import Counter, defaultdict
     from database import get_connection
     from exporter import fold_part_articles
+    from extractor_v4 import is_repeal_text
     from jurisdiction import assess_jurisdiction
     import verify_package
     conn = get_connection()
@@ -1262,7 +1270,7 @@ def cmd_pre_sync_check(args):
                 order_docs.append((round(desc / (len(own) - 1), 2), h["id"], h["title"] or ""))
         for a in kept:
             t = a["text"] or ""
-            if len(t.strip()) < 15:
+            if len(t.strip()) < 15 and not is_repeal_text(t):
                 short_arts += 1
                 short_vals[t.strip()] += 1
                 if len(short_ex) < 12:

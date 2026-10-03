@@ -188,3 +188,29 @@ def test_gap_report_classifies_missing_numbers(monkeypatch, tmp_path):
     cli.cmd_gap_report(argparse.Namespace(top=5, samples=5))
     t = "\n".join(out)
     assert "missing_total=2" in t and "'short_body': 1" in t and "'absent': 1" in t
+
+
+def test_repealed_article_is_kept_and_not_counted_as_stub(monkeypatch, tmp_path):
+    from extractor_v4 import extract_articles_v4, is_repeal_text
+    assert is_repeal_text("ملغاة") and is_repeal_text("ملغاة.") and not is_repeal_text("نص ملغاة كامل")
+    text = ("المادة 1\nنص المادة الأولى كامل وطويل\nالمادة 2\nملغاة\nالمادة 3\nنص المادة الثالثة كامل وطويل")
+    _, arts = extract_articles_v4(text)
+    assert [a["article_number"] for a in arts] == [1, 2, 3]
+    # وفي إعادة الاستخراج: وثيقة مخزنة بلا المادة 2 تُعتمد لأن رقماً ملغى كسب
+    p = tmp_path / "rp.db"
+    monkeypatch.setattr(config, "DB_PATH", p)
+    monkeypatch.setattr(database, "DB_PATH", p)
+    database.create_tables()
+    conn = database.get_connection()
+    conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature,clean_content) "
+                 "VALUES(1,'a','قانون','https://x.sy/a','active','instrument',?)", (text,))
+    for n in (1, 3):
+        conn.execute("INSERT INTO articles(doc_id,article_number,article_label,text) VALUES(1,?,?,?)",
+                     (str(n), str(n), "نص المادة كامل وطويل جداً"))
+    conn.commit()
+    out = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: out.append(str(m)))
+    cli.cmd_re_extract(argparse.Namespace(ids=None, top=5, apply=True))
+    c2 = database.get_connection()
+    nums = [int(r[0]) for r in c2.execute("SELECT article_number FROM articles WHERE doc_id=1 ORDER BY id")]
+    assert nums == [1, 2, 3], "\n".join(out)
