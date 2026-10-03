@@ -285,6 +285,44 @@ def _match_key(m):
     return (n, 1 if "مكرر" in (m.group(3) or "") else 0)
 
 
+def _is_line_start(text: str, m) -> bool:
+    head = text[:m.start()]
+    return not head.rsplit("\n", 1)[-1].strip(" \t\u200f\u200e\xa0-–.:)")
+
+
+def drop_inline_out_of_order(text: str, matches: list) -> list:
+    """إحالة وسط السطر إلى مادة أخرى («… وفق المادة 20 من هذا القانون» داخل المادة 15)
+    ليست حداً. قِيس 2026-10-03: قانون العاملين الأساسي 386 صفاً بعد 160 مادة.
+
+    شرط التطبيق: ≥10 حدود و≥70% منها على أول سطر (بنية سطرية واضحة). عندها يُبقى
+    الحد الذي وسط السطر فقط إن وقع رقمه بين آخر حد باقٍ وأقرب حد تالٍ على أول
+    سطر (p < k < q) — أي مادة حقيقية فاتها فاصل السطر؛ ما سواه إحالة يُحذف
+    وينضم نصه لما قبله. هذا أضيق بكثير من «اعتمد الأسطر فقط» الذي كسر قانون
+    العمل 17/2010 (88 → 72) لأنه يُبقي المواد الوسطية الصاعدة."""
+    n = len(matches)
+    if n < 10:
+        return matches
+    starts = [_is_line_start(text, m) for m in matches]
+    if sum(starts) / n < 0.7:
+        return matches
+    keys = [_match_key(m) for m in matches]
+    next_q = [None] * n
+    nxt = None
+    for i in range(n - 1, -1, -1):
+        next_q[i] = nxt
+        if starts[i]:
+            nxt = keys[i]
+    kept, last = [], None
+    for i, m in enumerate(matches):
+        if not starts[i]:
+            if (last is not None and keys[i] <= last) or \
+               (next_q[i] is not None and keys[i] >= next_q[i]):
+                continue
+        kept.append(m)
+        last = keys[i]
+    return kept
+
+
 def drop_inline_self_refs(text: str, matches: list) -> list:
     """إشارة داخل المتن تكرر رقم المادة التي قبلها مباشرة («المادة 7 … الواردة في
     المادة 7») ليست مادة جديدة. قِيس 2026-10-03 على parliament.gov.sy وsyria-law:
@@ -295,8 +333,7 @@ def drop_inline_self_refs(text: str, matches: list) -> list:
     رقماً) تبقيان، وكذلك كل ما رقمه يختلف عن سابقه. النص لا يضيع: يُضم إلى المادة."""
     kept = []
     for m in matches:
-        head = text[:m.start()]
-        at_line_start = not head.rsplit("\n", 1)[-1].strip(" \t\u200f\u200e\xa0-–.:)")
+        at_line_start = _is_line_start(text, m)
         if kept and not at_line_start and _match_key(m) == _match_key(kept[-1]) \
                 and (m.group(3) or "").strip() == (kept[-1].group(3) or "").strip():
             continue
@@ -364,6 +401,7 @@ def extract_articles_v4(text: str, line_anchored: bool = False):
     if line_anchored:
         matches = _prefer_line_anchored(text, matches, declared=True)
     matches = drop_inline_self_refs(text, matches)
+    matches = drop_inline_out_of_order(text, matches)
     matches = drop_stray_matches(matches)
     articles, seen = [], set()
     preamble = None

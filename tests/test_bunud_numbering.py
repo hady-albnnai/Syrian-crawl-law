@@ -96,3 +96,19 @@ def test_same_number_twice_on_line_start_is_kept():
     ms = list(ARTICLE_RE.finditer(text))
     kept = drop_inline_self_refs(text, ms)
     assert len(ms) == 3 and len(kept) == 2
+
+
+def test_inline_reference_to_other_article_is_dropped_but_inline_real_article_kept():
+    from extractor_v4 import extract_articles_v4
+    lines = []
+    for n in range(1, 21):
+        lines.append(f"المادة {n}")
+        body = f"نص المادة رقم {n} كامل ويتجاوز الحد الأدنى للطول"
+        if n in (3, 8, 14):
+            body += " وفق أحكام المادة 20 من هذا القانون وبعد الإحالة إلى المادة 2 منه تتمة"
+        lines.append(body)
+    # مادة 11 حقيقية سقط فاصل السطر قبلها (وسط السطر بين 10 و12) — يجب أن تبقى
+    text = "\n".join(lines).replace("\nالمادة 11\n", " المادة 11 ")
+    _, arts = extract_articles_v4(text)
+    nums = [a["article_number"] for a in arts]
+    assert nums == list(range(1, 21))
