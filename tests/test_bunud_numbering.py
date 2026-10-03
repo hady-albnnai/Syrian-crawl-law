@@ -120,3 +120,14 @@ def test_bunud_sy_path_counts_as_syrian_source_but_foreign_evidence_still_wins()
     assert j["verdict"] == "syrian"
     j2 = assess_jurisdiction("https://www.bunud.ai/eg/laws/x", "قانون", "نص", "")
     assert j2["verdict"] != "syrian"
+
+
+def test_stub_before_inline_reference_is_merged_not_split():
+    from extractor_v4 import extract_articles_v4
+    text = ("المادة 1\nتنفيذا لأحكام المادة 5 من القانون رقم 9 يصدر ما يلي وبقية النص الطويل هنا كامل\n"
+            "المادة 2\nنص المادة الثانية كامل ويتجاوز الحد الأدنى للطول\n"
+            "المادة 3\nملغاة\nالمادة 4\nنص المادة الرابعة كامل ويتجاوز الحد الأدنى للطول")
+    _, arts = extract_articles_v4(text)
+    nums = [a["article_number"] for a in arts]
+    assert 5 not in nums and nums[:2] == [1, 2]
+    assert "بقية النص الطويل" in arts[0]["text"]

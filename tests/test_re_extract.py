@@ -130,3 +130,27 @@ def test_blocks_doc_when_a_real_article_number_would_disappear(monkeypatch, tmp_
     out.clear()
     cli.cmd_re_extract(argparse.Namespace(ids=None, top=5, apply=False, allow_number_loss=True))
     assert "will_change=1" in "\n".join(out)
+
+
+def test_docs_with_stub_articles_but_no_repeats_are_candidates(monkeypatch, tmp_path):
+    p = tmp_path / "st.db"
+    monkeypatch.setattr(config, "DB_PATH", p)
+    monkeypatch.setattr(database, "DB_PATH", p)
+    database.create_tables()
+    conn = database.get_connection()
+    clean = ("المادة 1\nتنفيذا لأحكام المادة 5 من القانون رقم 9 يصدر ما يلي وبقية النص الطويل هنا كامل\n"
+             + "\n".join(f"المادة {n}\nنص المادة رقم {n} كامل ويتجاوز الحد الأدنى للطول" for n in range(2, 6)))
+    conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature,clean_content) "
+                 "VALUES(1,'a','قانون','https://x.sy/a','active','instrument',?)", (clean,))
+    rows = [(1, "تنفيذا لأحكام"), (5, "من القانون رقم 9 يصدر ما يلي وبقية النص الطويل هنا كامل"),
+            (2, "نص المادة رقم 2 كامل ويتجاوز الحد الأدنى للطول"), (3, "نص المادة رقم 3 كامل ويتجاوز الحد الأدنى للطول"),
+            (4, "نص المادة رقم 4 كامل ويتجاوز الحد الأدنى للطول")]
+    for n, t in rows:
+        conn.execute("INSERT INTO articles(doc_id,article_number,article_label,text) VALUES(1,?,?,?)",
+                     (str(n), str(n), t))
+    conn.commit()
+    out = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: out.append(str(m)))
+    cli.cmd_re_extract(argparse.Namespace(ids=[1], top=5, apply=False))
+    t = "\n".join(out)
+    assert "short=1->0" in t

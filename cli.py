@@ -997,7 +997,8 @@ def cmd_re_extract(args):
         keys = Counter((str(r["article_number"] or "").strip(), str(r["article_label"] or "").strip())
                        for r in old)
         dups_old = sum(v - 1 for v in keys.values() if v > 1)
-        if not dups_old:
+        short_old = sum(1 for r in old if len((r["text"] or "").strip()) < 15)
+        if not dups_old and not short_old:
             continue
         clean = d["clean_content"] or ""
         if len(clean) < 0.8 * sum(len(r["text"] or "") for r in old):
@@ -1010,16 +1011,17 @@ def cmd_re_extract(args):
             new = [pre] + new
         nk = Counter((str(a["article_number"]), a["label"]) for a in new if not a.get("is_preamble"))
         dups_new = sum(v - 1 for v in nk.values() if v > 1)
+        short_new = sum(1 for a in new if not a.get("is_preamble") and len((a["text"] or "").strip()) < 15)
         _on = {str(r["article_number"]).strip() for r in old
                if str(r["article_number"] or "").strip().isdigit() and int(str(r["article_number"]).strip()) > 0}
         _nn = {str(a["article_number"]).strip() for a in new if not a.get("is_preamble")}
         lost = sorted(_on - _nn, key=int)
         if ids:
             log.info(f"REEXT| doc#{d['id']} old={len(old)} dups={dups_old} -> new={len(new)} dups={dups_new} "
-                     f"lost_numbers={lost[:12]}")
+                     f"lost_numbers={lost[:12]} short={short_old}->{short_new}")
         if not new:
             skipped["no_articles_found"] += 1
-        elif dups_new >= dups_old:
+        elif dups_new + short_new >= dups_old + short_old:
             skipped["duplicates_not_reduced"] += 1
         elif lost and not getattr(args, "allow_number_loss", False):
             # رقم مادة كان موجوداً واختفى = ربما مادة حقيقية دُمجت بسابقتها: لا نعتمد دون مراجعة

@@ -341,6 +341,22 @@ def drop_inline_self_refs(text: str, matches: list) -> list:
     return kept
 
 
+def drop_inline_after_stub(text: str, matches: list) -> list:
+    """مادة على أول سطر يليها فوراً (في أقل من 30 حرفاً) حدّ وسط السطر = شظية:
+    «المادة 1 تنفيذا لأحكام المادة 5 من …» تُنتج مادة 1 نصها «تنفيذا لأحكام» ومادة
+    5 وهمية. قِيس 2026-10-03: 70 مادة أقصر من 15 حرفاً في الحزمة أغلبها هكذا.
+    الحدّ الوسطي يُحذف فيعود نصه للمادة صاحبة السطر؛ لا يمس مادة «ملغاة» لأن
+    التالية لها على أول سطر."""
+    kept = []
+    for m in matches:
+        if kept and not _is_line_start(text, m) and _is_line_start(text, kept[-1]):
+            gap = text[kept[-1].end():m.start()].strip(" \t\n\u200f\u200e\xa0-–.:/()")
+            if len(gap) < 30:
+                continue
+        kept.append(m)
+    return kept
+
+
 def drop_stray_matches(matches: list) -> list:
     """إحالات داخل المتن («وفق المادة 208»، أو «المادة الثامنة» في أول سطر لُفَّ)
     ليست حدود مواد: تشطر المادة الحقيقية وتُعيد رقمها. قِيس 2026-10-02 على
@@ -402,6 +418,7 @@ def extract_articles_v4(text: str, line_anchored: bool = False):
         matches = _prefer_line_anchored(text, matches, declared=True)
     matches = drop_inline_self_refs(text, matches)
     matches = drop_inline_out_of_order(text, matches)
+    matches = drop_inline_after_stub(text, matches)
     matches = drop_stray_matches(matches)
     articles, seen = [], set()
     preamble = None
