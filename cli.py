@@ -1141,6 +1141,63 @@ def cmd_repeat_diagnose(args):
     return 0
 
 
+def cmd_gap_report(args):
+    """قراءة فقط: فجوات ترقيم المواد (أرقام ناقصة بين 1 وأكبر رقم) وهل لها أثر في النص.
+
+    لكل وثيقة رأس: الأرقام الناقصة N؛ نبحث في clean_content عن «المادة N» على أول
+    سطر ونصنّف: short_body (نصها أقصر من 10 أحرف مثل «ملغاة» فأسقطها المستخرج)،
+    other (موجودة بنص عادي لكن لم تُحفظ)، absent (لا أثر لها في النص المحفوظ)."""
+    import re as _re
+    from collections import Counter
+    from database import get_connection
+    conn = get_connection()
+    heads = conn.execute(
+        "SELECT id, title, source_url, clean_content FROM documents WHERE status='active' "
+        "AND part_of IS NULL AND COALESCE(nature,'instrument')='instrument' ORDER BY id").fetchall()
+    tot = Counter()
+    rows_out, samples = [], []
+    for h in heads:
+        nums = set()
+        for r in conn.execute(
+                "SELECT a.article_number FROM articles a JOIN documents d ON d.id=a.doc_id "
+                "WHERE (a.doc_id=? OR d.part_of=?) AND d.status='active'", (h["id"], h["id"])):
+            v = str(r[0] or "").strip()
+            if v.isdigit() and int(v) > 0:
+                nums.add(int(v))
+        if len(nums) < 5:
+            continue
+        mx = max(nums)
+        if mx > 3000:
+            continue
+        missing = [n for n in range(1, mx + 1) if n not in nums]
+        if not missing:
+            continue
+        clean = h["clean_content"] or ""
+        c = Counter()
+        for n in missing:
+            m = _re.search(rf"(?m)^[ \t]*المادة[ \t]*[/(]?{n}\b[)/]?[ \t]*[-–:]?[ \t]*([^\n]*)\n?([^\n]*)", clean)
+            if not m:
+                c["absent"] += 1
+                continue
+            body = (m.group(1) + " " + m.group(2)).strip()
+            first = m.group(1).strip() or m.group(2).strip()
+            if len(first) < 10:
+                c["short_body"] += 1
+                if len(samples) < args.samples:
+                    samples.append((h["id"], n, first))
+            else:
+                c["other"] += 1
+        tot.update(c)
+        rows_out.append((len(missing), h["id"], mx, dict(c), (h["title"] or "")[:40]))
+    log.info(f"GAP| docs_with_gaps={len(rows_out)} missing_total={sum(r[0] for r in rows_out)} {dict(tot)}")
+    for n, did, mx, c, ttl in sorted(rows_out, reverse=True)[:args.top]:
+        log.info(f"GAP|   doc#{did} missing={n} of 1..{mx} {c} | {ttl}")
+    for did, n, first in samples:
+        log.info(f"GAP|   short doc#{did} no.{n} body={first!r}")
+    conn.close()
+    return 0
+
+
 def cmd_pre_sync_check(args):
     """قراءة فقط: فحص شامل قبل إرسال الحزمة إلى ميزان — لا يعدّل شيئاً.
 
@@ -2618,6 +2675,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--rows", help="START:COUNT اعرض مواد الوثيقة بترتيب id (مع --doc)")
     sp.add_argument("--find", help="ابدأ المقتطف من أول ظهور لهذا النص")
     sp.set_defaults(fn=cmd_export_audit)
+
+    sp = sub.add_parser("gap-report",
+                        help="قراءة فقط: أرقام مواد ناقصة وهل أثرها في النص (ملغاة قصيرة أم غائبة)")
+    sp.add_argument("--top", type=int, default=25)
+    sp.add_argument("--samples", type=int, default=12)
+    sp.set_defaults(fn=cmd_gap_report)
 
     sp = sub.add_parser("repeat-diagnose",
                         help="قراءة فقط: أين يعاد ترقيم المواد داخل وثائق محددة وما يسبق ذلك")

@@ -166,3 +166,25 @@ def test_numbers_beyond_the_document_range_are_allowed_to_disappear(monkeypatch,
     cli.cmd_re_extract(argparse.Namespace(ids=None, top=5, apply=False))
     t = "\n".join(out)
     assert "will_change=1" in t and "docs_dropping_numbers_beyond_range=1" in t
+
+
+def test_gap_report_classifies_missing_numbers(monkeypatch, tmp_path):
+    p = tmp_path / "gap.db"
+    monkeypatch.setattr(config, "DB_PATH", p)
+    monkeypatch.setattr(database, "DB_PATH", p)
+    database.create_tables()
+    conn = database.get_connection()
+    clean = ("المادة 1\nنص المادة الأولى كامل وطويل\nالمادة 2\nملغاة\nالمادة 3\nنص المادة الثالثة كامل وطويل\n"
+             "المادة 4\nنص المادة الرابعة كامل وطويل\nالمادة 5\nنص المادة الخامسة كامل وطويل\n"
+             "المادة 7\nنص المادة السابعة كامل وطويل")
+    conn.execute("INSERT INTO documents(id,doc_id,title,source_url,status,nature,clean_content) "
+                 "VALUES(1,'a','قانون','https://x.sy/a','active','instrument',?)", (clean,))
+    for n in (1, 3, 4, 5, 7):
+        conn.execute("INSERT INTO articles(doc_id,article_number,article_label,text) VALUES(1,?,?,?)",
+                     (str(n), str(n), "نص"))
+    conn.commit()
+    out = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: out.append(str(m)))
+    cli.cmd_gap_report(argparse.Namespace(top=5, samples=5))
+    t = "\n".join(out)
+    assert "missing_total=2" in t and "'short_body': 1" in t and "'absent': 1" in t
