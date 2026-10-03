@@ -1009,6 +1009,8 @@ def cmd_re_extract(args):
             new = [pre] + new
         nk = Counter((str(a["article_number"]), a["label"]) for a in new if not a.get("is_preamble"))
         dups_new = sum(v - 1 for v in nk.values() if v > 1)
+        if ids:
+            log.info(f"REEXT| doc#{d['id']} old={len(old)} dups={dups_old} -> new={len(new)} dups={dups_new}")
         if not new:
             skipped["no_articles_found"] += 1
         elif dups_new >= dups_old:
