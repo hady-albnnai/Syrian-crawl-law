@@ -985,6 +985,7 @@ def cmd_re_extract(args):
         "SELECT id, title, source_url, clean_content FROM documents "
         "WHERE status='active' ORDER BY id").fetchall()
     plans, skipped = [], Counter()
+    lost_docs = []
     tot_before = tot_after = 0
     for d in docs:
         if ids and d["id"] not in ids:
@@ -1009,12 +1010,20 @@ def cmd_re_extract(args):
             new = [pre] + new
         nk = Counter((str(a["article_number"]), a["label"]) for a in new if not a.get("is_preamble"))
         dups_new = sum(v - 1 for v in nk.values() if v > 1)
+        _on = {str(r["article_number"]).strip() for r in old if str(r["article_number"] or "").strip().isdigit()}
+        _nn = {str(a["article_number"]).strip() for a in new if not a.get("is_preamble")}
+        lost = sorted(_on - _nn, key=int)
         if ids:
-            log.info(f"REEXT| doc#{d['id']} old={len(old)} dups={dups_old} -> new={len(new)} dups={dups_new}")
+            log.info(f"REEXT| doc#{d['id']} old={len(old)} dups={dups_old} -> new={len(new)} dups={dups_new} "
+                     f"lost_numbers={lost[:12]}")
         if not new:
             skipped["no_articles_found"] += 1
         elif dups_new >= dups_old:
             skipped["duplicates_not_reduced"] += 1
+        elif lost and not getattr(args, "allow_number_loss", False):
+            # رقم مادة كان موجوداً واختفى = ربما مادة حقيقية دُمجت بسابقتها: لا نعتمد دون مراجعة
+            skipped["lost_numbers"] += 1
+            lost_docs.append((len(lost), d["id"], lost[:8], (d["title"] or "")[:40]))
         elif _bunud:
             # «بنود» تعلن أن كل مادة على أول سطر: شظايا الإحالات تُدمج فينقص العدد
             # كثيراً بحق (20→4 قياساً). الحارس الحقيقي: عدم ضياع نص.
@@ -1038,6 +1047,8 @@ def cmd_re_extract(args):
     for d, new, n_old, du_o, du_n in sorted(plans, key=lambda p: p[3] - p[4], reverse=True)[:args.top]:
         log.info(f"REEXT| doc#{d['id']} articles {n_old}->{len(new)} repeats {du_o}->{du_n} "
                  f"| {(d['title'] or '')[:50]}")
+    for n_l, did_l, lst, ttl in sorted(lost_docs, reverse=True)[:args.top]:
+        log.info(f"REEXT| blocked doc#{did_l} lost_numbers={n_l} e.g. {lst} | {ttl}")
     if not getattr(args, "apply", False):
         log.info("REEXT| dry-run: nothing changed (use --apply to write, with automatic backup)")
         conn.close()
@@ -2566,6 +2577,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--ids", type=int, nargs="*")
     sp.add_argument("--top", type=int, default=12)
     sp.add_argument("--apply", action="store_true", help="اكتب فعلاً (بنسخة احتياطية تلقائية)")
+    sp.add_argument("--allow-number-loss", dest="allow_number_loss", action="store_true",
+                    help="اعتمد حتى لو اختفى رقم مادة (افتراضياً يُحجب للمراجعة)")
     sp.set_defaults(fn=cmd_re_extract)
 
     sp = sub.add_parser("export-audit",

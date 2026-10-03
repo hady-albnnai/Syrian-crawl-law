@@ -112,3 +112,21 @@ def test_repeat_diagnose_reports_runs(monkeypatch, tmp_path):
     t = "\n".join(out)
     assert "doc#1" in t and "runs=2" in t and "1..12(12)" in t and "9..9(1)" in t
     assert "doc#99 not found" in t
+
+
+def test_blocks_doc_when_a_real_article_number_would_disappear(monkeypatch, tmp_path):
+    """مادة 7 مطبوعة في وسط السطر وحدها: لو دُمجت اختفى رقمها فيُحجب التغيير."""
+    clean = "\n".join(
+        [f"المادة {n}\nنص المادة رقم {n} وفيه كلام كافٍ ليتجاوز الحد الأدنى للطول." for n in range(1, 13)])
+    conn = _setup(monkeypatch, tmp_path, clean)
+    # الحال القديمة فيها رقم 99 غير موجود في النص الجديد
+    conn.execute("INSERT INTO articles(doc_id,article_number,article_label,text) VALUES(1,'99','99','x')")
+    conn.commit()
+    out = []
+    monkeypatch.setattr(cli.log, "info", lambda m, *a, **k: out.append(str(m)))
+    cli.cmd_re_extract(argparse.Namespace(ids=None, top=5, apply=False))
+    t = "\n".join(out)
+    assert "lost_numbers" in t and "will_change=0" in t
+    out.clear()
+    cli.cmd_re_extract(argparse.Namespace(ids=None, top=5, apply=False, allow_number_loss=True))
+    assert "will_change=1" in "\n".join(out)
