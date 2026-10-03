@@ -122,6 +122,16 @@ def assess_jurisdiction(url: str = "", title: str = "", text: str = "",
     elif host and _HOST_SYRIAN_RE.search(host):
         syrian += 2
         reasons.append("اسم المضيف يدل على سوريا")
+    # «بنود» تفرز تشريعاتها بمسار الدولة (/sy/laws/…): المصدر نفسه يصنّف الوثيقة سورية.
+    # قِيس 2026-10-03: 330 وثيقة bunud.ai/sy كانت «unknown» بلا أي دليل أجنبي.
+    path = ""
+    try:
+        path = (urlparse(url).path or "").lower()
+    except ValueError:
+        pass
+    if host == "bunud.ai" and path.startswith("/sy/laws/"):
+        syrian += 4
+        reasons.append("مسار المصدر /sy/ (تصنيف المصدر)")
     if tld in _FOREIGN_TLDS:
         country = _FOREIGN_TLDS[tld]
         foreign_by_country[country] = foreign_by_country.get(country, 0) + 2

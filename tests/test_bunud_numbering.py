@@ -112,3 +112,11 @@ def test_inline_reference_to_other_article_is_dropped_but_inline_real_article_ke
     _, arts = extract_articles_v4(text)
     nums = [a["article_number"] for a in arts]
     assert nums == list(range(1, 21))
+
+
+def test_bunud_sy_path_counts_as_syrian_source_but_foreign_evidence_still_wins():
+    from jurisdiction import assess_jurisdiction
+    j = assess_jurisdiction("https://www.bunud.ai/sy/laws/maritime-law", "القانون 63 لعام 1961 النقل البحري", "نص", "")
+    assert j["verdict"] == "syrian"
+    j2 = assess_jurisdiction("https://www.bunud.ai/eg/laws/x", "قانون", "نص", "")
+    assert j2["verdict"] != "syrian"
